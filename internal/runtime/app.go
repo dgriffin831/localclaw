@@ -42,7 +42,13 @@ func New(cfg config.Config) (*App, error) {
 		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
 		slack:     slack.NewLocalAdapter(),
 		signal:    signal.NewLocalAdapter(),
-		llm:       claudecode.NewClient(cfg.LLM.ClaudeCode.BinaryPath),
+		llm: claudecode.NewClient(claudecode.Settings{
+			BinaryPath:    cfg.LLM.ClaudeCode.BinaryPath,
+			Profile:       cfg.LLM.ClaudeCode.Profile,
+			UseGovCloud:   cfg.LLM.ClaudeCode.UseGovCloud,
+			BedrockRegion: cfg.LLM.ClaudeCode.BedrockRegion,
+			AuthMode:      cfg.LLM.ClaudeCode.AuthMode,
+		}),
 	}, nil
 }
 

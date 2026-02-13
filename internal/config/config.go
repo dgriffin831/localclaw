@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 )
 
 var allowedChannels = []string{"slack", "signal"}
+var allowedClaudeAuthModes = []string{"default", "aws_profile", "bedrock"}
 
 // Config contains all runtime configuration for localclaw.
 type Config struct {
@@ -121,6 +123,12 @@ func (c Config) Validate() error {
 	}
 	if c.LLM.ClaudeCode.BinaryPath == "" {
 		return errors.New("llm.claude_code.binary_path is required")
+	}
+	if !slices.Contains(allowedClaudeAuthModes, c.LLM.ClaudeCode.AuthMode) {
+		return fmt.Errorf("unsupported llm.claude_code.auth_mode %q", c.LLM.ClaudeCode.AuthMode)
+	}
+	if c.LLM.ClaudeCode.UseGovCloud && strings.TrimSpace(c.LLM.ClaudeCode.BedrockRegion) == "" {
+		return errors.New("llm.claude_code.bedrock_region is required when use_govcloud is true")
 	}
 	if len(c.Channels.Enabled) == 0 {
 		return errors.New("channels.enabled must include at least one channel")

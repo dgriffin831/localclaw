@@ -15,6 +15,8 @@
 - Added package boundaries and TODO-stub interfaces for runtime modules.
 - Enforced strict local-only startup policy in config validation.
 - Added initial tests for config and runtime local-only checks.
+- Added Claude Code GovCloud-compatible config plumbing (profile/auth/region pass-through) and validation for allowed auth modes.
+- Verified GitHub repository exists at `https://github.com/dgriffin831/localclaw` with private visibility.
 
 ## What runs
 

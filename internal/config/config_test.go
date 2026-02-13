@@ -25,6 +25,23 @@ func TestValidateRejectsNetworkServerFlags(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnsupportedClaudeAuthMode(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.ClaudeCode.AuthMode = "oidc"
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected unsupported auth mode error")
+	}
+}
+
+func TestValidateRequiresGovCloudRegion(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.ClaudeCode.UseGovCloud = true
+	cfg.LLM.ClaudeCode.BedrockRegion = ""
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected govcloud region error")
+	}
+}
+
 func fatalf(t *testing.T, format string, args ...any) {
 	t.Helper()
 	t.Fatalf(format, args...)
