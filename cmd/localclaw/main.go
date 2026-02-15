@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/dgriffin831/localclaw/internal/cli"
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/runtime"
 	"github.com/dgriffin831/localclaw/internal/tui"
@@ -44,14 +45,32 @@ func main() {
 			fmt.Fprintf(os.Stderr, "runtime error: %v\n", err)
 			os.Exit(1)
 		}
+		resolution := runtime.ResolveSession("", "")
+		if _, err := app.ResolveWorkspacePath(resolution.AgentID); err != nil {
+			fmt.Fprintf(os.Stderr, "workspace resolve error: %v\n", err)
+			os.Exit(1)
+		}
+		if _, err := app.ResolveSessionsPath(resolution.AgentID); err != nil {
+			fmt.Fprintf(os.Stderr, "session resolve error: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println("localclaw startup checks passed")
 	case "tui":
 		if err := runTUI(ctx, app, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "tui error: %v\n", err)
 			os.Exit(1)
 		}
+	case "memory":
+		if err := app.Run(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "runtime error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := cli.RunMemoryCommand(ctx, cfg, app, fs.Args()[1:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "memory error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (supported: check, tui)\n", mode)
+		fmt.Fprintf(os.Stderr, "unknown command %q (supported: check, tui, memory)\n", mode)
 		os.Exit(1)
 	}
 }

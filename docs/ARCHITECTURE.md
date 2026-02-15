@@ -1,113 +1,113 @@
 # localclaw Architecture (Implementation Detail)
 
-This document describes the architecture as implemented in code with file-level anchors.
+This document reflects the current implemented architecture.
 
-## 1. Scope and Source of Truth
+## 1. Scope and source of truth
 
 Primary implementation anchors:
+
 - Entrypoint: `cmd/localclaw/main.go`
 - Runtime composition: `internal/runtime/app.go`
-- Config + policy: `internal/config/config.go`
+- Runtime tools + prompt assembly: `internal/runtime/tools.go`
+- Config + compatibility mapping: `internal/config/config.go`
+- Workspace lifecycle/bootstrap: `internal/workspace/manager.go`
+- Session store/transcripts: `internal/session/*`
+- Memory index/search/flush: `internal/memory/*`
+- Session reset hook: `internal/hooks/session_memory.go`
 - TUI runtime: `internal/tui/app.go`
 - LLM adapter: `internal/llm/claudecode/client.go`
-- Security boundary summary: `SECURITY.md`
+- Security boundary summary: `docs/SECURITY.md`
 
-## 2. System Context
+## 2. System context
 
 ```text
 Operator (terminal)
       |
       v
 localclaw binary (single process)
-  |- config load + local-only validation
+  |- config load + compatibility mapping + validation
   |- runtime wiring
-  |   |- workspace manager
-  |   |- memory store
+  |   |- workspace manager (resolve + bootstrap templates)
+  |   |- session store + transcript writer
+  |   |- runtime tool registry (memory_search/memory_get)
   |   |- skills registry
   |   |- cron scheduler
   |   |- heartbeat monitor
-  |   |- slack/signal adapters
+  |   |- slack/signal local adapters
   |   `- Claude Code client (subprocess)
   `- command modes
-      |- check (startup validation run)
-      `- tui (interactive terminal UI)
+      |- check
+      |- tui
+      `- memory {status,index,search}
 ```
 
-No server, gateway, or listener process exists in the architecture.
+No server, gateway, or listener process exists.
 
-## 3. Repository Component Map
+## 3. Startup lifecycle
+
+`App.Run(ctx)` startup order:
+
+1. `workspace.Init`
+2. bootstrap `~/.localclaw/localclaw.json` if missing
+3. `memory.Init` (legacy store interface, no-op implementation)
+4. `sessions.Init`
+5. `skills.Load`
+6. `cron.Start`
+7. `heartbeat.Ping("localclaw startup heartbeat")`
+
+Any failure aborts startup.
+
+## 4. Runtime execution model
+
+Prompt flow:
+
+- `Prompt` and `PromptStream` call session-aware variants.
+- `buildPromptInput` can inject workspace bootstrap context on first prompt for a session.
+- Bootstrap context re-injects after compaction count increases.
+- When memory tools are enabled (`agents.*.memorySearch.enabled`), prompt assembly appends:
+  - memory recall policy text
+  - runtime tool definitions (`memory_search`, `memory_get`)
+  - resolved `session_key`
+
+Session lifecycle:
+
+- TUI appends user and assistant transcript messages to per-session JSONL files.
+- Token estimates are tracked in `sessions.json` metadata (`totalTokens`).
+- `/reset` and `/new` call `App.ResetSession`, which runs snapshot hook best-effort.
+- `/new` rotates to a generated `s-YYYYMMDD-HHMMSS[-N]` session ID, avoiding collisions with existing session IDs and transcript files.
+
+Memory/runtime tool behavior:
+
+- Actual semantic index/search is backed by `memory.SQLiteIndexManager`.
+- Runtime and memory CLI construct managers on demand using resolved workspace + state paths.
+- Legacy `memory.Store` on `App` remains a minimal no-op compatibility surface.
+
+## 5. Storage model
+
+Default state root: `~/.localclaw`
 
 ```text
-localclaw/
-|- cmd/localclaw/main.go
-|- internal/
-|  |- runtime/                 app composition and startup flow
-|  |- config/                  defaults + validation + local-only policy
-|  |- llm/claudecode/          local Claude CLI invocation + streaming
-|  |- tui/                     Bubble Tea model/update/view and controls
-|  |- memory/                  local persistence boundary
-|  |- workspace/               local workspace boundary
-|  |- skills/                  local skill registry boundary
-|  |- cron/                    in-process scheduler boundary
-|  |- heartbeat/               local liveness boundary
-|  `- channels/{slack,signal}/ channel adapter boundaries
-`- docs/
-   |- adr/
-   `- specs/
+~/.localclaw/
+  localclaw.json                        # scaffolded config file if missing
+  memory/<agentId>.sqlite              # SQLite memory index store
+  agents/<agentId>/sessions/sessions.json
+  agents/<agentId>/sessions/<sessionId>.jsonl
+  workspace/                            # when workspace config is "." for default agent
+  workspace-<agentId>/                  # when workspace config is "." for non-default agent
 ```
 
-## 4. Startup and Run Modes
+Workspace bootstrap templates created when missing:
 
-`cmd/localclaw/main.go` flow:
-1. Parse flags (`-config`).
-2. Load config (`config.Load`).
-3. Validate and construct runtime (`runtime.New`).
-4. Create cancellable context from SIGINT/SIGTERM.
-5. Execute mode:
-   - `check` (default): `app.Run(...)` then success message.
-   - `tui`: `app.Run(...)` then `tui.Run(...)`.
+- `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `WELCOME.md`
+- `BOOTSTRAP.md` only when a workspace is newly created
 
-## 5. Runtime Composition
+## 6. Local-only boundary
 
-`runtime.New` creates all module instances in-process:
-- `memory.NewLocalStore`
-- `workspace.NewLocalManager`
-- `skills.NewLocalRegistry`
-- `cron.NewInProcessScheduler`
-- `heartbeat.NewLocalMonitor`
-- `slack.NewLocalAdapter`
-- `signal.NewLocalAdapter`
-- `claudecode.NewClient`
+Config validation enforces:
 
-`App.Run` executes startup sequence:
-1. workspace init
-2. memory init
-3. skills load
-4. scheduler start
-5. startup heartbeat ping
+- `security.enforce_local_only = true`
+- `security.enable_gateway = false`
+- `security.enable_http_server = false`
+- `security.listen_address = ""`
 
-## 6. Local-Only Boundary
-
-The local-only boundary is enforced by config validation:
-- `security.enforce_local_only` must remain `true`.
-- `security.enable_gateway` must remain `false`.
-- `security.enable_http_server` must remain `false`.
-- `security.listen_address` must remain empty.
-
-Any violation fails startup.
-
-## 7. Current Maturity Snapshot
-
-Implemented behavior:
-- Config defaults and validation (including GovCloud auth constraints).
-- Runtime startup policy checks and module wiring.
-- Claude Code subprocess streaming path.
-- Full-screen TUI with slash commands, streaming updates, and run controls.
-
-Scaffolded boundaries (placeholder implementations today):
-- memory persistence behavior
-- workspace initialization behavior
-- skills discovery/loading behavior
-- cron scheduling behavior
-- heartbeat emission behavior
-- slack/signal channel transport behavior
+Any violation fails startup before runtime wiring.
