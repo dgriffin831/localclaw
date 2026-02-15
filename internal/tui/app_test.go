@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/dgriffin831/localclaw/internal/config"
+	"github.com/dgriffin831/localclaw/internal/runtime"
 )
 
 func TestParseSlash(t *testing.T) {
@@ -57,5 +59,32 @@ func TestViewDoesNotOverflowHeight(t *testing.T) {
 	lines := strings.Count(view, "\n") + 1
 	if lines > 24 {
 		t.Fatalf("expected view lines to fit terminal height, got %d lines for height 24", lines)
+	}
+}
+
+func TestHeaderUsesResolvedWorkspacePath(t *testing.T) {
+	cfg := config.Default()
+	cfg.State.Root = t.TempDir()
+	cfg.Workspace.Root = "/tmp/stubbed-workspace"
+	cfg.Agents.Defaults.Workspace = "."
+	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
+
+	app, err := runtime.New(cfg)
+	if err != nil {
+		t.Fatalf("new runtime app: %v", err)
+	}
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("run runtime app: %v", err)
+	}
+
+	m := newModel(context.Background(), app, cfg)
+	m.width = 180
+	header := m.headerView()
+	resolvedWorkspacePath := formatWorkspacePath(filepath.Join(cfg.State.Root, "workspace"))
+	if !strings.Contains(header, resolvedWorkspacePath) {
+		t.Fatalf("expected header to include resolved workspace %q", resolvedWorkspacePath)
+	}
+	if strings.Contains(header, formatWorkspacePath(cfg.Workspace.Root)) {
+		t.Fatalf("expected header not to use stubbed workspace root %q", cfg.Workspace.Root)
 	}
 }

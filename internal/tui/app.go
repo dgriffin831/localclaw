@@ -64,6 +64,11 @@ type model struct {
 	ctx context.Context
 	app *runtime.App
 	cfg config.Config
+	// Runtime-resolved identity and paths shared across runtime/TUI/CLI.
+	agentID       string
+	sessionID     string
+	sessionKey    string
+	workspacePath string
 
 	width  int
 	height int
@@ -167,6 +172,14 @@ var (
 )
 
 func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
+	resolution := runtime.ResolveSession("", "")
+	workspacePath := cfg.Workspace.Root
+	if app != nil {
+		if resolvedPath, err := app.ResolveWorkspacePath(resolution.AgentID); err == nil {
+			workspacePath = resolvedPath
+		}
+	}
+
 	input := textarea.New()
 	input.Placeholder = "Ask localclaw..."
 	input.Focus()
@@ -203,6 +216,10 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 		ctx:                ctx,
 		app:                app,
 		cfg:                cfg,
+		agentID:            resolution.AgentID,
+		sessionID:          resolution.SessionID,
+		sessionKey:         resolution.SessionKey,
+		workspacePath:      workspacePath,
 		viewport:           vp,
 		input:              input,
 		spinner:            sp,
@@ -412,10 +429,10 @@ func (m *model) headerView() string {
 		"model:%s/%s  workspace:%s",
 		m.cfg.LLM.Provider,
 		profile,
-		formatWorkspacePath(m.cfg.Workspace.Root),
+		formatWorkspacePath(m.workspacePath),
 	)
 	if innerWidth < 70 {
-		right = fmt.Sprintf("model:%s  workspace:%s", m.cfg.LLM.Provider, formatWorkspacePath(m.cfg.Workspace.Root))
+		right = fmt.Sprintf("model:%s  workspace:%s", m.cfg.LLM.Provider, formatWorkspacePath(m.workspacePath))
 	}
 	line := twoColumn(left, right, innerWidth)
 	return headerStyle.Width(max(1, m.width)).Render(line)
@@ -546,7 +563,7 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 	case "help":
 		m.addSystem("commands: /help /status /clear /thinking <on|off> /verbose <on|off> /model <name> /exit")
 	case "status":
-		m.addSystem(fmt.Sprintf("status=%s model=%s thinking=%s verbose=%s", m.status, m.cfg.LLM.Provider, onOff(m.showThinking), onOff(m.verbose)))
+		m.addSystem(fmt.Sprintf("status=%s model=%s agent=%s session=%s workspace=%s thinking=%s verbose=%s", m.status, m.cfg.LLM.Provider, m.agentID, m.sessionID, m.workspacePath, onOff(m.showThinking), onOff(m.verbose)))
 	case "clear":
 		m.messages = nil
 	case "exit", "quit":

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/dgriffin831/localclaw/internal/channels/signal"
 	"github.com/dgriffin831/localclaw/internal/channels/slack"
@@ -28,6 +29,43 @@ type App struct {
 	slack     slack.Client
 	signal    signal.Client
 	llm       claudecode.Client
+}
+
+const (
+	DefaultAgentID   = "default"
+	DefaultSessionID = "main"
+)
+
+type SessionResolution struct {
+	AgentID    string
+	SessionID  string
+	SessionKey string
+}
+
+func ResolveAgentID(agentID string) string {
+	trimmed := strings.TrimSpace(agentID)
+	if trimmed == "" {
+		return DefaultAgentID
+	}
+	return trimmed
+}
+
+func ResolveSessionID(sessionID string) string {
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return DefaultSessionID
+	}
+	return trimmed
+}
+
+func ResolveSession(agentID, sessionID string) SessionResolution {
+	resolvedAgentID := ResolveAgentID(agentID)
+	resolvedSessionID := ResolveSessionID(sessionID)
+	return SessionResolution{
+		AgentID:    resolvedAgentID,
+		SessionID:  resolvedSessionID,
+		SessionKey: fmt.Sprintf("%s/%s", resolvedAgentID, resolvedSessionID),
+	}
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -68,6 +106,19 @@ func New(cfg config.Config) (*App, error) {
 			AuthMode:      cfg.LLM.ClaudeCode.AuthMode,
 		}),
 	}, nil
+}
+
+func (a *App) ResolveWorkspacePath(agentID string) (string, error) {
+	return a.workspace.ResolveWorkspace(ResolveAgentID(agentID))
+}
+
+func (a *App) ResolveSessionsPath(agentID string) (string, error) {
+	return a.sessions.ResolveSessionsPath(ResolveAgentID(agentID))
+}
+
+func (a *App) ResolveTranscriptPath(agentID, sessionID string) (string, error) {
+	resolution := ResolveSession(agentID, sessionID)
+	return a.sessions.ResolveTranscriptPath(resolution.AgentID, resolution.SessionID)
 }
 
 func (a *App) Run(ctx context.Context) error {

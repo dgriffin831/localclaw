@@ -44,6 +44,15 @@ func main() {
 			fmt.Fprintf(os.Stderr, "runtime error: %v\n", err)
 			os.Exit(1)
 		}
+		resolution := runtime.ResolveSession("", "")
+		if _, err := app.ResolveWorkspacePath(resolution.AgentID); err != nil {
+			fmt.Fprintf(os.Stderr, "workspace resolve error: %v\n", err)
+			os.Exit(1)
+		}
+		if _, err := app.ResolveSessionsPath(resolution.AgentID); err != nil {
+			fmt.Fprintf(os.Stderr, "session resolve error: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Println("localclaw startup checks passed")
 	case "tui":
 		if err := runTUI(ctx, app, cfg); err != nil {
