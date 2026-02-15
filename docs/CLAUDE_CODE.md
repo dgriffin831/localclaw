@@ -1,38 +1,49 @@
 # Claude Code Integration
 
-`localclaw` uses local Claude Code CLI as its LLM execution backend.
+`localclaw` uses local Claude Code CLI subprocess execution as its LLM backend.
 
 Implementation location:
+
 - `internal/llm/claudecode/client.go`
 
-## Execution Model
+## Execution model
 
-- `PromptStream` starts `claude -p <input>` via subprocess.
-- stdout is read incrementally and emitted as stream delta events.
-- accumulated output is emitted as a final event on successful completion.
+- `PromptStream` executes `claude -p <input>` using `exec.CommandContext`.
+- stdout is streamed as `StreamEventDelta` chunks.
+- on successful completion, a `StreamEventFinal` event is emitted with full trimmed output.
 - stderr is captured and included in surfaced execution errors.
 
-`Prompt` is a synchronous wrapper that consumes stream events and returns final text.
+`Prompt` is a synchronous wrapper over `PromptStream`:
 
-## Input Validation
+- aggregates deltas
+- prefers final event text when present
+- otherwise returns trimmed aggregated delta text
 
-- Empty/whitespace prompts fail fast with `input is required`.
+## Input validation
 
-## Context Cancellation
+- Empty/whitespace prompt input fails fast with `input is required`.
 
-- subprocess uses `exec.CommandContext`.
-- cancelling context terminates the underlying process.
-- TUI abort and process shutdown rely on this behavior.
+## Context cancellation
 
-## Environment Pass-through
+- Command uses `exec.CommandContext`, so context cancellation terminates the subprocess.
+- TUI abort (`Esc`) and process shutdown rely on this behavior.
 
-The client may append environment variables when configured:
-- `AWS_PROFILE=<profile>` when profile is set.
-- `AWS_REGION` and `AWS_DEFAULT_REGION` when bedrock region is set.
-- `LOCALCLAW_GOVCLOUD_MODE=1` when `use_govcloud` is enabled.
+## Environment pass-through
 
-## Current Constraints
+Client appends environment values when configured:
 
-- Provider is fixed to `claudecode` in config validation.
+- `AWS_PROFILE=<profile>` when `llm.claude_code.profile` is set.
+- `AWS_REGION` and `AWS_DEFAULT_REGION` when `llm.claude_code.bedrock_region` is set.
+- `LOCALCLAW_GOVCLOUD_MODE=1` when `llm.claude_code.use_govcloud=true`.
+
+## Configuration notes
+
+- `llm.provider` is currently constrained to `claudecode`.
+- `llm.claude_code.auth_mode` is validated (`default|aws_profile|bedrock`) but is not yet translated into explicit CLI flags inside this adapter.
 - `localclaw` does not implement direct network model clients.
-- GovCloud behavior is pass-through configuration, not custom transport code.
+
+## Error behavior
+
+- stdout/stderr pipe setup errors are returned immediately.
+- command start failures include context (`start claude code cli: ...`).
+- non-zero exits return wrapped errors and include stderr text when available.

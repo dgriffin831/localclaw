@@ -2,20 +2,23 @@
 
 This document reflects the current implemented architecture.
 
-## 1. Scope and Source of Truth
+## 1. Scope and source of truth
 
 Primary implementation anchors:
+
 - Entrypoint: `cmd/localclaw/main.go`
 - Runtime composition: `internal/runtime/app.go`
-- Config + migration mapping: `internal/config/config.go`
-- Workspace lifecycle: `internal/workspace/manager.go`
+- Runtime tools + prompt assembly: `internal/runtime/tools.go`
+- Config + compatibility mapping: `internal/config/config.go`
+- Workspace lifecycle/bootstrap: `internal/workspace/manager.go`
 - Session store/transcripts: `internal/session/*`
-- Memory index/search/migration: `internal/memory/*`
+- Memory index/search/flush: `internal/memory/*`
+- Session reset hook: `internal/hooks/session_memory.go`
 - TUI runtime: `internal/tui/app.go`
 - LLM adapter: `internal/llm/claudecode/client.go`
 - Security boundary summary: `docs/SECURITY.md`
 
-## 2. System Context
+## 2. System context
 
 ```text
 Operator (terminal)
@@ -24,13 +27,13 @@ Operator (terminal)
 localclaw binary (single process)
   |- config load + compatibility mapping + validation
   |- runtime wiring
-  |   |- workspace manager (bootstrap + resolution)
-  |   |- session store/transcript writer
-  |   |- memory indexing/search + migration helper
-  |   |- skills/tool registry
+  |   |- workspace manager (resolve + bootstrap templates)
+  |   |- session store + transcript writer
+  |   |- runtime tool registry (memory_search/memory_get)
+  |   |- skills registry
   |   |- cron scheduler
   |   |- heartbeat monitor
-  |   |- slack/signal adapters
+  |   |- slack/signal local adapters
   |   `- Claude Code client (subprocess)
   `- command modes
       |- check
@@ -38,46 +41,73 @@ localclaw binary (single process)
       `- memory {status,index,search}
 ```
 
-No server, gateway, or listener process exists in the architecture.
+No server, gateway, or listener process exists.
 
-## 3. Startup Lifecycle
+## 3. Startup lifecycle
 
-`App.Run` startup order:
-1. workspace init
-2. one-time legacy memory import (`memory.path` JSON -> `MEMORY.md`) for default agent workspace
-3. memory service init
-4. session store init
-5. skills load
-6. cron start
-7. heartbeat ping
+`App.Run(ctx)` startup order:
 
-The migration step writes `.localclaw-legacy-memory-import-v1` in the workspace to keep import idempotent.
+1. `workspace.Init`
+2. bootstrap `~/.localclaw/localclaw.json` if missing
+3. `memory.Init` (legacy store interface, no-op implementation)
+4. `sessions.Init`
+5. `skills.Load`
+6. `cron.Start`
+7. `heartbeat.Ping("localclaw startup heartbeat")`
 
-## 4. Storage Model
+Any failure aborts startup.
+
+## 4. Runtime execution model
+
+Prompt flow:
+
+- `Prompt` and `PromptStream` call session-aware variants.
+- `buildPromptInput` can inject workspace bootstrap context on first prompt for a session.
+- Bootstrap context re-injects after compaction count increases.
+- When memory tools are enabled (`agents.*.memorySearch.enabled`), prompt assembly appends:
+  - memory recall policy text
+  - runtime tool definitions (`memory_search`, `memory_get`)
+  - resolved `session_key`
+
+Session lifecycle:
+
+- TUI appends user and assistant transcript messages to per-session JSONL files.
+- Token estimates are tracked in `sessions.json` metadata (`totalTokens`).
+- `/reset` and `/new` call `App.ResetSession`, which runs snapshot hook best-effort.
+- `/new` rotates to a generated `s-YYYYMMDD-HHMMSS[-N]` session ID, avoiding collisions with existing session IDs and transcript files.
+
+Memory/runtime tool behavior:
+
+- Actual semantic index/search is backed by `memory.SQLiteIndexManager`.
+- Runtime and memory CLI construct managers on demand using resolved workspace + state paths.
+- Legacy `memory.Store` on `App` remains a minimal no-op compatibility surface.
+
+## 5. Storage model
 
 Default state root: `~/.localclaw`
 
 ```text
 ~/.localclaw/
-  memory/<agentId>.sqlite
+  localclaw.json                        # scaffolded config file if missing
+  memory/<agentId>.sqlite              # SQLite memory index store
   agents/<agentId>/sessions/sessions.json
   agents/<agentId>/sessions/<sessionId>.jsonl
-  workspace/                  # default agent workspace when configured as "."
-  workspace-<agentId>/        # additional agent workspaces
+  workspace/                            # when workspace config is "." for default agent
+  workspace-<agentId>/                  # when workspace config is "." for non-default agent
 ```
 
-Workspace memory sources:
-- `MEMORY.md` / `memory.md`
-- `memory/**/*.md`
-- optional configured extra paths
-- optional session transcript source when enabled
+Workspace bootstrap templates created when missing:
 
-## 5. Local-Only Boundary
+- `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `WELCOME.md`
+- `BOOTSTRAP.md` only when a workspace is newly created
+
+## 6. Local-only boundary
 
 Config validation enforces:
+
 - `security.enforce_local_only = true`
 - `security.enable_gateway = false`
 - `security.enable_http_server = false`
 - `security.listen_address = ""`
 
-Any violation fails startup.
+Any violation fails startup before runtime wiring.

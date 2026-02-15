@@ -1,47 +1,66 @@
 # localclaw
 
-`localclaw` is a private, Go-only, single-process CLI agent runtime for secure enterprise environments.
+`localclaw` is a local-only, single-process Go CLI agent runtime.
 
 ## Design goals
 
-- Local-first and local-only execution model.
-- No network listeners, no gateway/server mode, and no browser/node-distributed runtime.
-- Primary LLM integration via local Claude Code CLI.
-- Support Claude Code CLI-compatible AWS GovCloud Bedrock auth/model flows.
-- Preserve OpenClaw-style capabilities: memory, workspace, skills, cron, heartbeat.
-- Channels limited to Slack and Signal.
+- Local-first operation with no network listeners.
+- Single-process Go runtime (no gateway/server mode).
+- Local Claude Code CLI subprocess integration for LLM execution.
+- Enterprise-safe boundaries: explicit local-only policy validation.
+- In-process capabilities for workspace, sessions, memory, skills, cron, and heartbeat.
 
-## Current status
+## Current implementation snapshot
 
-This repository now includes production-grade workspace/memory parity features:
-
-- Agent-aware workspace bootstrap and session transcript storage.
+- Command modes: `check` (default), `tui`, `memory`.
+- Agent-aware workspace resolution and bootstrap templates.
+- Per-agent session metadata + transcript files under the configured state root.
 - SQLite-backed memory indexing/search with CLI tooling (`memory status/index/search`).
-- Session-memory lifecycle hooks (`/new`, `/reset`) and compaction memory flush plumbing.
-- One-time legacy memory migration (`memory.path` JSON -> `MEMORY.md`) with idempotent marker.
-- Expanded tests for compatibility, failure handling, and concurrency stress.
+- Runtime memory tools (`memory_search`, `memory_get`) injected when memory tools are enabled.
+- Session lifecycle hooks for `/reset` and `/new` snapshot behavior.
 
 ## Quick start
 
 ```bash
-/usr/local/go/bin/go test ./...
-/usr/local/go/bin/go test -race ./...
-/usr/local/go/bin/go run ./cmd/localclaw
+go test ./...
+go run ./cmd/localclaw
+go run ./cmd/localclaw tui
+go run ./cmd/localclaw memory status
 ```
 
-Run full-screen TUI mode:
+Run specific command modes:
 
 ```bash
-/usr/local/go/bin/go run ./cmd/localclaw tui
+go run ./cmd/localclaw check
+go run ./cmd/localclaw tui
+go run ./cmd/localclaw memory status
+go run ./cmd/localclaw memory index --force
+go run ./cmd/localclaw memory search "incident summary"
 ```
 
-TUI controls:
+Run with an explicit config file:
+
+```bash
+go run ./cmd/localclaw -config ./localclaw.json check
+go run ./cmd/localclaw -config ./localclaw.json tui
+go run ./cmd/localclaw -config ./localclaw.json memory status
+```
+
+On startup, `localclaw` creates `~/.localclaw/localclaw.json` if it does not exist.
+This scaffold file is not auto-loaded unless you pass `-config`.
+
+## TUI controls
 
 - `Enter` send message
 - `Alt+Enter` insert newline
+- `Tab` autocomplete selected slash command while typing `/...`
+- `Shift+Tab` move slash-command selection backward
+- `Up/Down` navigate slash-command suggestions when slash menu is open
+- `Ctrl+P` / `Ctrl+N` (also `Alt+Up` / `Alt+Down`) navigate prompt history
+- `Mouse wheel` scroll transcript viewport
 - `Esc` abort active run
 - `Ctrl+T` toggle thinking visibility
-- `Ctrl+O` toggle tool-card mode
+- `Ctrl+O` toggle tool-card expansion flag
 - `Ctrl+C` clear input (press twice quickly to exit)
 - `Ctrl+D` exit when input is empty
 
@@ -54,36 +73,35 @@ TUI slash commands:
 - `/new`
 - `/thinking <on|off>`
 - `/verbose <on|off>`
-- `/model <name>`
+- `/model <name>` (currently a placeholder; override is not implemented)
 - `/exit`
+- `/quit`
 
-Optional config file:
+On TUI startup and on `/new`, `localclaw` renders workspace `WELCOME.md` (if present) as a system message.
 
-```bash
-/usr/local/go/bin/go run ./cmd/localclaw -config ./localclaw.json
-/usr/local/go/bin/go run ./cmd/localclaw -config ./localclaw.json tui
-```
+Optional waiting-text customization:
+
+- Set `app.thinking_messages` in config to rotate custom waiting text.
+- Messages rotate once per submitted prompt while status is waiting and no stream delta has arrived.
+- If unset, default waiting text is `thinking`.
 
 ## Documentation map
 
 - `AGENTS.md` - repository workflow, TDD loop, and validation gates.
-- `docs/README.md` - docs index and structure.
+- `ARCHITECTURE.md` - concise architecture snapshot.
+- `docs/README.md` - implementation docs index.
 - `docs/ARCHITECTURE.md` - implementation-detail architecture map.
 - `docs/RUNTIME.md` - startup flow and command mode behavior.
 - `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
 - `docs/TUI.md` - terminal UX behavior and controls.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
-- `docs/TESTING.md` - test coverage and Red/Green command loops.
-- `docs/specs` - feature specs and implementation plans.
-- `docs/adr` - architecture decision records.
+- `docs/TESTING.md` - package coverage and Red/Green command loops.
+- `docs/SECURITY.md` - local-only security boundary and controls.
+- `docs/specs/` - feature specs and design history.
 
 ## Scope guardrails
 
 - Go only.
 - Monolithic single-process CLI only.
-- Local-only tools: filesystem, local process execution, local scheduler.
-- No remote tool bridges, no browser automation, no web server surfaces.
-
-## Migration note
-
-If legacy config still sets `memory.path` to a JSON file, startup imports it once into workspace `MEMORY.md` and writes `.localclaw-legacy-memory-import-v1` to prevent duplicate imports.
+- Local subprocess execution only for LLM integration.
+- No HTTP/gRPC listeners, no gateway/server surfaces.

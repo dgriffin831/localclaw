@@ -11,7 +11,9 @@ import (
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/memory"
+	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/skills"
+	"github.com/dgriffin831/localclaw/internal/workspace"
 )
 
 const memoryRecallPolicyPrompt = `System policy:
@@ -78,39 +80,132 @@ func (a *App) ExecuteTool(ctx context.Context, req ToolExecutionRequest) ToolExe
 	}
 }
 
-func (a *App) buildPromptInput(agentID, sessionID, input string) string {
+func (a *App) buildPromptInput(ctx context.Context, agentID, sessionID, input string) string {
 	trimmedInput := strings.TrimSpace(input)
-	if !a.toolsEnabled(agentID) {
+	resolution := ResolveSession(agentID, sessionID)
+	bootstrapSection := a.buildBootstrapPromptSection(ctx, resolution)
+	if !a.toolsEnabled(agentID) && bootstrapSection == "" {
 		return trimmedInput
 	}
 
 	toolLines := make([]string, 0, 8)
-	for _, tool := range a.ToolDefinitions(agentID) {
-		paramParts := make([]string, 0, len(tool.Parameters))
-		for _, param := range tool.Parameters {
-			suffix := " optional"
-			if param.Required {
-				suffix = " required"
+	if a.toolsEnabled(agentID) {
+		for _, tool := range a.ToolDefinitions(agentID) {
+			paramParts := make([]string, 0, len(tool.Parameters))
+			for _, param := range tool.Parameters {
+				suffix := " optional"
+				if param.Required {
+					suffix = " required"
+				}
+				paramParts = append(paramParts, fmt.Sprintf("%s:%s (%s)", param.Name, param.Type, suffix))
 			}
-			paramParts = append(paramParts, fmt.Sprintf("%s:%s (%s)", param.Name, param.Type, suffix))
+			toolLines = append(toolLines, fmt.Sprintf("- %s: %s | args: %s", tool.Name, tool.Description, strings.Join(paramParts, ", ")))
 		}
-		toolLines = append(toolLines, fmt.Sprintf("- %s: %s | args: %s", tool.Name, tool.Description, strings.Join(paramParts, ", ")))
 	}
 
-	if len(toolLines) == 0 {
+	if bootstrapSection == "" && len(toolLines) == 0 {
 		return trimmedInput
 	}
 
-	sessionKey := ResolveSession(agentID, sessionID).SessionKey
 	var b strings.Builder
-	b.WriteString(memoryRecallPolicyPrompt)
-	b.WriteString("\n\nAvailable tools:\n")
-	b.WriteString(strings.Join(toolLines, "\n"))
-	b.WriteString("\n\nCurrent session_key: ")
-	b.WriteString(sessionKey)
-	b.WriteString("\n\nUser input:\n")
+	if bootstrapSection != "" {
+		b.WriteString(bootstrapSection)
+	}
+	if len(toolLines) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(memoryRecallPolicyPrompt)
+		b.WriteString("\n\nAvailable tools:\n")
+		b.WriteString(strings.Join(toolLines, "\n"))
+		b.WriteString("\n\nCurrent session_key: ")
+		b.WriteString(resolution.SessionKey)
+		b.WriteString("\n")
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
+	b.WriteString("User input:\n")
 	b.WriteString(trimmedInput)
 	return b.String()
+}
+
+func (a *App) buildBootstrapPromptSection(ctx context.Context, resolution SessionResolution) string {
+	if a.sessions == nil || a.workspace == nil {
+		return ""
+	}
+	shouldInject, err := a.shouldInjectBootstrapContext(ctx, resolution)
+	if err != nil || !shouldInject {
+		return ""
+	}
+
+	files, err := a.workspace.LoadBootstrapFiles(ctx, resolution.AgentID, resolution.SessionKey)
+	if err != nil {
+		return ""
+	}
+	rendered := renderBootstrapPromptSection(files)
+	if strings.TrimSpace(rendered) == "" {
+		return ""
+	}
+	if err := a.markBootstrapInjected(ctx, resolution); err != nil {
+		return ""
+	}
+	return rendered
+}
+
+func (a *App) shouldInjectBootstrapContext(ctx context.Context, resolution SessionResolution) (bool, error) {
+	entry, exists, err := a.sessions.Get(ctx, resolution.AgentID, resolution.SessionID)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return true, nil
+	}
+	if !entry.BootstrapInjected {
+		return true, nil
+	}
+	return entry.BootstrapCompactionCount < entry.CompactionCount, nil
+}
+
+func (a *App) markBootstrapInjected(ctx context.Context, resolution SessionResolution) error {
+	_, err := a.sessions.Update(ctx, resolution.AgentID, resolution.SessionID, func(entry *session.SessionEntry) error {
+		entry.Key = resolution.SessionKey
+		entry.BootstrapInjected = true
+		entry.BootstrapCompactionCount = entry.CompactionCount
+		return nil
+	})
+	return err
+}
+
+func renderBootstrapPromptSection(files []workspace.BootstrapFile) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("Workspace bootstrap context (load on first message and reload after compaction).")
+	b.WriteString("\nUse this as local context, but always follow higher-priority system/developer instructions.\n")
+
+	added := 0
+	for _, file := range files {
+		if file.Missing {
+			continue
+		}
+		content := strings.TrimSpace(file.Content)
+		if content == "" {
+			continue
+		}
+		b.WriteString("\n## ")
+		b.WriteString(file.Name)
+		b.WriteString("\n")
+		b.WriteString(content)
+		b.WriteString("\n")
+		added++
+	}
+	if added == 0 {
+		return ""
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (a *App) executeMemorySearchTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult {

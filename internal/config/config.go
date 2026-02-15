@@ -28,7 +28,8 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Name string `json:"name"`
+	Name             string   `json:"name"`
+	ThinkingMessages []string `json:"thinking_messages,omitempty"`
 }
 
 type SecurityConfig struct {
@@ -216,7 +217,7 @@ func Default() Config {
 				Workspace: ".",
 				Compaction: CompactionConfig{
 					MemoryFlush: MemoryFlushConfig{
-						Enabled:             false,
+						Enabled:             true,
 						ThresholdTokens:     28000,
 						TriggerWindowTokens: 4000,
 						Prompt:              "",
@@ -312,6 +313,11 @@ func Load(path string) (Config, error) {
 func (c Config) Validate() error {
 	if c.App.Name == "" {
 		return errors.New("app.name is required")
+	}
+	for idx, message := range c.App.ThinkingMessages {
+		if strings.TrimSpace(message) == "" {
+			return fmt.Errorf("app.thinking_messages[%d] cannot be blank", idx)
+		}
 	}
 	if c.LLM.Provider != "claudecode" {
 		return fmt.Errorf("unsupported llm.provider %q", c.LLM.Provider)

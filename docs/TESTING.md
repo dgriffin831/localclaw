@@ -1,37 +1,28 @@
 # Testing Guide
 
-This document describes testing coverage, commands, and Red/Green workflow for `localclaw`.
+This document describes test coverage, commands, and Red/Green workflow for `localclaw`.
 
 ## Goals
 
 - Catch regressions in local-only policy and startup behavior.
 - Keep config contract and runtime wiring aligned.
+- Keep workspace/session/memory behavior stable under edge and concurrency scenarios.
 - Keep TUI command/input behavior stable.
-- Prefer behavior assertions over implementation-detail assertions.
 
-## Test Stack Overview
+## Coverage map
 
-| Layer | Tooling | Primary Locations | What It Validates |
-| --- | --- | --- | --- |
-| Config and policy | Go `testing` | `internal/config/config_test.go` | default config validity, allowlists, local-only policy constraints, GovCloud validation |
-| Runtime startup boundary | Go `testing` | `internal/runtime/local_only_test.go` | startup rejection when forbidden network flags are enabled |
-| TUI logic | Go `testing` | `internal/tui/app_test.go` | slash parsing, elapsed formatting, input model behavior |
+| Layer | Primary Locations | What It Validates |
+| --- | --- | --- |
+| Config and policy | `internal/config/config_test.go` | defaults, compatibility mappings, validation allowlists, local-only guardrails |
+| Runtime lifecycle and hooks | `internal/runtime/local_only_test.go`, `internal/runtime/tools_test.go` | startup boundaries, prompt assembly, tool execution, reset/session behavior |
+| TUI behavior | `internal/tui/app_test.go` | slash commands, autocomplete, waiting/status UX, welcome rendering, history/keybindings |
+| Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, bootstrap loading/filtering, subagent allowlist |
+| Session store/transcripts | `internal/session/store_test.go` | path resolution, lock behavior, metadata preservation, write safety |
+| Memory CLI | `internal/cli/memory_test.go` | `memory status/index/search` JSON/text output and argument handling |
+| Session snapshot hook | `internal/hooks/session_memory_test.go` | snapshot generation, slug/summary fallback, transcript handling |
+| Memory indexing/search/embeddings/flush | `internal/memory/*_test.go` | discovery/chunking, SQLite sync/search/get, autosync, embeddings, flush logic, migration helpers |
 
-## Current Coverage Snapshot (as of February 15, 2026)
-
-- Total test files: `3`
-- Total package-level test focus:
-  - config validation and policy checks
-  - runtime local-only startup enforcement
-  - foundational TUI behavior helpers
-
-## Where Tests Live
-
-- Config tests: `internal/config/config_test.go`
-- Runtime tests: `internal/runtime/local_only_test.go`
-- TUI tests: `internal/tui/app_test.go`
-
-## Commands
+## Command reference
 
 ### Full suite
 
@@ -45,57 +36,68 @@ go test ./...
 go test ./internal/config
 go test ./internal/runtime
 go test ./internal/tui
+go test ./internal/workspace
+go test ./internal/session
+go test ./internal/cli
+go test ./internal/hooks
+go test ./internal/memory
 ```
 
-### Focused test-by-name runs (Red/Green loops)
+### Focused Red/Green examples
 
 ```bash
-go test ./internal/config -run TestValidateRequiresGovCloudRegion -v
-go test ./internal/runtime -run TestNewFailsWhenNetworkServerEnabled -v
+go test ./internal/config -run TestValidate -v
+go test ./internal/runtime -run TestPromptIncludesBootstrapContextOnFirstMessageOnly -v
 go test ./internal/tui -run TestParseSlash -v
+go test ./internal/workspace -run TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles -v
+go test ./internal/memory -run TestSQLiteIndexManagerSyncForceBuildsIndexAndStatus -v
 ```
 
 ### Runtime smoke checks
 
 ```bash
 go run ./cmd/localclaw
+go run ./cmd/localclaw check
 go run ./cmd/localclaw tui
+go run ./cmd/localclaw memory status
 ```
 
-## Red/Green Workflow (Default)
+## Red/Green workflow (default)
 
 1. Define behavior contract for the change.
-2. Add smallest failing test in relevant package.
-3. Run focused command and confirm intentional failure.
-4. Implement minimum code to satisfy test.
+2. Add the smallest failing test in the relevant package.
+3. Run focused tests and confirm intentional failure.
+4. Implement minimum code to satisfy behavior.
 5. Re-run focused tests until green.
 6. Run `go test ./...`.
 7. Run `go fmt ./...` when Go files changed.
 8. Update docs/specs when behavior or workflow changed.
 
-## Test Writing Standards
+## Test writing standards
 
 - Assert observable outcomes and boundary behavior.
 - Include meaningful failure-path tests for policy/security constraints.
-- Keep tests deterministic (no external network dependency).
-- Co-locate tests with changed package.
+- Keep tests deterministic and local-only (no network dependencies).
+- Co-locate tests with changed package behavior.
 
-## Common Issues
+## Common issues
 
-- Failing startup tests from policy changes:
-  - verify `security.*` local-only fields in fixture/config values.
-- TUI test instability:
-  - keep tests focused on pure behavior helpers and model transitions.
-- Missing Claude binary during manual runs:
-  - ensure `llm.claude_code.binary_path` points to installed CLI.
+- Startup policy test failures:
+  - verify `security.*` local-only fields in fixtures.
+- Memory index test flakiness:
+  - ensure temporary workspace/session paths are isolated per test.
+- TUI behavior drift:
+  - update tests together with slash keybinding/status changes.
+- Missing Claude binary in manual smoke runs:
+  - configure `llm.claude_code.binary_path` appropriately.
 
-## Recommended Validation Before PR
+## Recommended validation before handoff
 
 ```bash
 go test ./...
 ```
 
-For TUI/CLI behavior changes, also run:
+For TUI/runtime behavior changes, also run:
 
 ```bash
 go run ./cmd/localclaw

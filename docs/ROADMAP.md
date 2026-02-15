@@ -2,18 +2,19 @@
 
 ## Current delivery status
 
-- Workspace + memory parity spec milestones PR-01 through PR-15 are implemented on the current line.
-- Legacy migration path (`memory.path` JSON import) is in place with one-time idempotent marker.
-- Memory CLI and runtime tool surfaces are integrated and tested.
+- Workspace/session/memory parity milestones are implemented in current runtime.
+- Memory CLI (`status`, `index`, `search`) is integrated.
+- Session reset/new snapshot hooks and memory flush plumbing are in place.
+- Startup enforces local-only boundaries and scaffolds default config file.
 
-## Next phase: post-parity hardening
+## Next phase: hardening and observability
 
-- Add explicit changelog/release process around migrations and operational defaults.
-- Improve memory index observability (durations, cause tags, structured counters).
-- Add larger fixture/benchmark suites for indexing throughput and autosync behavior.
+- Improve memory index observability (durations, trigger cause tags, structured counters).
+- Expand autosync and large-workspace benchmark coverage.
+- Tighten operator diagnostics for memory/session state in CLI and TUI.
 
 ## Longer horizon
 
 - Backup/restore workflows for state root and per-agent memory DBs.
-- Expanded policy controls and auditing for enterprise deployments.
-- Additional operator ergonomics in TUI and CLI around memory/session diagnostics.
+- Expanded policy controls and auditability for enterprise deployments.
+- Provider abstraction work for additional local subprocess-backed LLM adapters.

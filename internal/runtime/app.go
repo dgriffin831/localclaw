@@ -2,9 +2,12 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -142,16 +145,8 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.workspace.Init(ctx); err != nil {
 		return fmt.Errorf("workspace init: %w", err)
 	}
-	defaultWorkspace, err := a.ResolveWorkspacePath(DefaultAgentID)
-	if err != nil {
-		return fmt.Errorf("resolve default workspace: %w", err)
-	}
-	if _, err := memory.ImportLegacyMemoryJSON(ctx, memory.LegacyImportRequest{
-		WorkspacePath: defaultWorkspace,
-		LegacyPath:    a.resolveLegacyImportPath(),
-		Now:           a.now,
-	}); err != nil {
-		return fmt.Errorf("legacy memory import: %w", err)
+	if err := a.bootstrapDefaultConfigFile(); err != nil {
+		return fmt.Errorf("bootstrap config: %w", err)
 	}
 	if err := a.memory.Init(ctx); err != nil {
 		return fmt.Errorf("memory init: %w", err)
@@ -171,6 +166,39 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
+func (a *App) bootstrapDefaultConfigFile() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home dir: %w", err)
+	}
+
+	configDir := filepath.Join(home, ".localclaw")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	path := filepath.Join(configDir, "localclaw.json")
+	payload, err := json.MarshalIndent(a.cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	payload = append(payload, '\n')
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return fmt.Errorf("create default config file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.Write(payload); err != nil {
+		return fmt.Errorf("write default config file: %w", err)
+	}
+	return nil
+}
+
 // Prompt sends a single input to the configured local LLM client.
 func (a *App) Prompt(ctx context.Context, input string) (string, error) {
 	return a.PromptForSession(ctx, DefaultAgentID, DefaultSessionID, input)
@@ -183,12 +211,12 @@ func (a *App) PromptStream(ctx context.Context, input string) (<-chan claudecode
 
 // PromptForSession sends a single input with the resolved agent/session context.
 func (a *App) PromptForSession(ctx context.Context, agentID, sessionID, input string) (string, error) {
-	return a.llm.Prompt(ctx, a.buildPromptInput(agentID, sessionID, input))
+	return a.llm.Prompt(ctx, a.buildPromptInput(ctx, agentID, sessionID, input))
 }
 
 // PromptStreamForSession streams output with the resolved agent/session context.
 func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, input string) (<-chan claudecode.StreamEvent, <-chan error) {
-	return a.llm.PromptStream(ctx, a.buildPromptInput(agentID, sessionID, input))
+	return a.llm.PromptStream(ctx, a.buildPromptInput(ctx, agentID, sessionID, input))
 }
 
 func (a *App) AddSessionTokens(ctx context.Context, agentID, sessionID string, delta int) error {
@@ -334,13 +362,6 @@ func hasMemoryFlushOverride(cfg config.MemoryFlushConfig) bool {
 		cfg.TriggerWindowTokens > 0 ||
 		strings.TrimSpace(cfg.Prompt) != "" ||
 		cfg.TimeoutSeconds > 0
-}
-
-func (a *App) resolveLegacyImportPath() string {
-	if path := strings.TrimSpace(a.cfg.Agents.Defaults.MemorySearch.LegacyImportPath); path != "" {
-		return path
-	}
-	return strings.TrimSpace(a.cfg.Memory.Path)
 }
 
 func mergeMemoryFlushConfig(base, override config.MemoryFlushConfig) config.MemoryFlushConfig {

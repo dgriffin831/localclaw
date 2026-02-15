@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -114,7 +115,84 @@ func TestAppResolvesWorkspaceAndSessionPaths(t *testing.T) {
 	}
 }
 
-func TestRunImportsLegacyMemoryJSONOnce(t *testing.T) {
+func TestRunBootstrapsDefaultConfigFileWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := config.Default()
+	cfg.Agents.Defaults.Workspace = "."
+	cfg.Workspace.Root = "."
+	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
+	cfg.Cron.Enabled = false
+	cfg.Heartbeat.Enabled = false
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("run app: %v", err)
+	}
+
+	configPath := filepath.Join(home, ".localclaw", "localclaw.json")
+	payload, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read bootstrapped config: %v", err)
+	}
+	if strings.Contains(string(payload), "thinking_messages") {
+		t.Fatalf("expected bootstrapped default config to omit app.thinking_messages, got %s", string(payload))
+	}
+
+	var decoded config.Config
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode bootstrapped config: %v", err)
+	}
+	if decoded.App.Name != cfg.App.Name {
+		t.Fatalf("expected app.name=%q, got %q", cfg.App.Name, decoded.App.Name)
+	}
+	if decoded.LLM.Provider != cfg.LLM.Provider {
+		t.Fatalf("expected llm.provider=%q, got %q", cfg.LLM.Provider, decoded.LLM.Provider)
+	}
+}
+
+func TestRunDoesNotOverwriteExistingBootstrappedConfigFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configPath := filepath.Join(home, ".localclaw", "localclaw.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	existing := []byte("{\"app\":{\"name\":\"custom\"}}\n")
+	if err := os.WriteFile(configPath, existing, 0o600); err != nil {
+		t.Fatalf("write existing config: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.Agents.Defaults.Workspace = "."
+	cfg.Workspace.Root = "."
+	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
+	cfg.Cron.Enabled = false
+	cfg.Heartbeat.Enabled = false
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("run app: %v", err)
+	}
+
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read existing config after run: %v", err)
+	}
+	if string(got) != string(existing) {
+		t.Fatalf("expected existing config to remain unchanged, got %q", string(got))
+	}
+}
+
+func TestRunDoesNotImportLegacyMemoryJSON(t *testing.T) {
 	stateRoot := t.TempDir()
 	legacyPath := filepath.Join(t.TempDir(), "legacy-memory.json")
 	if err := os.WriteFile(legacyPath, []byte(`{"topic":"legacy alpha"}`), 0o600); err != nil {
@@ -143,31 +221,16 @@ func TestRunImportsLegacyMemoryJSONOnce(t *testing.T) {
 	}
 	memoryPath := filepath.Join(workspacePath, "MEMORY.md")
 	body, err := os.ReadFile(memoryPath)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("read MEMORY.md: %v", err)
 	}
-	if !strings.Contains(string(body), "\"legacy alpha\"") {
-		t.Fatalf("expected imported legacy data in MEMORY.md")
+	if err == nil && strings.Contains(string(body), "\"legacy alpha\"") {
+		t.Fatalf("did not expect legacy JSON data to be imported into MEMORY.md")
 	}
 
 	markerPath := filepath.Join(workspacePath, ".localclaw-legacy-memory-import-v1")
-	if _, err := os.Stat(markerPath); err != nil {
-		t.Fatalf("expected marker file: %v", err)
-	}
-
-	if err := os.WriteFile(legacyPath, []byte(`{"topic":"legacy beta"}`), 0o600); err != nil {
-		t.Fatalf("rewrite legacy memory json: %v", err)
-	}
-	if err := app.Run(context.Background()); err != nil {
-		t.Fatalf("second run app: %v", err)
-	}
-
-	second, err := os.ReadFile(memoryPath)
-	if err != nil {
-		t.Fatalf("read MEMORY.md second run: %v", err)
-	}
-	if strings.Contains(string(second), "legacy beta") {
-		t.Fatalf("expected marker to prevent second import")
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("did not expect legacy import marker file, got err=%v", err)
 	}
 }
 

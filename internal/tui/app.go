@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -29,6 +30,8 @@ const (
 	statusStreaming = "streaming"
 	statusAborted   = "aborted"
 	statusError     = "error"
+	slashMenuLimit  = 6
+	welcomeFileName = "WELCOME.md"
 )
 
 type messageRole string
@@ -39,9 +42,29 @@ const (
 	roleSystem    messageRole = "system"
 )
 
+type slashCommandDef struct {
+	Name        string
+	Args        string
+	Description string
+}
+
+var slashCommandDefs = []slashCommandDef{
+	{Name: "help", Description: "show this help"},
+	{Name: "status", Description: "show current status and session info"},
+	{Name: "clear", Description: "clear the visible transcript"},
+	{Name: "reset", Description: "reset the current session"},
+	{Name: "new", Description: "start a new session"},
+	{Name: "thinking", Args: "<on|off>", Description: "toggle thinking visibility"},
+	{Name: "verbose", Args: "<on|off>", Description: "toggle verbose mode"},
+	{Name: "model", Args: "<name>", Description: "set model override (not implemented)"},
+	{Name: "exit", Description: "exit the TUI"},
+	{Name: "quit", Description: "alias for /exit"},
+}
+
 type chatMessage struct {
 	Role                messageRole
 	Raw                 string
+	RenderMarkdown      bool
 	Streaming           bool
 	ThinkingPlaceholder bool
 }
@@ -85,9 +108,12 @@ type model struct {
 	running         bool
 	hasStreamDelta  bool
 
-	showThinking  bool
-	verbose       bool
-	toolsExpanded bool
+	showThinking          bool
+	verbose               bool
+	toolsExpanded         bool
+	thinkingMessages      []string
+	thinkingMessageIdx    int
+	activeThinkingMessage string
 
 	runSeq             int
 	activeRunID        int
@@ -102,6 +128,10 @@ type model struct {
 	history      []string
 	historyIdx   int
 	historyDraft string
+
+	slashQuery    string
+	slashMatches  []slashCommandDef
+	slashSelected int
 
 	lastCtrlC time.Time
 }
@@ -170,6 +200,17 @@ var (
 
 	inputHintStyle = lipgloss.NewStyle().
 			Foreground(colorTextMuted)
+
+	slashMenuItemStyle = lipgloss.NewStyle().
+				Foreground(colorTextMuted)
+
+	slashMenuSelectedStyle = lipgloss.NewStyle().
+				Foreground(colorText).
+				Bold(true)
+
+	slashMenuMoreStyle = lipgloss.NewStyle().
+				Foreground(colorTextMuted).
+				Italic(true)
 )
 
 func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
@@ -228,14 +269,18 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 		showThinking:       true,
 		historyIdx:         -1,
 		activeAssistantIdx: -1,
+		thinkingMessages:   resolveThinkingMessages(cfg.App.ThinkingMessages),
 	}
 	m.addSystem("localclaw ready. Type /help for commands.")
+	if welcome := m.loadWelcomeMessage(); welcome != "" {
+		m.addSystemMarkdown(welcome)
+	}
 	return m
 }
 
 func Run(ctx context.Context, app *runtime.App, cfg config.Config) error {
 	m := newModel(ctx, app, cfg)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := newProgram(m)
 
 	go func() {
 		<-ctx.Done()
@@ -243,6 +288,10 @@ func Run(ctx context.Context, app *runtime.App, cfg config.Config) error {
 	}()
 
 	return p.Start()
+}
+
+func newProgram(m tea.Model) *tea.Program {
+	return tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 }
 
 func (m model) Init() tea.Cmd {
@@ -268,6 +317,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))) {
 			if strings.TrimSpace(m.input.Value()) != "" {
 				m.input.Reset()
+				m.updateSlashAutocomplete()
 				m.adjustInputHeight()
 				m.setStatus("cleared input")
 				return m, nil
@@ -311,21 +361,49 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if msg.Type == tea.KeyShiftTab {
+			if m.moveSlashSelection(-1) {
+				return m, nil
+			}
+		}
+
+		if msg.Type == tea.KeyTab {
+			if m.applySlashCompletion() {
+				m.adjustInputHeight()
+				m.layout()
+				return m, nil
+			}
+		}
+
 		if msg.Type == tea.KeyEnter && !msg.Alt {
 			cmd := m.submitInput()
 			return m, cmd
 		}
 
-		if msg.Type == tea.KeyUp {
+		if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+p", "alt+up"))) {
 			if m.useHistory(-1) {
+				m.updateSlashAutocomplete()
 				m.adjustInputHeight()
 				return m, nil
 			}
 		}
 
-		if msg.Type == tea.KeyDown {
+		if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+n", "alt+down"))) {
 			if m.useHistory(1) {
+				m.updateSlashAutocomplete()
 				m.adjustInputHeight()
+				return m, nil
+			}
+		}
+
+		if msg.Type == tea.KeyUp {
+			if m.moveSlashSelection(-1) {
+				return m, nil
+			}
+		}
+
+		if msg.Type == tea.KeyDown {
+			if m.moveSlashSelection(1) {
 				return m, nil
 			}
 		}
@@ -388,6 +466,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if inputCmd != nil {
 		cmds = append(cmds, inputCmd)
 	}
+	m.updateSlashAutocomplete()
 	m.adjustInputHeight()
 	m.layout()
 
@@ -447,7 +526,7 @@ func (m *model) statusView() string {
 
 	base := m.status
 	if base == statusWaiting && m.showThinking && !m.hasStreamDelta {
-		base = "thinking"
+		base = m.currentThinkingMessage()
 	}
 	settings := fmt.Sprintf(
 		"thinking:%s  verbose:%s  tools:%s  /status",
@@ -474,15 +553,19 @@ func (m *model) statusView() string {
 }
 
 func (m *model) inputView() string {
-	hintText := "Enter send • Alt+Enter newline • Ctrl+T thinking • /help"
+	hintText := "Enter send • Tab autocomplete • Alt+Enter newline • Ctrl+T thinking • /help"
 	if panelInnerWidth(m.width) < 70 {
-		hintText = "Enter send • Alt+Enter newline • /help"
+		hintText = "Enter send • Tab autocomplete • Alt+Enter newline • /help"
 	}
 	if panelInnerWidth(m.width) < 42 {
-		hintText = "Enter send • /help"
+		hintText = "Enter send • Tab complete • /help"
 	}
 	hint := inputHintStyle.Render(truncateText(hintText, panelInnerWidth(m.width)))
-	body := m.input.View() + "\n" + hint
+	body := m.input.View()
+	if menu := m.slashMenuView(); menu != "" {
+		body += "\n" + menu
+	}
+	body += "\n" + hint
 	return inputStyle.Width(max(1, m.width)).Render(body)
 }
 
@@ -540,6 +623,7 @@ func (m *model) submitInput() tea.Cmd {
 
 	m.rememberHistory(value)
 	m.input.Reset()
+	m.updateSlashAutocomplete()
 	m.adjustInputHeight()
 
 	if strings.HasPrefix(value, "/") {
@@ -562,7 +646,7 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 	name, arg := parseSlash(raw)
 	switch name {
 	case "help":
-		m.addSystem("commands: /help /status /clear /reset /new /thinking <on|off> /verbose <on|off> /model <name> /exit")
+		m.addSystem(slashHelpText())
 	case "status":
 		m.addSystem(fmt.Sprintf("status=%s model=%s agent=%s session=%s workspace=%s thinking=%s verbose=%s", m.status, m.cfg.LLM.Provider, m.agentID, m.sessionID, m.workspacePath, onOff(m.showThinking), onOff(m.verbose)))
 	case "clear":
@@ -619,12 +703,172 @@ func parseSlash(raw string) (string, string) {
 	return strings.ToLower(parts[0]), strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))
 }
 
+func (m *model) updateSlashAutocomplete() {
+	query, active := parseSlashAutocompleteInput(m.input.Value())
+	if !active {
+		m.slashQuery = ""
+		m.slashMatches = nil
+		m.slashSelected = 0
+		return
+	}
+
+	matches := findSlashMatches(query)
+	if len(matches) == 0 {
+		m.slashQuery = query
+		m.slashMatches = nil
+		m.slashSelected = 0
+		return
+	}
+
+	prevName := ""
+	if m.slashSelected >= 0 && m.slashSelected < len(m.slashMatches) {
+		prevName = m.slashMatches[m.slashSelected].Name
+	}
+
+	m.slashMatches = matches
+	if query != m.slashQuery {
+		m.slashSelected = 0
+	} else if prevName != "" {
+		m.slashSelected = indexSlashMatch(matches, prevName)
+	}
+	m.slashQuery = query
+	if m.slashSelected < 0 || m.slashSelected >= len(m.slashMatches) {
+		m.slashSelected = 0
+	}
+}
+
+func (m *model) moveSlashSelection(delta int) bool {
+	if len(m.slashMatches) == 0 || delta == 0 {
+		return false
+	}
+	m.slashSelected = (m.slashSelected + delta) % len(m.slashMatches)
+	if m.slashSelected < 0 {
+		m.slashSelected += len(m.slashMatches)
+	}
+	return true
+}
+
+func (m *model) applySlashCompletion() bool {
+	if len(m.slashMatches) == 0 {
+		return false
+	}
+	idx := m.slashSelected
+	if idx < 0 || idx >= len(m.slashMatches) {
+		idx = 0
+	}
+	m.input.SetValue(formatSlashInput(m.slashMatches[idx]))
+	m.input.CursorEnd()
+	m.updateSlashAutocomplete()
+	return true
+}
+
+func (m *model) slashMenuView() string {
+	if len(m.slashMatches) == 0 {
+		return ""
+	}
+
+	maxWidth := panelInnerWidth(m.width)
+	limit := slashMenuLimit
+	if len(m.slashMatches) < limit {
+		limit = len(m.slashMatches)
+	}
+
+	lines := make([]string, 0, limit+1)
+	for i := 0; i < limit; i++ {
+		cmd := m.slashMatches[i]
+		line := fmt.Sprintf("%-22s %s", formatSlashUsage(cmd), cmd.Description)
+		prefix := "  "
+		style := slashMenuItemStyle
+		if i == m.slashSelected {
+			prefix = "› "
+			style = slashMenuSelectedStyle
+		}
+		lines = append(lines, style.Render(truncateText(prefix+line, maxWidth)))
+	}
+
+	if len(m.slashMatches) > limit {
+		remaining := len(m.slashMatches) - limit
+		more := fmt.Sprintf("  +%d more commands (type to filter)", remaining)
+		lines = append(lines, slashMenuMoreStyle.Render(truncateText(more, maxWidth)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func parseSlashAutocompleteInput(raw string) (string, bool) {
+	if strings.Contains(raw, "\n") {
+		return "", false
+	}
+	trimmed := strings.TrimLeft(raw, " \t")
+	if !strings.HasPrefix(trimmed, "/") {
+		return "", false
+	}
+	remainder := strings.TrimPrefix(trimmed, "/")
+	if remainder == "" {
+		return "", true
+	}
+	if strings.ContainsAny(remainder, " \t") {
+		return "", false
+	}
+	return strings.ToLower(remainder), true
+}
+
+func findSlashMatches(query string) []slashCommandDef {
+	normalized := strings.ToLower(strings.TrimSpace(query))
+	if normalized == "" {
+		return append([]slashCommandDef(nil), slashCommandDefs...)
+	}
+
+	matches := make([]slashCommandDef, 0, len(slashCommandDefs))
+	secondary := make([]slashCommandDef, 0, len(slashCommandDefs))
+	for _, cmd := range slashCommandDefs {
+		name := strings.ToLower(cmd.Name)
+		if strings.HasPrefix(name, normalized) {
+			matches = append(matches, cmd)
+			continue
+		}
+		if strings.Contains(name, normalized) {
+			secondary = append(secondary, cmd)
+		}
+	}
+	return append(matches, secondary...)
+}
+
+func indexSlashMatch(matches []slashCommandDef, name string) int {
+	for idx, cmd := range matches {
+		if cmd.Name == name {
+			return idx
+		}
+	}
+	return 0
+}
+
+func slashHelpText() string {
+	lines := make([]string, 0, len(slashCommandDefs)+1)
+	lines = append(lines, "slash commands:")
+	for _, cmd := range slashCommandDefs {
+		lines = append(lines, fmt.Sprintf("%-22s %s", formatSlashUsage(cmd), cmd.Description))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatSlashUsage(cmd slashCommandDef) string {
+	if strings.TrimSpace(cmd.Args) == "" {
+		return "/" + cmd.Name
+	}
+	return fmt.Sprintf("/%s %s", cmd.Name, cmd.Args)
+}
+
+func formatSlashInput(cmd slashCommandDef) string {
+	return "/" + cmd.Name + " "
+}
+
 func (m *model) startRun(input string) {
 	m.runSeq++
 	m.activeRunID = m.runSeq
 	m.running = true
 	m.hasStreamDelta = false
 	m.activeAssistantIdx = -1
+	m.activeThinkingMessage = m.nextThinkingMessage()
 	m.setStatus(statusSending)
 
 	m.addUser(input)
@@ -643,6 +887,7 @@ func (m *model) startRun(input string) {
 func (m *model) finishRun(finalStatus string) {
 	m.running = false
 	m.setStatus(finalStatus)
+	m.activeThinkingMessage = ""
 	m.activeRunID = 0
 	m.activeAssistantIdx = -1
 	m.streamEvents = nil
@@ -662,6 +907,7 @@ func (m *model) abortRun(message string) {
 		m.running = false
 		m.activeRunID = 0
 		m.activeAssistantIdx = -1
+		m.activeThinkingMessage = ""
 		m.streamEvents = nil
 		m.streamErrs = nil
 		m.setStatus(statusAborted)
@@ -719,13 +965,35 @@ func (m *model) runSessionReset(startNew bool, source string) {
 	m.messages = nil
 	if startNew {
 		m.addSystem(fmt.Sprintf("started new session %s", m.sessionID))
+		if welcome := m.loadWelcomeMessage(); welcome != "" {
+			m.addSystemMarkdown(welcome)
+		}
 	} else {
 		m.addSystem("session reset")
 	}
 }
 
+func (m *model) loadWelcomeMessage() string {
+	if strings.TrimSpace(m.workspacePath) == "" {
+		return ""
+	}
+	content, err := os.ReadFile(filepath.Join(m.workspacePath, welcomeFileName))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
+}
+
 func (m *model) addSystem(text string) {
 	m.messages = append(m.messages, chatMessage{Role: roleSystem, Raw: text})
+}
+
+func (m *model) addSystemMarkdown(text string) {
+	m.messages = append(m.messages, chatMessage{
+		Role:           roleSystem,
+		Raw:            text,
+		RenderMarkdown: true,
+	})
 }
 
 func (m *model) addUser(text string) {
@@ -774,7 +1042,12 @@ func (m *model) renderTranscript() string {
 
 		switch msg.Role {
 		case roleSystem:
-			blocks = append(blocks, systemStyle.Render(text))
+			if msg.RenderMarkdown {
+				rendered := m.renderMarkdown(text, contentWidth-3)
+				blocks = append(blocks, systemStyle.Render(rendered))
+			} else {
+				blocks = append(blocks, systemStyle.Render(text))
+			}
 		case roleUser:
 			rendered := m.renderMarkdown(text, contentWidth-4)
 			blocks = append(blocks, userStyle.Width(contentWidth).Render(rendered))
@@ -907,6 +1180,41 @@ func tickStatus() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return statusTickMsg(t)
 	})
+}
+
+func resolveThinkingMessages(messages []string) []string {
+	resolved := make([]string, 0, len(messages))
+	for _, message := range messages {
+		trimmed := strings.TrimSpace(message)
+		if trimmed == "" {
+			continue
+		}
+		resolved = append(resolved, trimmed)
+	}
+	if len(resolved) == 0 {
+		return []string{"thinking"}
+	}
+	return resolved
+}
+
+func (m *model) nextThinkingMessage() string {
+	if len(m.thinkingMessages) == 0 {
+		return "thinking"
+	}
+	idx := m.thinkingMessageIdx % len(m.thinkingMessages)
+	message := m.thinkingMessages[idx]
+	m.thinkingMessageIdx = (m.thinkingMessageIdx + 1) % len(m.thinkingMessages)
+	return message
+}
+
+func (m *model) currentThinkingMessage() string {
+	if strings.TrimSpace(m.activeThinkingMessage) != "" {
+		return m.activeThinkingMessage
+	}
+	if len(m.thinkingMessages) > 0 {
+		return m.thinkingMessages[0]
+	}
+	return "thinking"
 }
 
 func onOff(v bool) string {

@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft v1.0
+Implemented (historical delivery spec)
 
 ## Goal
 
@@ -14,7 +14,16 @@ Implement a production-grade, Go-native workspace and memory system in `localcla
 - Memory lifecycle automation (flush + session snapshot hook)
 - Operational visibility (status/index/search tooling)
 
-This spec is implementation-focused and intended to drive end-to-end delivery in `localclaw`.
+This spec was implementation-focused and drove end-to-end delivery in `localclaw`.
+It is retained as a historical record of the parity rollout and task breakdown.
+
+For current behavior and contracts, use:
+
+- `README.md`
+- `ARCHITECTURE.md`
+- `docs/ARCHITECTURE.md`
+- `docs/RUNTIME.md`
+- `docs/CONFIGURATION.md`
 
 ## Constraints
 
@@ -24,16 +33,18 @@ This spec is implementation-focused and intended to drive end-to-end delivery in
 - Storage is local filesystem + local SQLite only.
 - No Node/TypeScript runtime dependency.
 
-## Current Gap Summary
+## Current State Summary
 
-`localclaw` currently has only stubs:
+Parity milestones described in this document are implemented in the current line:
 
-- `internal/workspace` `Init()` is a no-op.
-- `internal/memory` `Init/Save/Load` are no-ops.
-- No session store/transcripts model.
-- No memory indexing/search/retrieval tools.
-- No workspace bootstrap/template lifecycle.
-- No memory lifecycle automation (flush/hooks).
+- workspace resolve/create/bootstrap lifecycle
+- session metadata store + transcript files
+- SQLite memory index/search/get APIs
+- memory CLI command mode (`status`, `index`, `search`)
+- runtime memory tool integration (`memory_search`, `memory_get`)
+- session reset/new snapshot hooks and compaction-adjacent flush plumbing
+
+The original pre-parity gap notes are preserved below as design history.
 
 ## Parity Scope (Must Close)
 
@@ -133,10 +144,12 @@ Add agent-aware and memory-search configuration while preserving backward compat
    - `IDENTITY.md`
    - `USER.md`
    - `HEARTBEAT.md`
+   - `WELCOME.md`
    - `BOOTSTRAP.md` (new workspace only)
 4. Preserve existing files (never overwrite by default).
 5. Optionally initialize git repository for brand-new workspace if git exists.
 6. Load bootstrap files for runtime context; include `MEMORY.md`/`memory.md` when present.
+   - `WELCOME.md` is for operator UX and is not injected into prompt bootstrap context.
 7. Filter bootstrap files for subagent sessions (allowlist behavior).
 
 ## Go API (target)

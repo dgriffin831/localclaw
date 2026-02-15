@@ -31,6 +31,37 @@ func TestDefaultConfigIncludesStateAndAgentScaffolding(t *testing.T) {
 	if cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens <= 0 {
 		fatalf(t, "expected agents.defaults.compaction.memoryFlush.thresholdTokens default")
 	}
+	if !cfg.Agents.Defaults.Compaction.MemoryFlush.Enabled {
+		fatalf(t, "expected agents.defaults.compaction.memoryFlush.enabled default")
+	}
+	if len(cfg.App.ThinkingMessages) != 0 {
+		fatalf(t, "expected app.thinking_messages to default empty, got %v", cfg.App.ThinkingMessages)
+	}
+}
+
+func TestLoadSupportsThinkingMessages(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"app": {
+			"thinking_messages": ["thinking", "checking memory", "drafting response"]
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+		fatalf(t, "write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		fatalf(t, "load config: %v", err)
+	}
+
+	if len(cfg.App.ThinkingMessages) != 3 {
+		fatalf(t, "expected 3 app.thinking_messages, got %d", len(cfg.App.ThinkingMessages))
+	}
+	if cfg.App.ThinkingMessages[0] != "thinking" {
+		fatalf(t, "unexpected first thinking message %q", cfg.App.ThinkingMessages[0])
+	}
 }
 
 func TestLoadMapsLegacyWorkspaceAndMemoryFields(t *testing.T) {
@@ -225,6 +256,14 @@ func TestValidateRejectsNegativeMemoryFlushValues(t *testing.T) {
 	cfg.Agents.Defaults.Compaction.MemoryFlush.TimeoutSeconds = -1
 	if err := cfg.Validate(); err == nil {
 		fatalf(t, "expected negative timeoutSeconds error")
+	}
+}
+
+func TestValidateRejectsBlankThinkingMessages(t *testing.T) {
+	cfg := Default()
+	cfg.App.ThinkingMessages = []string{"thinking", "   "}
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected blank thinking message error")
 	}
 }
 

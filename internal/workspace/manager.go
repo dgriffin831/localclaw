@@ -47,7 +47,17 @@ type LocalManager struct {
 //go:embed templates/*.md
 var workspaceTemplates embed.FS
 
-var bootstrapTemplateOrder = []string{
+var workspaceTemplateOrder = []string{
+	"AGENTS.md",
+	"SOUL.md",
+	"TOOLS.md",
+	"IDENTITY.md",
+	"USER.md",
+	"HEARTBEAT.md",
+	"WELCOME.md",
+}
+
+var bootstrapPromptOrder = []string{
 	"AGENTS.md",
 	"SOUL.md",
 	"TOOLS.md",
@@ -154,7 +164,7 @@ func (m *LocalManager) EnsureWorkspace(ctx context.Context, agentID string, ensu
 		return info, nil
 	}
 
-	files := append([]string{}, bootstrapTemplateOrder...)
+	files := append([]string{}, workspaceTemplateOrder...)
 	if info.Created {
 		files = append(files, "BOOTSTRAP.md")
 	}
@@ -192,7 +202,7 @@ func (m *LocalManager) LoadBootstrapFiles(ctx context.Context, agentID, sessionK
 		return nil, fmt.Errorf("stat workspace: %w", err)
 	}
 
-	names := append([]string{}, bootstrapTemplateOrder...)
+	names := append([]string{}, bootstrapPromptOrder...)
 	names = append(names, "BOOTSTRAP.md")
 	if isSubagentSession(sessionKey) {
 		filtered := make([]string, 0, len(names))

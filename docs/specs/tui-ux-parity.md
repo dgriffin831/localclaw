@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft v1.0
+Implemented (historical design spec)
 
 ## Goal
 
@@ -13,9 +13,19 @@ Design and implement a professional, colorful, highly usable `localclaw tui` exp
 - single-process
 - no gateway/web server dependency
 
-## Current gap
+This document is retained as design history for the TUI rollout.
+For current behavior and contracts, use:
 
-Today, `localclaw tui` is a basic line REPL with no streaming render, no markdown formatting, no multiline editor UX, and no structured run/tool/thinking status presentation.
+- `README.md`
+- `docs/TUI.md`
+- `internal/tui/app.go`
+- `internal/tui/app_test.go`
+
+## Current state
+
+`localclaw tui` is a full-screen Bubble Tea interface with streaming output, markdown rendering, multiline composition, slash command autocomplete, history navigation, session reset/new flows, and status lifecycle handling.
+
+The original gap statement below is preserved as historical context from before delivery.
 
 ## Openclaw behaviors to mirror
 

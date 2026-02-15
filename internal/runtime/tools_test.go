@@ -10,6 +10,7 @@ import (
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
 	"github.com/dgriffin831/localclaw/internal/memory"
+	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/skills"
 )
 
@@ -128,8 +129,80 @@ func TestPromptOmitsMemoryRecallPolicyWhenToolsDisabled(t *testing.T) {
 	if _, err := app.Prompt(ctx, "hello"); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	if llm.lastPromptInput != "hello" {
-		t.Fatalf("expected prompt passthrough when tools disabled, got %q", llm.lastPromptInput)
+	if strings.Contains(llm.lastPromptInput, "Memory recall is mandatory") {
+		t.Fatalf("memory recall policy should be omitted when tools disabled")
+	}
+	if _, err := app.Prompt(ctx, "hello again"); err != nil {
+		t.Fatalf("second prompt: %v", err)
+	}
+	if llm.lastPromptInput != "hello again" {
+		t.Fatalf("expected prompt passthrough after bootstrap load when tools disabled, got %q", llm.lastPromptInput)
+	}
+}
+
+func TestPromptIncludesBootstrapContextOnFirstMessageOnly(t *testing.T) {
+	ctx := context.Background()
+	_, app, workspace := newToolTestApp(t, false)
+	llm := &captureLLMClient{}
+	app.llm = llm
+
+	if err := osWriteFile(filepath.Join(workspace, "AGENTS.md"), "# AGENTS\n\nbootstrap-marker\n"); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	if _, err := app.PromptForSession(ctx, "default", "main", "first input"); err != nil {
+		t.Fatalf("first prompt: %v", err)
+	}
+	if !strings.Contains(llm.lastPromptInput, "Workspace bootstrap context") {
+		t.Fatalf("expected bootstrap context in first prompt, got %q", llm.lastPromptInput)
+	}
+	if !strings.Contains(llm.lastPromptInput, "## AGENTS.md") {
+		t.Fatalf("expected AGENTS.md section in first prompt")
+	}
+	if !strings.Contains(llm.lastPromptInput, "bootstrap-marker") {
+		t.Fatalf("expected AGENTS.md content in first prompt")
+	}
+
+	if _, err := app.PromptForSession(ctx, "default", "main", "second input"); err != nil {
+		t.Fatalf("second prompt: %v", err)
+	}
+	if strings.Contains(llm.lastPromptInput, "Workspace bootstrap context") {
+		t.Fatalf("bootstrap context should not be included on non-first message without compaction")
+	}
+	if llm.lastPromptInput != "second input" {
+		t.Fatalf("expected second prompt passthrough, got %q", llm.lastPromptInput)
+	}
+}
+
+func TestPromptReinjectsBootstrapAfterCompactionIncrement(t *testing.T) {
+	ctx := context.Background()
+	_, app, workspace := newToolTestApp(t, false)
+	llm := &captureLLMClient{}
+	app.llm = llm
+
+	if err := osWriteFile(filepath.Join(workspace, "AGENTS.md"), "# AGENTS\n\nreinjection-marker\n"); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	if _, err := app.PromptForSession(ctx, "default", "main", "before compaction"); err != nil {
+		t.Fatalf("first prompt: %v", err)
+	}
+	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		entry.CompactionCount++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("increment compaction count: %v", err)
+	}
+
+	if _, err := app.PromptForSession(ctx, "default", "main", "after compaction"); err != nil {
+		t.Fatalf("second prompt: %v", err)
+	}
+	if !strings.Contains(llm.lastPromptInput, "Workspace bootstrap context") {
+		t.Fatalf("expected bootstrap reinjection after compaction increment")
+	}
+	if !strings.Contains(llm.lastPromptInput, "reinjection-marker") {
+		t.Fatalf("expected AGENTS.md content after compaction reinjection")
 	}
 }
 
@@ -176,6 +249,7 @@ func newToolTestApp(t *testing.T, toolsEnabled bool) (config.Config, *App, strin
 	cfg.State.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Workspace.Root = "."
+	cfg.Session.Store = filepath.Join(cfg.State.Root, "agents", "{agentId}", "sessions", "sessions.json")
 	cfg.Agents.Defaults.MemorySearch.Enabled = toolsEnabled
 	cfg.Agents.Defaults.MemorySearch.Sources = []string{"memory"}
 	cfg.Agents.Defaults.MemorySearch.Provider = "none"

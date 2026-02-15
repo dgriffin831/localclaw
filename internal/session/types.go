@@ -29,6 +29,8 @@ type SessionEntry struct {
 	TranscriptPath             string           `json:"transcriptPath,omitempty"`
 	TotalTokens                int              `json:"totalTokens,omitempty"`
 	CompactionCount            int              `json:"compactionCount,omitempty"`
+	BootstrapInjected          bool             `json:"bootstrapInjected,omitempty"`
+	BootstrapCompactionCount   int              `json:"bootstrapCompactionCount,omitempty"`
 	MemoryFlushAt              string           `json:"memoryFlushAt,omitempty"`
 	MemoryFlushCompactionCount int              `json:"memoryFlushCompactionCount,omitempty"`
 	CreatedAt                  string           `json:"createdAt"`

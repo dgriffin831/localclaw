@@ -9,21 +9,22 @@
 - Command modes: `check`, `tui`, `memory`
 - No HTTP/gateway/server listeners.
 
-## Startup order
+## Startup order (`App.Run`)
 
 1. workspace init
-2. one-time legacy memory import (`memory.path` JSON -> `MEMORY.md`) with marker `.localclaw-legacy-memory-import-v1`
-3. memory init
-4. session init
+2. bootstrap default config file (`~/.localclaw/localclaw.json`) if missing
+3. memory store init (legacy no-op store)
+4. session store init
 5. skills load
 6. cron start
 7. heartbeat ping
 
 ## Core boundaries
 
-- Workspace: `internal/workspace`
+- Workspace + bootstrap templates: `internal/workspace`
 - Sessions/transcripts: `internal/session`
-- Memory index/search/migrations: `internal/memory`
+- Memory index/search/flush/hooks: `internal/memory`, `internal/hooks`
+- Runtime tool orchestration: `internal/runtime/tools.go`
 - TUI: `internal/tui`
 - Local Claude Code adapter: `internal/llm/claudecode`
 

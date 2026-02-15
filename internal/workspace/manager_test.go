@@ -110,6 +110,7 @@ func TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles(t *testing.T) {
 		"IDENTITY.md",
 		"USER.md",
 		"HEARTBEAT.md",
+		"WELCOME.md",
 		"BOOTSTRAP.md",
 	} {
 		path := filepath.Join(workspacePath, name)
@@ -200,6 +201,34 @@ func TestLoadBootstrapFilesReturnsStructuredListWithMissingFlags(t *testing.T) {
 	}
 	if _, ok := byName["memory.md"]; ok {
 		t.Fatalf("memory.md should not be included when missing")
+	}
+}
+
+func TestLoadBootstrapFilesExcludesWelcomeFileFromPromptContext(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	mgr := NewLocalManager(Settings{
+		StateRoot:        stateRoot,
+		DefaultWorkspace: ".",
+	})
+
+	info, err := mgr.EnsureWorkspace(context.Background(), "", false)
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Path, "WELCOME.md"), []byte("welcome\n"), 0o644); err != nil {
+		t.Fatalf("write WELCOME.md: %v", err)
+	}
+
+	files, err := mgr.LoadBootstrapFiles(context.Background(), "", "main")
+	if err != nil {
+		t.Fatalf("load bootstrap files: %v", err)
+	}
+	for _, file := range files {
+		if file.Name == "WELCOME.md" {
+			t.Fatalf("WELCOME.md should not be included in prompt bootstrap files")
+		}
 	}
 }
 
