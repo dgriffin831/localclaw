@@ -25,6 +25,7 @@ import (
 type App struct {
 	cfg        config.Config
 	memory     memory.Store
+	tools      *skills.ToolRegistry
 	sessions   *session.Store
 	workspace  workspace.Manager
 	skills     skills.Registry
@@ -96,6 +97,7 @@ func New(cfg config.Config) (*App, error) {
 	return &App{
 		cfg:    cfg,
 		memory: memory.NewLocalStore(cfg.Memory.Path),
+		tools:  skills.DefaultToolRegistry(),
 		sessions: session.NewStore(session.Settings{
 			StateRoot:     cfg.State.Root,
 			StorePath:     cfg.Session.Store,
@@ -160,12 +162,22 @@ func (a *App) Run(ctx context.Context) error {
 
 // Prompt sends a single input to the configured local LLM client.
 func (a *App) Prompt(ctx context.Context, input string) (string, error) {
-	return a.llm.Prompt(ctx, input)
+	return a.PromptForSession(ctx, DefaultAgentID, DefaultSessionID, input)
 }
 
 // PromptStream sends input to the local LLM client and yields incremental output events.
 func (a *App) PromptStream(ctx context.Context, input string) (<-chan claudecode.StreamEvent, <-chan error) {
-	return a.llm.PromptStream(ctx, input)
+	return a.PromptStreamForSession(ctx, DefaultAgentID, DefaultSessionID, input)
+}
+
+// PromptForSession sends a single input with the resolved agent/session context.
+func (a *App) PromptForSession(ctx context.Context, agentID, sessionID, input string) (string, error) {
+	return a.llm.Prompt(ctx, a.buildPromptInput(agentID, sessionID, input))
+}
+
+// PromptStreamForSession streams output with the resolved agent/session context.
+func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, input string) (<-chan claudecode.StreamEvent, <-chan error) {
+	return a.llm.PromptStream(ctx, a.buildPromptInput(agentID, sessionID, input))
 }
 
 func (a *App) AddSessionTokens(ctx context.Context, agentID, sessionID string, delta int) error {

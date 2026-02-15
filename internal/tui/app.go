@@ -636,7 +636,7 @@ func (m *model) startRun(input string) {
 
 	runCtx, cancel := context.WithCancel(m.ctx)
 	m.runCancel = cancel
-	m.streamEvents, m.streamErrs = m.app.PromptStream(runCtx, input)
+	m.streamEvents, m.streamErrs = m.app.PromptStreamForSession(runCtx, m.agentID, m.sessionID, input)
 	m.setStatus(statusWaiting)
 }
 
