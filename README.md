@@ -48,6 +48,8 @@ TUI slash commands:
 - `/help`
 - `/status`
 - `/clear`
+- `/reset`
+- `/new`
 - `/thinking <on|off>`
 - `/verbose <on|off>`
 - `/model <name>`

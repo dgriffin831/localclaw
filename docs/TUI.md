@@ -47,6 +47,8 @@ Implemented slash command set:
 - `/help`
 - `/status`
 - `/clear`
+- `/reset`
+- `/new`
 - `/thinking <on|off>`
 - `/verbose <on|off>`
 - `/model <name>` (reports not implemented override)

@@ -88,3 +88,31 @@ func TestHeaderUsesResolvedWorkspacePath(t *testing.T) {
 		t.Fatalf("expected header not to use stubbed workspace root %q", cfg.Workspace.Root)
 	}
 }
+
+func TestHandleSlashResetClearsMessages(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.messages = append(m.messages, chatMessage{Role: roleUser, Raw: "hello"})
+
+	_ = m.handleSlash("/reset")
+	if len(m.messages) != 1 {
+		t.Fatalf("expected reset to clear transcript and add one system message, got %d messages", len(m.messages))
+	}
+	if m.messages[0].Role != roleSystem {
+		t.Fatalf("expected reset message role system, got %q", m.messages[0].Role)
+	}
+	if m.messages[0].Raw != "session reset" {
+		t.Fatalf("unexpected reset system message %q", m.messages[0].Raw)
+	}
+}
+
+func TestHandleSlashNewStartsNewSessionMessage(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	_ = m.handleSlash("/new")
+	if len(m.messages) != 1 {
+		t.Fatalf("expected one system message, got %d", len(m.messages))
+	}
+	if !strings.Contains(m.messages[0].Raw, "started new session") {
+		t.Fatalf("unexpected /new system message %q", m.messages[0].Raw)
+	}
+}

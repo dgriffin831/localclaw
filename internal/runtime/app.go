@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/cron"
 	"github.com/dgriffin831/localclaw/internal/heartbeat"
+	"github.com/dgriffin831/localclaw/internal/hooks"
 	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/session"
@@ -20,16 +23,18 @@ import (
 
 // App composes all localclaw capabilities in a single process.
 type App struct {
-	cfg       config.Config
-	memory    memory.Store
-	sessions  *session.Store
-	workspace workspace.Manager
-	skills    skills.Registry
-	cron      cron.Scheduler
-	heartbeat heartbeat.Monitor
-	slack     slack.Client
-	signal    signal.Client
-	llm       claudecode.Client
+	cfg        config.Config
+	memory     memory.Store
+	sessions   *session.Store
+	workspace  workspace.Manager
+	skills     skills.Registry
+	cron       cron.Scheduler
+	heartbeat  heartbeat.Monitor
+	slack      slack.Client
+	signal     signal.Client
+	llm        claudecode.Client
+	transcript *session.TranscriptWriter
+	now        func() time.Time
 }
 
 const (
@@ -41,6 +46,13 @@ type SessionResolution struct {
 	AgentID    string
 	SessionID  string
 	SessionKey string
+}
+
+type ResetSessionRequest struct {
+	AgentID   string
+	SessionID string
+	Source    string
+	StartNew  bool
 }
 
 func ResolveAgentID(agentID string) string {
@@ -106,6 +118,8 @@ func New(cfg config.Config) (*App, error) {
 			BedrockRegion: cfg.LLM.ClaudeCode.BedrockRegion,
 			AuthMode:      cfg.LLM.ClaudeCode.AuthMode,
 		}),
+		transcript: session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
+		now:        time.Now,
 	}, nil
 }
 
@@ -199,6 +213,79 @@ func (a *App) RunMemoryFlushIfNeededAsync(ctx context.Context, agentID, sessionI
 	go func() {
 		_ = a.RunMemoryFlushIfNeeded(ctx, agentID, sessionID)
 	}()
+}
+
+func (a *App) AppendSessionTranscriptMessage(ctx context.Context, agentID, sessionID, role, content string) error {
+	if a.transcript == nil {
+		return nil
+	}
+	resolution := ResolveSession(agentID, sessionID)
+	transcriptPath, err := a.ResolveTranscriptPath(resolution.AgentID, resolution.SessionID)
+	if err != nil {
+		return err
+	}
+	return a.transcript.AppendMessage(ctx, transcriptPath, session.TranscriptMessage{
+		Role:    role,
+		Content: content,
+	})
+}
+
+func (a *App) ResetSession(ctx context.Context, req ResetSessionRequest) SessionResolution {
+	current := ResolveSession(req.AgentID, req.SessionID)
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		source = "session-reset"
+	}
+
+	workspacePath, workspaceErr := a.ResolveWorkspacePath(current.AgentID)
+	transcriptPath, transcriptErr := a.ResolveTranscriptPath(current.AgentID, current.SessionID)
+	if workspaceErr != nil || transcriptErr != nil {
+		log.Printf("session reset hook skipped for %s: workspaceErr=%v transcriptErr=%v", current.SessionKey, workspaceErr, transcriptErr)
+	} else {
+		_, err := hooks.RunSessionMemorySnapshot(ctx, hooks.SessionMemorySnapshotRequest{
+			AgentID:        current.AgentID,
+			SessionID:      current.SessionID,
+			SessionKey:     current.SessionKey,
+			Source:         source,
+			WorkspacePath:  workspacePath,
+			TranscriptPath: transcriptPath,
+			PromptClient:   a.llm,
+			Now:            a.now,
+		})
+		if err != nil {
+			log.Printf("session reset hook failed for %s: %v", current.SessionKey, err)
+		}
+	}
+
+	if !req.StartNew {
+		return current
+	}
+	nextID := a.nextSessionID(ctx, current.AgentID, current.SessionID)
+	return ResolveSession(current.AgentID, nextID)
+}
+
+func (a *App) nextSessionID(ctx context.Context, agentID, currentSessionID string) string {
+	base := fmt.Sprintf("s-%s", a.now().UTC().Format("20060102-150405"))
+	for i := 1; ; i++ {
+		candidate := base
+		if i > 1 {
+			candidate = fmt.Sprintf("%s-%d", base, i)
+		}
+		if candidate == currentSessionID {
+			continue
+		}
+		if a.sessions != nil {
+			if _, exists, err := a.sessions.Get(ctx, agentID, candidate); err == nil && exists {
+				continue
+			}
+		}
+		if transcriptPath, err := a.ResolveTranscriptPath(agentID, candidate); err == nil {
+			if _, err := os.Stat(transcriptPath); err == nil {
+				continue
+			}
+		}
+		return candidate
+	}
 }
 
 func (a *App) resolveMemoryFlushConfig(agentID string) config.MemoryFlushConfig {

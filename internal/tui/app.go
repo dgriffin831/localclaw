@@ -562,11 +562,15 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 	name, arg := parseSlash(raw)
 	switch name {
 	case "help":
-		m.addSystem("commands: /help /status /clear /thinking <on|off> /verbose <on|off> /model <name> /exit")
+		m.addSystem("commands: /help /status /clear /reset /new /thinking <on|off> /verbose <on|off> /model <name> /exit")
 	case "status":
 		m.addSystem(fmt.Sprintf("status=%s model=%s agent=%s session=%s workspace=%s thinking=%s verbose=%s", m.status, m.cfg.LLM.Provider, m.agentID, m.sessionID, m.workspacePath, onOff(m.showThinking), onOff(m.verbose)))
 	case "clear":
 		m.messages = nil
+	case "reset":
+		m.runSessionReset(false, "/reset")
+	case "new":
+		m.runSessionReset(true, "/new")
 	case "exit", "quit":
 		m.abortRun("exiting")
 		return tea.Quit
@@ -626,6 +630,7 @@ func (m *model) startRun(input string) {
 	m.addUser(input)
 	if m.app != nil {
 		_ = m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, memory.EstimateTokensFromText(input))
+		_ = m.app.AppendSessionTranscriptMessage(m.ctx, m.agentID, m.sessionID, "user", input)
 		m.app.RunMemoryFlushIfNeededAsync(m.ctx, m.agentID, m.sessionID)
 	}
 
@@ -692,9 +697,31 @@ func (m *model) applyFinal(final string) {
 	}
 	if m.app != nil {
 		_ = m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, memory.EstimateTokensFromText(msg.Raw))
+		_ = m.app.AppendSessionTranscriptMessage(m.ctx, m.agentID, m.sessionID, "assistant", msg.Raw)
 	}
 	msg.Streaming = false
 	msg.ThinkingPlaceholder = false
+}
+
+func (m *model) runSessionReset(startNew bool, source string) {
+	m.abortRun("")
+	if m.app != nil {
+		next := m.app.ResetSession(m.ctx, runtime.ResetSessionRequest{
+			AgentID:   m.agentID,
+			SessionID: m.sessionID,
+			Source:    source,
+			StartNew:  startNew,
+		})
+		m.agentID = next.AgentID
+		m.sessionID = next.SessionID
+		m.sessionKey = next.SessionKey
+	}
+	m.messages = nil
+	if startNew {
+		m.addSystem(fmt.Sprintf("started new session %s", m.sessionID))
+	} else {
+		m.addSystem("session reset")
+	}
 }
 
 func (m *model) addSystem(text string) {
