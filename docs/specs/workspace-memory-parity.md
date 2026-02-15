@@ -108,7 +108,7 @@ Add agent-aware and memory-search configuration while preserving backward compat
   - `extraPaths`
   - `provider` (`none`, `local`)
   - `fallback` (`none`, `local`)
-  - `model`
+  - `model` (default local embedding model: `google/embeddinggemma-3-small-v1`)
   - `store.path` (supports `{agentId}`)
   - `store.vector.enabled`
   - `chunking.tokens`, `chunking.overlap`
@@ -244,6 +244,7 @@ Requirements:
 
 - Provider abstraction in Go with no direct cloud AI provider integrations.
 - Query and batch embedding methods for local provider only.
+- Default local embedding model is `google/embeddinggemma-3-small-v1` (target runtime footprint ~1GB RAM).
 - Embeddings must remain optional; core memory search works without embeddings.
 - Timeout controls for local query and batch operations.
 - Fallback between `local` and `none` only.
@@ -552,6 +553,7 @@ Scope:
 
 - Add provider interface and selection logic (`none`, `local`) with `none` default.
 - Add local-only activation/error messaging (no cloud providers).
+- Set `google/embeddinggemma-3-small-v1` as the explicit default model when `provider=local` and no model override is supplied.
 - Add query/batch timeout controls for local embedding execution.
 
 Files:
@@ -564,6 +566,7 @@ Acceptance:
 
 - Provider resolution honors `none`/`local` config + fallback rules.
 - Missing local model/runtime setup errors are explicit and actionable.
+- `provider=local` defaults to `google/embeddinggemma-3-small-v1` when model is unset.
 - Default mode does not require embeddings and remains fully functional.
 
 ### PR-08: Search + Read APIs (`memory_search`/`memory_get` Semantics)
