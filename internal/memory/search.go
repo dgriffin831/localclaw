@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -30,6 +31,7 @@ type searchChunk struct {
 	Source       string
 	StartLine    int
 	EndLine      int
+	Hash         string
 	Text         string
 	EmbeddingRaw []byte
 	KeywordScore float64
@@ -214,7 +216,7 @@ func (m *SQLiteIndexManager) keywordCandidates(ctx context.Context, query string
 }
 
 func (m *SQLiteIndexManager) keywordCandidatesFTS(ctx context.Context, query string, limit int) ([]searchChunk, error) {
-	rows, err := m.db.QueryContext(ctx, `SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.text, c.embedding, bm25(chunks_fts)
+	rows, err := m.db.QueryContext(ctx, `SELECT c.id, c.path, c.source, c.start_line, c.end_line, c.hash, c.text, c.embedding, bm25(chunks_fts)
 		FROM chunks_fts
 		JOIN chunks c ON c.id = chunks_fts.rowid
 		WHERE chunks_fts MATCH ?
@@ -229,7 +231,7 @@ func (m *SQLiteIndexManager) keywordCandidatesFTS(ctx context.Context, query str
 	for rows.Next() {
 		var chunk searchChunk
 		var rank sql.NullFloat64
-		if err := rows.Scan(&chunk.ID, &chunk.Path, &chunk.Source, &chunk.StartLine, &chunk.EndLine, &chunk.Text, &chunk.EmbeddingRaw, &rank); err != nil {
+		if err := rows.Scan(&chunk.ID, &chunk.Path, &chunk.Source, &chunk.StartLine, &chunk.EndLine, &chunk.Hash, &chunk.Text, &chunk.EmbeddingRaw, &rank); err != nil {
 			return nil, err
 		}
 		chunks = append(chunks, chunk)
@@ -245,7 +247,7 @@ func (m *SQLiteIndexManager) keywordCandidatesFTS(ctx context.Context, query str
 }
 
 func (m *SQLiteIndexManager) keywordCandidatesLike(ctx context.Context, query string, limit int) ([]searchChunk, error) {
-	rows, err := m.db.QueryContext(ctx, `SELECT id, path, source, start_line, end_line, text, embedding
+	rows, err := m.db.QueryContext(ctx, `SELECT id, path, source, start_line, end_line, hash, text, embedding
 		FROM chunks
 		WHERE lower(text) LIKE ?
 		ORDER BY updated_at DESC, id ASC
@@ -258,7 +260,7 @@ func (m *SQLiteIndexManager) keywordCandidatesLike(ctx context.Context, query st
 	chunks := make([]searchChunk, 0)
 	for rows.Next() {
 		var chunk searchChunk
-		if err := rows.Scan(&chunk.ID, &chunk.Path, &chunk.Source, &chunk.StartLine, &chunk.EndLine, &chunk.Text, &chunk.EmbeddingRaw); err != nil {
+		if err := rows.Scan(&chunk.ID, &chunk.Path, &chunk.Source, &chunk.StartLine, &chunk.EndLine, &chunk.Hash, &chunk.Text, &chunk.EmbeddingRaw); err != nil {
 			return nil, err
 		}
 		chunks = append(chunks, chunk)
@@ -287,7 +289,7 @@ func (m *SQLiteIndexManager) keywordCandidatesLike(ctx context.Context, query st
 }
 
 func (m *SQLiteIndexManager) recentCandidates(ctx context.Context, limit int) ([]searchChunk, error) {
-	rows, err := m.db.QueryContext(ctx, `SELECT id, path, source, start_line, end_line, text, embedding
+	rows, err := m.db.QueryContext(ctx, `SELECT id, path, source, start_line, end_line, hash, text, embedding
 		FROM chunks
 		ORDER BY updated_at DESC, id DESC
 		LIMIT ?;`, limit)
@@ -299,7 +301,7 @@ func (m *SQLiteIndexManager) recentCandidates(ctx context.Context, limit int) ([
 	chunks := make([]searchChunk, 0)
 	for rows.Next() {
 		var chunk searchChunk
-		if err := rows.Scan(&chunk.ID, &chunk.Path, &chunk.Source, &chunk.StartLine, &chunk.EndLine, &chunk.Text, &chunk.EmbeddingRaw); err != nil {
+		if err := rows.Scan(&chunk.ID, &chunk.Path, &chunk.Source, &chunk.StartLine, &chunk.EndLine, &chunk.Hash, &chunk.Text, &chunk.EmbeddingRaw); err != nil {
 			return nil, err
 		}
 		chunk.KeywordScore = 0
@@ -320,6 +322,11 @@ func (m *SQLiteIndexManager) attachVectorScores(ctx context.Context, provider Em
 	missingIdx := make([]int, 0)
 	missingTexts := make([]string, 0)
 	chunkEmbeddings := make([][]float32, len(chunks))
+	cacheProvider := strings.TrimSpace(provider.ProviderName())
+	cacheModel := strings.TrimSpace(provider.Model())
+	cacheProviderKey := strings.TrimSpace(provider.ProviderKey())
+	cacheEnabled := m.features.embeddingCacheEnabled && cacheProvider != "" && cacheProviderKey != ""
+
 	for i, chunk := range chunks {
 		if len(chunk.EmbeddingRaw) > 0 {
 			embedding, err := decodeEmbedding(chunk.EmbeddingRaw)
@@ -328,6 +335,21 @@ func (m *SQLiteIndexManager) attachVectorScores(ctx context.Context, provider Em
 				continue
 			}
 		}
+
+		if cacheEnabled {
+			cached, ok, err := m.lookupCachedEmbedding(ctx, cacheProvider, cacheModel, cacheProviderKey, chunk.Hash)
+			if err != nil {
+				return err
+			}
+			if ok && len(cached) > 0 {
+				chunkEmbeddings[i] = cached
+				raw := encodeEmbedding(cached)
+				chunks[i].EmbeddingRaw = raw
+				_, _ = m.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?;`, raw, chunks[i].ID)
+				continue
+			}
+		}
+
 		missingIdx = append(missingIdx, i)
 		missingTexts = append(missingTexts, chunk.Text)
 	}
@@ -345,6 +367,17 @@ func (m *SQLiteIndexManager) attachVectorScores(ctx context.Context, provider Em
 			raw := encodeEmbedding(embeddings[i])
 			chunks[chunkIndex].EmbeddingRaw = raw
 			_, _ = m.db.ExecContext(ctx, `UPDATE chunks SET embedding = ? WHERE id = ?;`, raw, chunks[chunkIndex].ID)
+			if cacheEnabled {
+				if err := m.storeCachedEmbedding(ctx, cacheProvider, cacheModel, cacheProviderKey, chunks[chunkIndex].Hash, raw); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if cacheEnabled && m.cfg.EmbeddingCacheMax > 0 {
+		if err := m.pruneEmbeddingCache(ctx, cacheProvider, cacheModel, cacheProviderKey, m.cfg.EmbeddingCacheMax); err != nil {
+			return err
 		}
 	}
 
@@ -355,6 +388,64 @@ func (m *SQLiteIndexManager) attachVectorScores(ctx context.Context, provider Em
 		chunks[i].VectorScore = cosineSimilarity(queryEmbedding, chunkEmbeddings[i])
 	}
 	return nil
+}
+
+func (m *SQLiteIndexManager) lookupCachedEmbedding(ctx context.Context, provider string, model string, providerKey string, hash string) ([]float32, bool, error) {
+	if strings.TrimSpace(hash) == "" {
+		return nil, false, nil
+	}
+
+	var raw []byte
+	err := m.db.QueryRowContext(ctx, `SELECT embedding
+		FROM embedding_cache
+		WHERE provider = ? AND model = ? AND provider_key = ? AND hash = ?;`,
+		provider, model, providerKey, hash,
+	).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	embedding, err := decodeEmbedding(raw)
+	if err != nil {
+		return nil, false, nil
+	}
+	return embedding, true, nil
+}
+
+func (m *SQLiteIndexManager) storeCachedEmbedding(ctx context.Context, provider string, model string, providerKey string, hash string, embedding []byte) error {
+	if strings.TrimSpace(hash) == "" || len(embedding) == 0 {
+		return nil
+	}
+	_, err := m.db.ExecContext(ctx, `INSERT INTO embedding_cache(provider, model, provider_key, hash, embedding, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
+			embedding=excluded.embedding,
+			updated_at=excluded.updated_at;`,
+		provider, model, providerKey, hash, embedding, time.Now().Unix(),
+	)
+	return err
+}
+
+func (m *SQLiteIndexManager) pruneEmbeddingCache(ctx context.Context, provider string, model string, providerKey string, maxEntries int) error {
+	if maxEntries <= 0 {
+		return nil
+	}
+	_, err := m.db.ExecContext(ctx, `DELETE FROM embedding_cache
+		WHERE provider = ? AND model = ? AND provider_key = ?
+			AND rowid NOT IN (
+				SELECT rowid
+				FROM embedding_cache
+				WHERE provider = ? AND model = ? AND provider_key = ?
+				ORDER BY updated_at DESC, rowid DESC
+				LIMIT ?
+			);`,
+		provider, model, providerKey,
+		provider, model, providerKey,
+		maxEntries,
+	)
+	return err
 }
 
 func (m *SQLiteIndexManager) vectorProvider(ctx context.Context) (EmbeddingProvider, bool) {

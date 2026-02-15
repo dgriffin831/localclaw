@@ -1,6 +1,9 @@
 package memory
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 const (
 	defaultChunkTokens  = 400
@@ -25,6 +28,7 @@ type IndexManagerConfig struct {
 	VectorWeight         float64
 	KeywordWeight        float64
 	CandidateMultiplier  int
+	EmbeddingCacheMax    int
 }
 
 // IndexStatus is a lightweight snapshot of indexed memory state.
@@ -43,6 +47,14 @@ type SyncResult struct {
 	SkippedFiles  int
 	RemovedFiles  int
 	IndexedChunks int
+}
+
+// AutoSyncConfig controls background watch/interval sync behavior.
+type AutoSyncConfig struct {
+	Watch             bool
+	WatchDebounce     time.Duration
+	WatchPollInterval time.Duration
+	Interval          time.Duration
 }
 
 // SearchOptions controls query ranking and filtering behavior.
@@ -83,6 +95,8 @@ type IndexManager interface {
 	Close() error
 	InstallSchema(ctx context.Context) error
 	Sync(ctx context.Context, force bool) (SyncResult, error)
+	StartAutoSync(ctx context.Context, cfg AutoSyncConfig) error
+	StopAutoSync() error
 	Status(ctx context.Context) (IndexStatus, error)
 	Search(ctx context.Context, query string, opts SearchOptions) ([]SearchResult, error)
 	Get(ctx context.Context, path string, opts GetOptions) (GetResult, error)

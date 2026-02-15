@@ -415,6 +415,7 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 		EnableFTS:            true,
 		EnableVector:         searchCfg.Store.Vector.Enabled,
 		EnableEmbeddingCache: searchCfg.Cache.Enabled,
+		EmbeddingCacheMax:    searchCfg.Cache.MaxEntries,
 		HybridEnabled:        searchCfg.Query.Hybrid.Enabled,
 		VectorWeight:         searchCfg.Query.Hybrid.VectorWeight,
 		KeywordWeight:        searchCfg.Query.Hybrid.KeywordWeight,

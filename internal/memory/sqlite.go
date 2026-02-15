@@ -14,6 +14,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const (
+	defaultWatchDebounce     = 500 * time.Millisecond
+	defaultWatchPollInterval = 250 * time.Millisecond
+)
+
 // SQLiteIndexManager provides local SQLite-backed file/chunk indexing.
 type SQLiteIndexManager struct {
 	cfg               IndexManagerConfig
@@ -22,6 +27,18 @@ type SQLiteIndexManager struct {
 	mu                sync.Mutex
 	schemaInstalled   bool
 	features          schemaFeatures
+	syncMu            sync.Mutex
+
+	stateMu           sync.Mutex
+	dirty             bool
+	lastBackgroundErr error
+	watchSnapshot     map[string]string
+	autoCancel        context.CancelFunc
+	autoDone          chan struct{}
+
+	// test hooks exercised by package tests.
+	testHookSync              func(ctx context.Context, force bool) error
+	testHookBeforeReindexSwap func(tempPath string) error
 }
 
 // NewSQLiteIndexManager creates a SQLite index manager.
@@ -67,20 +84,8 @@ func (m *SQLiteIndexManager) Open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
-		return err
-	}
-
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := openSQLiteDB(ctx, dbPath)
 	if err != nil {
-		return err
-	}
-	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON;`); err != nil {
-		db.Close()
-		return err
-	}
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
 		return err
 	}
 
@@ -91,6 +96,8 @@ func (m *SQLiteIndexManager) Open(ctx context.Context) error {
 
 // Close closes the SQLite database.
 func (m *SQLiteIndexManager) Close() error {
+	_ = m.StopAutoSync()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -127,10 +134,247 @@ func (m *SQLiteIndexManager) InstallSchema(ctx context.Context) error {
 
 // Sync indexes memory markdown files into SQLite.
 func (m *SQLiteIndexManager) Sync(ctx context.Context, force bool) (SyncResult, error) {
-	var out SyncResult
-	if err := m.InstallSchema(ctx); err != nil {
-		return out, err
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+
+	if m.testHookSync != nil {
+		if err := m.testHookSync(ctx, force); err != nil {
+			m.setDirty(true)
+			return SyncResult{}, err
+		}
 	}
+
+	var (
+		out SyncResult
+		err error
+	)
+	if force {
+		out, err = m.syncWithSafeReindexSwap(ctx)
+	} else {
+		if err = m.InstallSchema(ctx); err == nil {
+			out, err = m.syncIntoDB(ctx, m.db, false)
+		}
+	}
+	if err != nil {
+		m.setDirty(true)
+		return SyncResult{}, err
+	}
+
+	m.setDirty(false)
+	if snapshot, snapErr := m.scanWatchSnapshot(); snapErr == nil {
+		m.stateMu.Lock()
+		m.watchSnapshot = snapshot
+		m.stateMu.Unlock()
+	}
+	return out, nil
+}
+
+// StartAutoSync starts background watch/interval sync loops.
+func (m *SQLiteIndexManager) StartAutoSync(ctx context.Context, cfg AutoSyncConfig) error {
+	if !cfg.Watch && cfg.Interval <= 0 {
+		return nil
+	}
+	if cfg.WatchDebounce <= 0 {
+		cfg.WatchDebounce = defaultWatchDebounce
+	}
+	if cfg.WatchPollInterval <= 0 {
+		cfg.WatchPollInterval = defaultWatchPollInterval
+	}
+
+	if _, err := m.Status(ctx); err != nil {
+		return err
+	}
+
+	if snapshot, err := m.scanWatchSnapshot(); err == nil {
+		m.stateMu.Lock()
+		m.watchSnapshot = snapshot
+		m.stateMu.Unlock()
+	}
+
+	m.stateMu.Lock()
+	if m.autoCancel != nil {
+		m.stateMu.Unlock()
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	m.autoCancel = cancel
+	m.autoDone = done
+	m.stateMu.Unlock()
+
+	go m.runAutoSync(runCtx, done, cfg)
+	return nil
+}
+
+// StopAutoSync stops background watch/interval sync loops.
+func (m *SQLiteIndexManager) StopAutoSync() error {
+	m.stateMu.Lock()
+	cancel := m.autoCancel
+	done := m.autoDone
+	m.autoCancel = nil
+	m.autoDone = nil
+	m.stateMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+	return nil
+}
+
+// Dirty reports whether pending changes or failed syncs have marked the index dirty.
+func (m *SQLiteIndexManager) Dirty() bool {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	return m.dirty
+}
+
+// LastBackgroundError returns the latest background autosync error.
+func (m *SQLiteIndexManager) LastBackgroundError() error {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	return m.lastBackgroundErr
+}
+
+// Status returns indexed file/chunk counts.
+func (m *SQLiteIndexManager) Status(ctx context.Context) (IndexStatus, error) {
+	if err := m.InstallSchema(ctx); err != nil {
+		return IndexStatus{}, err
+	}
+
+	var fileCount int
+	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files;`).Scan(&fileCount); err != nil {
+		return IndexStatus{}, err
+	}
+	var chunkCount int
+	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks;`).Scan(&chunkCount); err != nil {
+		return IndexStatus{}, err
+	}
+
+	return IndexStatus{
+		DBPath:                m.cfg.DBPath,
+		FileCount:             fileCount,
+		ChunkCount:            chunkCount,
+		FTSEnabled:            m.features.ftsEnabled,
+		EmbeddingCacheEnabled: m.features.embeddingCacheEnabled,
+	}, nil
+}
+
+func (m *SQLiteIndexManager) syncWithSafeReindexSwap(ctx context.Context) (SyncResult, error) {
+	if strings.TrimSpace(m.cfg.WorkspaceRoot) == "" {
+		return SyncResult{}, errors.New("workspace root is empty")
+	}
+
+	tempPath := fmt.Sprintf("%s.reindex.%d.tmp", m.cfg.DBPath, time.Now().UnixNano())
+	tempDB, err := openSQLiteDB(ctx, tempPath)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	features, err := installSchema(ctx, tempDB, m.cfg)
+	if err != nil {
+		_ = tempDB.Close()
+		_ = os.Remove(tempPath)
+		return SyncResult{}, err
+	}
+	result, err := m.syncIntoDB(ctx, tempDB, true)
+	closeErr := tempDB.Close()
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return SyncResult{}, err
+	}
+	if closeErr != nil {
+		_ = os.Remove(tempPath)
+		return SyncResult{}, closeErr
+	}
+
+	if m.testHookBeforeReindexSwap != nil {
+		if err := m.testHookBeforeReindexSwap(tempPath); err != nil {
+			_ = os.Remove(tempPath)
+			return SyncResult{}, err
+		}
+	}
+
+	if err := m.swapDBFile(ctx, tempPath, features); err != nil {
+		_ = os.Remove(tempPath)
+		return SyncResult{}, err
+	}
+	return result, nil
+}
+
+func (m *SQLiteIndexManager) swapDBFile(ctx context.Context, tempPath string, features schemaFeatures) error {
+	dbPath := m.cfg.DBPath
+	backupPath := fmt.Sprintf("%s.reindex.backup.%d", dbPath, time.Now().UnixNano())
+
+	m.mu.Lock()
+	oldDB := m.db
+	m.db = nil
+	m.schemaInstalled = false
+	m.features = schemaFeatures{}
+	m.mu.Unlock()
+
+	if oldDB != nil {
+		if err := oldDB.Close(); err != nil {
+			return err
+		}
+	}
+
+	haveBackup := false
+	if err := os.Rename(dbPath, backupPath); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+	} else {
+		haveBackup = true
+	}
+
+	if err := os.Rename(tempPath, dbPath); err != nil {
+		if haveBackup {
+			_ = os.Rename(backupPath, dbPath)
+		}
+		reopened, reopenErr := openSQLiteDB(ctx, dbPath)
+		if reopenErr == nil {
+			m.mu.Lock()
+			m.db = reopened
+			m.schemaInstalled = true
+			m.features = features
+			m.mu.Unlock()
+		}
+		return err
+	}
+
+	if haveBackup {
+		_ = os.Remove(backupPath)
+	}
+
+	newDB, err := openSQLiteDB(ctx, dbPath)
+	if err != nil {
+		if haveBackup {
+			_ = os.Remove(dbPath)
+			_ = os.Rename(backupPath, dbPath)
+			newDB, _ = openSQLiteDB(ctx, dbPath)
+		}
+		if newDB != nil {
+			m.mu.Lock()
+			m.db = newDB
+			m.schemaInstalled = true
+			m.features = features
+			m.mu.Unlock()
+		}
+		return err
+	}
+
+	m.mu.Lock()
+	m.db = newDB
+	m.schemaInstalled = true
+	m.features = features
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force bool) (SyncResult, error) {
+	var out SyncResult
 	if strings.TrimSpace(m.cfg.WorkspaceRoot) == "" {
 		return out, errors.New("workspace root is empty")
 	}
@@ -141,7 +385,7 @@ func (m *SQLiteIndexManager) Sync(ctx context.Context, force bool) (SyncResult, 
 	}
 	out.ScannedFiles = len(files)
 
-	tx, err := m.db.BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return out, err
 	}
@@ -237,32 +481,164 @@ func (m *SQLiteIndexManager) Sync(ctx context.Context, force bool) (SyncResult, 
 	if err := tx.Commit(); err != nil {
 		return out, err
 	}
-
 	return out, nil
 }
 
-// Status returns indexed file/chunk counts.
-func (m *SQLiteIndexManager) Status(ctx context.Context) (IndexStatus, error) {
-	if err := m.InstallSchema(ctx); err != nil {
-		return IndexStatus{}, err
+func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct{}, cfg AutoSyncConfig) {
+	defer close(done)
+	defer func() {
+		if rec := recover(); rec != nil {
+			m.recordBackgroundError(fmt.Errorf("autosync panic: %v", rec))
+		}
+	}()
+
+	var watchTicker *time.Ticker
+	var watchCh <-chan time.Time
+	if cfg.Watch {
+		watchTicker = time.NewTicker(cfg.WatchPollInterval)
+		watchCh = watchTicker.C
+		defer watchTicker.Stop()
 	}
 
-	var fileCount int
-	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM files;`).Scan(&fileCount); err != nil {
-		return IndexStatus{}, err
-	}
-	var chunkCount int
-	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks;`).Scan(&chunkCount); err != nil {
-		return IndexStatus{}, err
+	var intervalTicker *time.Ticker
+	var intervalCh <-chan time.Time
+	if cfg.Interval > 0 {
+		intervalTicker = time.NewTicker(cfg.Interval)
+		intervalCh = intervalTicker.C
+		defer intervalTicker.Stop()
 	}
 
-	return IndexStatus{
-		DBPath:                m.cfg.DBPath,
-		FileCount:             fileCount,
-		ChunkCount:            chunkCount,
-		FTSEnabled:            m.features.ftsEnabled,
-		EmbeddingCacheEnabled: m.features.embeddingCacheEnabled,
-	}, nil
+	debounceDelay := cfg.WatchDebounce
+	debounceCh := make(<-chan time.Time)
+	var debounceTimer *time.Timer
+
+	scheduleDebouncedSync := func() {
+		if debounceTimer == nil {
+			debounceTimer = time.NewTimer(debounceDelay)
+			debounceCh = debounceTimer.C
+			return
+		}
+		if !debounceTimer.Stop() {
+			select {
+			case <-debounceTimer.C:
+			default:
+			}
+		}
+		debounceTimer.Reset(debounceDelay)
+	}
+
+	runBackgroundSync := func() {
+		if _, err := m.Sync(ctx, false); err != nil {
+			m.recordBackgroundError(err)
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			return
+		case <-debounceCh:
+			debounceCh = nil
+			runBackgroundSync()
+		case <-watchCh:
+			changed, err := m.detectWatchChanges()
+			if err != nil {
+				m.recordBackgroundError(err)
+				continue
+			}
+			if changed {
+				m.setDirty(true)
+				scheduleDebouncedSync()
+			}
+		case <-intervalCh:
+			m.setDirty(true)
+			runBackgroundSync()
+		}
+	}
+}
+
+func (m *SQLiteIndexManager) detectWatchChanges() (bool, error) {
+	next, err := m.scanWatchSnapshot()
+	if err != nil {
+		return false, err
+	}
+
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	if mapsEqual(m.watchSnapshot, next) {
+		return false, nil
+	}
+	m.watchSnapshot = next
+	return true, nil
+}
+
+func (m *SQLiteIndexManager) scanWatchSnapshot() (map[string]string, error) {
+	files, err := DiscoverMemoryFiles(m.cfg.WorkspaceRoot, m.cfg.ExtraPaths)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := make(map[string]string, len(files))
+	for _, file := range files {
+		info, err := os.Stat(file.AbsolutePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		snapshot[file.AbsolutePath] = fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size())
+	}
+	return snapshot, nil
+}
+
+func (m *SQLiteIndexManager) setDirty(v bool) {
+	m.stateMu.Lock()
+	m.dirty = v
+	m.stateMu.Unlock()
+}
+
+func (m *SQLiteIndexManager) recordBackgroundError(err error) {
+	if err == nil {
+		return
+	}
+	m.stateMu.Lock()
+	m.lastBackgroundErr = err
+	m.stateMu.Unlock()
+}
+
+func mapsEqual(a map[string]string, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, va := range a {
+		if vb, ok := b[k]; !ok || vb != va {
+			return false
+		}
+	}
+	return true
+}
+
+func openSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON;`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 func (m *SQLiteIndexManager) ensureOpen(ctx context.Context) error {
