@@ -386,6 +386,11 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	if err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("resolve workspace: %w", err)
 	}
+	sessionsPath, err := app.ResolveSessionsPath(resolvedAgent)
+	if err != nil {
+		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("resolve sessions path: %w", err)
+	}
+	sessionsRoot := filepath.Dir(sessionsPath)
 
 	searchCfg := cfg.Agents.Defaults.MemorySearch
 	storePath, err := resolveStorePath(cfg.State.Root, searchCfg.Store.Path, resolvedAgent)
@@ -405,6 +410,8 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	manager := memory.NewSQLiteIndexManager(memory.IndexManagerConfig{
 		DBPath:               storePath,
 		WorkspaceRoot:        workspacePath,
+		SessionsRoot:         sessionsRoot,
+		Sources:              searchCfg.Sources,
 		ExtraPaths:           extraPaths,
 		ChunkTokens:          searchCfg.Chunking.Tokens,
 		ChunkOverlap:         searchCfg.Chunking.Overlap,
@@ -420,6 +427,8 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 		VectorWeight:         searchCfg.Query.Hybrid.VectorWeight,
 		KeywordWeight:        searchCfg.Query.Hybrid.KeywordWeight,
 		CandidateMultiplier:  searchCfg.Query.Hybrid.CandidateMultiplier,
+		SessionDeltaBytes:    searchCfg.Sync.Sessions.DeltaBytes,
+		SessionDeltaMessages: searchCfg.Sync.Sessions.DeltaMessages,
 	})
 	if err := manager.Open(ctx); err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("open memory index: %w", err)

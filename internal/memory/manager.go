@@ -14,6 +14,8 @@ const (
 type IndexManagerConfig struct {
 	DBPath               string
 	WorkspaceRoot        string
+	SessionsRoot         string
+	Sources              []string
 	ExtraPaths           []string
 	ChunkTokens          int
 	ChunkOverlap         int
@@ -29,6 +31,8 @@ type IndexManagerConfig struct {
 	KeywordWeight        float64
 	CandidateMultiplier  int
 	EmbeddingCacheMax    int
+	SessionDeltaBytes    int
+	SessionDeltaMessages int
 }
 
 // IndexStatus is a lightweight snapshot of indexed memory state.
@@ -53,6 +57,7 @@ type SyncResult struct {
 type AutoSyncConfig struct {
 	Watch             bool
 	WatchDebounce     time.Duration
+	SessionDebounce   time.Duration
 	WatchPollInterval time.Duration
 	Interval          time.Duration
 }

@@ -11,11 +11,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dgriffin831/localclaw/internal/session"
 	_ "modernc.org/sqlite"
 )
 
 const (
 	defaultWatchDebounce     = 500 * time.Millisecond
+	defaultSessionDebounce   = 500 * time.Millisecond
 	defaultWatchPollInterval = 250 * time.Millisecond
 )
 
@@ -35,11 +37,20 @@ type SQLiteIndexManager struct {
 	watchSnapshot     map[string]string
 	autoCancel        context.CancelFunc
 	autoDone          chan struct{}
+	autoTriggerCh     chan autoSyncTrigger
+	sessionDeltaBytes int
+	sessionDeltaMsgs  int
 
 	// test hooks exercised by package tests.
 	testHookSync              func(ctx context.Context, force bool) error
 	testHookBeforeReindexSwap func(tempPath string) error
 }
+
+type autoSyncTrigger int
+
+const (
+	autoSyncTriggerSession autoSyncTrigger = iota + 1
+)
 
 // NewSQLiteIndexManager creates a SQLite index manager.
 func NewSQLiteIndexManager(cfg IndexManagerConfig) *SQLiteIndexManager {
@@ -64,6 +75,15 @@ func NewSQLiteIndexManager(cfg IndexManagerConfig) *SQLiteIndexManager {
 	}
 	if cfg.KeywordWeight < 0 {
 		cfg.KeywordWeight = 0
+	}
+	if len(cfg.Sources) == 0 {
+		cfg.Sources = []string{"memory"}
+	}
+	if cfg.SessionDeltaBytes < 0 {
+		cfg.SessionDeltaBytes = 0
+	}
+	if cfg.SessionDeltaMessages < 0 {
+		cfg.SessionDeltaMessages = 0
 	}
 	return &SQLiteIndexManager{cfg: cfg}
 }
@@ -171,11 +191,14 @@ func (m *SQLiteIndexManager) Sync(ctx context.Context, force bool) (SyncResult, 
 
 // StartAutoSync starts background watch/interval sync loops.
 func (m *SQLiteIndexManager) StartAutoSync(ctx context.Context, cfg AutoSyncConfig) error {
-	if !cfg.Watch && cfg.Interval <= 0 {
+	if !cfg.Watch && cfg.Interval <= 0 && !m.sourceEnabled("sessions") {
 		return nil
 	}
 	if cfg.WatchDebounce <= 0 {
 		cfg.WatchDebounce = defaultWatchDebounce
+	}
+	if cfg.SessionDebounce <= 0 {
+		cfg.SessionDebounce = defaultSessionDebounce
 	}
 	if cfg.WatchPollInterval <= 0 {
 		cfg.WatchPollInterval = defaultWatchPollInterval
@@ -198,11 +221,15 @@ func (m *SQLiteIndexManager) StartAutoSync(ctx context.Context, cfg AutoSyncConf
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
+	triggerCh := make(chan autoSyncTrigger, 1)
 	m.autoCancel = cancel
 	m.autoDone = done
+	m.autoTriggerCh = triggerCh
+	m.sessionDeltaBytes = 0
+	m.sessionDeltaMsgs = 0
 	m.stateMu.Unlock()
 
-	go m.runAutoSync(runCtx, done, cfg)
+	go m.runAutoSync(runCtx, done, triggerCh, cfg)
 	return nil
 }
 
@@ -213,6 +240,9 @@ func (m *SQLiteIndexManager) StopAutoSync() error {
 	done := m.autoDone
 	m.autoCancel = nil
 	m.autoDone = nil
+	m.autoTriggerCh = nil
+	m.sessionDeltaBytes = 0
+	m.sessionDeltaMsgs = 0
 	m.stateMu.Unlock()
 
 	if cancel != nil {
@@ -236,6 +266,48 @@ func (m *SQLiteIndexManager) LastBackgroundError() error {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	return m.lastBackgroundErr
+}
+
+// HandleTranscriptUpdate handles session transcript append notifications.
+func (m *SQLiteIndexManager) HandleTranscriptUpdate(ctx context.Context, update session.TranscriptUpdate) error {
+	_ = ctx
+	if !m.sourceEnabled("sessions") {
+		return nil
+	}
+
+	shouldTrigger := false
+	m.stateMu.Lock()
+	m.sessionDeltaBytes += maxInt(update.DeltaBytes, 0)
+	m.sessionDeltaMsgs += maxInt(update.DeltaMessages, 0)
+	byteThreshold := m.cfg.SessionDeltaBytes
+	msgThreshold := m.cfg.SessionDeltaMessages
+	if byteThreshold <= 0 && msgThreshold <= 0 {
+		shouldTrigger = m.sessionDeltaBytes > 0 || m.sessionDeltaMsgs > 0
+	} else {
+		if byteThreshold > 0 && m.sessionDeltaBytes >= byteThreshold {
+			shouldTrigger = true
+		}
+		if msgThreshold > 0 && m.sessionDeltaMsgs >= msgThreshold {
+			shouldTrigger = true
+		}
+	}
+	if shouldTrigger {
+		m.sessionDeltaBytes = 0
+		m.sessionDeltaMsgs = 0
+	}
+	triggerCh := m.autoTriggerCh
+	m.stateMu.Unlock()
+
+	if shouldTrigger {
+		m.setDirty(true)
+		if triggerCh != nil {
+			select {
+			case triggerCh <- autoSyncTriggerSession:
+			default:
+			}
+		}
+	}
+	return nil
 }
 
 // Status returns indexed file/chunk counts.
@@ -379,11 +451,11 @@ func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force b
 		return out, errors.New("workspace root is empty")
 	}
 
-	files, err := DiscoverMemoryFiles(m.cfg.WorkspaceRoot, m.cfg.ExtraPaths)
+	documents, err := m.discoverIndexDocuments()
 	if err != nil {
 		return out, err
 	}
-	out.ScannedFiles = len(files)
+	out.ScannedFiles = len(documents)
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -396,31 +468,19 @@ func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force b
 		return out, err
 	}
 
-	discovered := make(map[string]struct{}, len(files))
+	discovered := make(map[string]struct{}, len(documents))
 	now := time.Now().Unix()
 
-	for _, file := range files {
-		discovered[file.AbsolutePath] = struct{}{}
-
-		payload, err := os.ReadFile(file.AbsolutePath)
-		if err != nil {
-			return out, fmt.Errorf("read memory file %q: %w", file.AbsolutePath, err)
-		}
-		info, err := os.Stat(file.AbsolutePath)
-		if err != nil {
-			return out, fmt.Errorf("stat memory file %q: %w", file.AbsolutePath, err)
-		}
-
-		text := string(payload)
-		hash := HashText(text)
+	for _, doc := range documents {
+		discovered[doc.Path] = struct{}{}
+		hash := HashText(doc.Text)
 		if !force {
-			if prevHash, ok := existingHashes[file.AbsolutePath]; ok && prevHash == hash {
+			if prevHash, ok := existingHashes[doc.Path]; ok && prevHash == hash {
 				out.SkippedFiles++
 				continue
 			}
 		}
 
-		source := classifyMemorySource(file)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO files(path, source, hash, mtime, size, updated_at)
 			VALUES(?, ?, ?, ?, ?, ?)
 			ON CONFLICT(path) DO UPDATE SET
@@ -429,26 +489,26 @@ func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force b
 				mtime=excluded.mtime,
 				size=excluded.size,
 				updated_at=excluded.updated_at;`,
-			file.AbsolutePath,
-			source,
+			doc.Path,
+			doc.Source,
 			hash,
-			info.ModTime().Unix(),
-			info.Size(),
+			doc.MTimeUnix,
+			doc.Size,
 			now,
 		); err != nil {
-			return out, fmt.Errorf("upsert file row %q: %w", file.AbsolutePath, err)
+			return out, fmt.Errorf("upsert file row %q: %w", doc.Path, err)
 		}
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE path = ?;`, file.AbsolutePath); err != nil {
-			return out, fmt.Errorf("delete stale chunks for %q: %w", file.AbsolutePath, err)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE path = ?;`, doc.Path); err != nil {
+			return out, fmt.Errorf("delete stale chunks for %q: %w", doc.Path, err)
 		}
 
-		chunks := chunkTextWithLines(text, m.cfg.ChunkTokens, m.cfg.ChunkOverlap)
+		chunks := chunkTextWithLines(doc.Text, m.cfg.ChunkTokens, m.cfg.ChunkOverlap)
 		for _, chunk := range chunks {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO chunks(path, source, start_line, end_line, hash, model, text, embedding, updated_at)
 				VALUES(?, ?, ?, ?, ?, ?, ?, NULL, ?);`,
-				file.AbsolutePath,
-				source,
+				doc.Path,
+				doc.Source,
 				chunk.StartLine,
 				chunk.EndLine,
 				chunk.Hash,
@@ -456,7 +516,7 @@ func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force b
 				chunk.Text,
 				now,
 			); err != nil {
-				return out, fmt.Errorf("insert chunk for %q: %w", file.AbsolutePath, err)
+				return out, fmt.Errorf("insert chunk for %q: %w", doc.Path, err)
 			}
 			out.IndexedChunks++
 		}
@@ -484,7 +544,69 @@ func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force b
 	return out, nil
 }
 
-func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct{}, cfg AutoSyncConfig) {
+type indexDocument struct {
+	Path      string
+	Source    string
+	Text      string
+	MTimeUnix int64
+	Size      int64
+}
+
+func (m *SQLiteIndexManager) discoverIndexDocuments() ([]indexDocument, error) {
+	documents := make([]indexDocument, 0)
+
+	if m.sourceEnabled("memory") {
+		memoryFiles, err := DiscoverMemoryFiles(m.cfg.WorkspaceRoot, m.cfg.ExtraPaths)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range memoryFiles {
+			payload, err := os.ReadFile(file.AbsolutePath)
+			if err != nil {
+				return nil, fmt.Errorf("read memory file %q: %w", file.AbsolutePath, err)
+			}
+			info, err := os.Stat(file.AbsolutePath)
+			if err != nil {
+				return nil, fmt.Errorf("stat memory file %q: %w", file.AbsolutePath, err)
+			}
+			documents = append(documents, indexDocument{
+				Path:      file.AbsolutePath,
+				Source:    classifyMemorySource(file),
+				Text:      string(payload),
+				MTimeUnix: info.ModTime().Unix(),
+				Size:      info.Size(),
+			})
+		}
+	}
+
+	if m.sourceEnabled("sessions") {
+		sessionFiles, err := DiscoverSessionFiles(m.cfg.SessionsRoot)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range sessionFiles {
+			normalized, err := ReadSessionTranscriptNormalized(file.AbsolutePath)
+			if err != nil {
+				return nil, fmt.Errorf("read session transcript %q: %w", file.AbsolutePath, err)
+			}
+			info, err := os.Stat(file.AbsolutePath)
+			if err != nil {
+				return nil, fmt.Errorf("stat session transcript %q: %w", file.AbsolutePath, err)
+			}
+			documents = append(documents, indexDocument{
+				Path:      file.AbsolutePath,
+				Source:    "sessions",
+				Text:      normalized,
+				MTimeUnix: info.ModTime().Unix(),
+				Size:      info.Size(),
+			})
+		}
+	}
+
+	return documents, nil
+}
+
+func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct{}, triggerCh <-chan autoSyncTrigger, cfg AutoSyncConfig) {
 	defer close(done)
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -508,23 +630,41 @@ func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct
 		defer intervalTicker.Stop()
 	}
 
-	debounceDelay := cfg.WatchDebounce
-	debounceCh := make(<-chan time.Time)
-	var debounceTimer *time.Timer
+	watchDebounceDelay := cfg.WatchDebounce
+	watchDebounceCh := make(<-chan time.Time)
+	var watchDebounceTimer *time.Timer
+	sessionDebounceDelay := cfg.SessionDebounce
+	sessionDebounceCh := make(<-chan time.Time)
+	var sessionDebounceTimer *time.Timer
 
-	scheduleDebouncedSync := func() {
-		if debounceTimer == nil {
-			debounceTimer = time.NewTimer(debounceDelay)
-			debounceCh = debounceTimer.C
+	scheduleWatchDebouncedSync := func() {
+		if watchDebounceTimer == nil {
+			watchDebounceTimer = time.NewTimer(watchDebounceDelay)
+			watchDebounceCh = watchDebounceTimer.C
 			return
 		}
-		if !debounceTimer.Stop() {
+		if !watchDebounceTimer.Stop() {
 			select {
-			case <-debounceTimer.C:
+			case <-watchDebounceTimer.C:
 			default:
 			}
 		}
-		debounceTimer.Reset(debounceDelay)
+		watchDebounceTimer.Reset(watchDebounceDelay)
+	}
+
+	scheduleSessionDebouncedSync := func() {
+		if sessionDebounceTimer == nil {
+			sessionDebounceTimer = time.NewTimer(sessionDebounceDelay)
+			sessionDebounceCh = sessionDebounceTimer.C
+			return
+		}
+		if !sessionDebounceTimer.Stop() {
+			select {
+			case <-sessionDebounceTimer.C:
+			default:
+			}
+		}
+		sessionDebounceTimer.Reset(sessionDebounceDelay)
 	}
 
 	runBackgroundSync := func() {
@@ -536,12 +676,18 @@ func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct
 	for {
 		select {
 		case <-ctx.Done():
-			if debounceTimer != nil {
-				debounceTimer.Stop()
+			if watchDebounceTimer != nil {
+				watchDebounceTimer.Stop()
+			}
+			if sessionDebounceTimer != nil {
+				sessionDebounceTimer.Stop()
 			}
 			return
-		case <-debounceCh:
-			debounceCh = nil
+		case <-watchDebounceCh:
+			watchDebounceCh = nil
+			runBackgroundSync()
+		case <-sessionDebounceCh:
+			sessionDebounceCh = nil
 			runBackgroundSync()
 		case <-watchCh:
 			changed, err := m.detectWatchChanges()
@@ -551,7 +697,12 @@ func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct
 			}
 			if changed {
 				m.setDirty(true)
-				scheduleDebouncedSync()
+				scheduleWatchDebouncedSync()
+			}
+		case trigger := <-triggerCh:
+			switch trigger {
+			case autoSyncTriggerSession:
+				scheduleSessionDebouncedSync()
 			}
 		case <-intervalCh:
 			m.setDirty(true)
@@ -609,6 +760,22 @@ func (m *SQLiteIndexManager) recordBackgroundError(err error) {
 	m.stateMu.Unlock()
 }
 
+func (m *SQLiteIndexManager) sourceEnabled(name string) bool {
+	target := strings.ToLower(strings.TrimSpace(name))
+	if target == "" {
+		return false
+	}
+	if len(m.cfg.Sources) == 0 {
+		return target == "memory"
+	}
+	for _, source := range m.cfg.Sources {
+		if strings.ToLower(strings.TrimSpace(source)) == target {
+			return true
+		}
+	}
+	return false
+}
+
 func mapsEqual(a map[string]string, b map[string]string) bool {
 	if len(a) != len(b) {
 		return false
@@ -619,6 +786,13 @@ func mapsEqual(a map[string]string, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func maxInt(v int, min int) int {
+	if v < min {
+		return min
+	}
+	return v
 }
 
 func openSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
