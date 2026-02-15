@@ -142,6 +142,17 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.workspace.Init(ctx); err != nil {
 		return fmt.Errorf("workspace init: %w", err)
 	}
+	defaultWorkspace, err := a.ResolveWorkspacePath(DefaultAgentID)
+	if err != nil {
+		return fmt.Errorf("resolve default workspace: %w", err)
+	}
+	if _, err := memory.ImportLegacyMemoryJSON(ctx, memory.LegacyImportRequest{
+		WorkspacePath: defaultWorkspace,
+		LegacyPath:    a.resolveLegacyImportPath(),
+		Now:           a.now,
+	}); err != nil {
+		return fmt.Errorf("legacy memory import: %w", err)
+	}
 	if err := a.memory.Init(ctx); err != nil {
 		return fmt.Errorf("memory init: %w", err)
 	}
@@ -323,6 +334,13 @@ func hasMemoryFlushOverride(cfg config.MemoryFlushConfig) bool {
 		cfg.TriggerWindowTokens > 0 ||
 		strings.TrimSpace(cfg.Prompt) != "" ||
 		cfg.TimeoutSeconds > 0
+}
+
+func (a *App) resolveLegacyImportPath() string {
+	if path := strings.TrimSpace(a.cfg.Agents.Defaults.MemorySearch.LegacyImportPath); path != "" {
+		return path
+	}
+	return strings.TrimSpace(a.cfg.Memory.Path)
 }
 
 func mergeMemoryFlushConfig(base, override config.MemoryFlushConfig) config.MemoryFlushConfig {

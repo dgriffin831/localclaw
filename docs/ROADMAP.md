@@ -1,28 +1,19 @@
 # Roadmap
 
-## Phase 0: Kickoff (complete)
+## Current delivery status
 
-- Repo bootstrap and docs.
-- Local-only policy checks.
-- Package skeleton for core capabilities.
+- Workspace + memory parity spec milestones PR-01 through PR-15 are implemented on the current line.
+- Legacy migration path (`memory.path` JSON import) is in place with one-time idempotent marker.
+- Memory CLI and runtime tool surfaces are integrated and tested.
 
-## Phase 1: MVP runtime
+## Next phase: post-parity hardening
 
-- Task loop and command dispatch.
-- Local memory persistence with versioned records.
-- Workspace operations and scoped file actions.
-- Cron and heartbeat orchestration.
-- Slack/Signal channel command intake.
-- Claude Code CLI request/response plumbing.
+- Add explicit changelog/release process around migrations and operational defaults.
+- Improve memory index observability (durations, cause tags, structured counters).
+- Add larger fixture/benchmark suites for indexing throughput and autosync behavior.
 
-## Phase 2: Enterprise hardening
+## Longer horizon
 
-- Policy pack and signed config.
-- Audit logging and security events.
-- GovCloud-specific runbooks and profile presets.
-
-## Phase 3: Operability
-
-- Backup/restore workflows.
-- Upgrade and migration tooling.
-- End-to-end test suites with deterministic fixtures.
+- Backup/restore workflows for state root and per-agent memory DBs.
+- Expanded policy controls and auditing for enterprise deployments.
+- Additional operator ergonomics in TUI and CLI around memory/session diagnostics.

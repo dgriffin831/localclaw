@@ -114,6 +114,63 @@ func TestAppResolvesWorkspaceAndSessionPaths(t *testing.T) {
 	}
 }
 
+func TestRunImportsLegacyMemoryJSONOnce(t *testing.T) {
+	stateRoot := t.TempDir()
+	legacyPath := filepath.Join(t.TempDir(), "legacy-memory.json")
+	if err := os.WriteFile(legacyPath, []byte(`{"topic":"legacy alpha"}`), 0o600); err != nil {
+		t.Fatalf("write legacy memory json: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.State.Root = stateRoot
+	cfg.Agents.Defaults.Workspace = "."
+	cfg.Workspace.Root = "."
+	cfg.Memory.Path = legacyPath
+	cfg.Cron.Enabled = false
+	cfg.Heartbeat.Enabled = false
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("run app: %v", err)
+	}
+
+	workspacePath, err := app.ResolveWorkspacePath("")
+	if err != nil {
+		t.Fatalf("resolve workspace path: %v", err)
+	}
+	memoryPath := filepath.Join(workspacePath, "MEMORY.md")
+	body, err := os.ReadFile(memoryPath)
+	if err != nil {
+		t.Fatalf("read MEMORY.md: %v", err)
+	}
+	if !strings.Contains(string(body), "\"legacy alpha\"") {
+		t.Fatalf("expected imported legacy data in MEMORY.md")
+	}
+
+	markerPath := filepath.Join(workspacePath, ".localclaw-legacy-memory-import-v1")
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("expected marker file: %v", err)
+	}
+
+	if err := os.WriteFile(legacyPath, []byte(`{"topic":"legacy beta"}`), 0o600); err != nil {
+		t.Fatalf("rewrite legacy memory json: %v", err)
+	}
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("second run app: %v", err)
+	}
+
+	second, err := os.ReadFile(memoryPath)
+	if err != nil {
+		t.Fatalf("read MEMORY.md second run: %v", err)
+	}
+	if strings.Contains(string(second), "legacy beta") {
+		t.Fatalf("expected marker to prevent second import")
+	}
+}
+
 func TestResolveMemoryFlushConfigMergesAgentOverride(t *testing.T) {
 	cfg := config.Default()
 	cfg.Agents.Defaults.Compaction.MemoryFlush.Enabled = true

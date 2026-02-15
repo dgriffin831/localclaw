@@ -2,33 +2,27 @@
 
 ## What was done
 
-- Bootstrapped a new Go module and project layout for `localclaw`.
-- Added foundational documents:
-  - `README.md`
-  - `ARCHITECTURE.md`
-  - `SECURITY.md`
-  - `ROADMAP.md`
-  - `CLAUDE.md`
-  - `docs/adr/0001-local-monolith.md`
-  - `docs/specs/mvp.md`
-- Implemented runnable CLI skeleton at `cmd/localclaw`.
-- Added package boundaries and TODO-stub interfaces for runtime modules.
-- Enforced strict local-only startup policy in config validation.
-- Added initial tests for config and runtime local-only checks.
-- Added Claude Code GovCloud-compatible config plumbing (profile/auth/region pass-through) and validation for allowed auth modes.
-- Verified GitHub repository exists at `https://github.com/dgriffin831/localclaw` with private visibility.
+- Delivered workspace + memory parity milestones through PR-15:
+  - agent-aware workspace bootstrap and bootstrap-file loading
+  - session metadata store + transcript persistence + event bus
+  - SQLite memory indexing/search/get APIs with CLI integration
+  - watch/interval/session-delta sync and safe reindex swap
+  - session reset memory snapshot hook and compaction memory flush workflow
+  - runtime memory tool integration and prompt policy
+  - hardening/migration release cut with one-time legacy `memory.path` JSON import into `MEMORY.md` plus idempotent marker
+- Expanded test coverage for migrations, backward compatibility, and concurrency/reliability stress.
 
 ## What runs
 
 ```bash
 /usr/local/go/bin/go test ./...
+/usr/local/go/bin/go test -race ./...
 /usr/local/go/bin/go run ./cmd/localclaw
+/usr/local/go/bin/go run ./cmd/localclaw memory status
 ```
 
 ## Next milestones
 
-1. Implement persisted memory store with schema and migrations.
-2. Add concrete cron engine and heartbeat loop with graceful shutdown.
-3. Wire Slack and Signal adapters to local command intake.
-4. Implement Claude Code CLI request pipeline and structured response parser.
-5. Add GovCloud profile presets and integration test fixtures.
+1. Add release notes/changelog process for migration behavior and breaking-change communication.
+2. Continue hardening of autosync and large-workspace indexing performance with benchmark tracking.
+3. Expand operational diagnostics for memory indexing latency and failure categorization.

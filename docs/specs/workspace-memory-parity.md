@@ -397,21 +397,21 @@ Each milestone below is intended to be merged as an independent PR with green te
 
 ### Tracking Checklist
 
-- [ ] PR-01 Config + Path Foundation
-- [ ] PR-02 Workspace Manager Real Implementation
-- [ ] PR-03 Session Store + Transcript Subsystem
-- [ ] PR-04 Runtime Integration of Workspace + Session
-- [ ] PR-05 Memory File Discovery + Chunking Core
-- [ ] PR-06 SQLite Memory Schema + Index Manager Skeleton
-- [ ] PR-07 Embedding Provider Interface (Local + None Only)
-- [ ] PR-08 Search + Read APIs (`memory_search`/`memory_get` semantics)
-- [ ] PR-09 CLI `memory` Commands
-- [ ] PR-10 Watch/Interval Sync + Safe Reindex Swap
-- [ ] PR-11 Session Transcript Source Indexing + Delta Triggers
-- [ ] PR-12 Pre-Compaction Memory Flush
-- [ ] PR-13 Session Memory Snapshot Hook (`/new`/`/reset`)
-- [ ] PR-14 Tool Runtime Integration + Prompt Policy
-- [ ] PR-15 Hardening + Migration + Release Cut
+- [x] PR-01 Config + Path Foundation
+- [x] PR-02 Workspace Manager Real Implementation
+- [x] PR-03 Session Store + Transcript Subsystem
+- [x] PR-04 Runtime Integration of Workspace + Session
+- [x] PR-05 Memory File Discovery + Chunking Core
+- [x] PR-06 SQLite Memory Schema + Index Manager Skeleton
+- [x] PR-07 Embedding Provider Interface (Local + None Only)
+- [x] PR-08 Search + Read APIs (`memory_search`/`memory_get` semantics)
+- [x] PR-09 CLI `memory` Commands
+- [x] PR-10 Watch/Interval Sync + Safe Reindex Swap
+- [x] PR-11 Session Transcript Source Indexing + Delta Triggers
+- [x] PR-12 Pre-Compaction Memory Flush
+- [x] PR-13 Session Memory Snapshot Hook (`/new`/`/reset`)
+- [x] PR-14 Tool Runtime Integration + Prompt Policy
+- [x] PR-15 Hardening + Migration + Release Cut
 
 ### PR-01: Config + Path Foundation
 

@@ -13,17 +13,19 @@
 
 ## Current status
 
-This repository is initialized as a greenfield MVP kickoff with:
+This repository now includes production-grade workspace/memory parity features:
 
-- Foundational architecture and security docs.
-- Minimal runnable CLI skeleton.
-- Strict startup policy checks for local-only mode.
-- Initial tests for config validation and local-only enforcement.
+- Agent-aware workspace bootstrap and session transcript storage.
+- SQLite-backed memory indexing/search with CLI tooling (`memory status/index/search`).
+- Session-memory lifecycle hooks (`/new`, `/reset`) and compaction memory flush plumbing.
+- One-time legacy memory migration (`memory.path` JSON -> `MEMORY.md`) with idempotent marker.
+- Expanded tests for compatibility, failure handling, and concurrency stress.
 
 ## Quick start
 
 ```bash
 /usr/local/go/bin/go test ./...
+/usr/local/go/bin/go test -race ./...
 /usr/local/go/bin/go run ./cmd/localclaw
 ```
 
@@ -81,3 +83,7 @@ Optional config file:
 - Monolithic single-process CLI only.
 - Local-only tools: filesystem, local process execution, local scheduler.
 - No remote tool bridges, no browser automation, no web server surfaces.
+
+## Migration note
+
+If legacy config still sets `memory.path` to a JSON file, startup imports it once into workspace `MEMORY.md` and writes `.localclaw-legacy-memory-import-v1` to prevent duplicate imports.
