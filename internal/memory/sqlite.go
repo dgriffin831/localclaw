@@ -16,11 +16,12 @@ import (
 
 // SQLiteIndexManager provides local SQLite-backed file/chunk indexing.
 type SQLiteIndexManager struct {
-	cfg             IndexManagerConfig
-	db              *sql.DB
-	mu              sync.Mutex
-	schemaInstalled bool
-	features        schemaFeatures
+	cfg               IndexManagerConfig
+	db                *sql.DB
+	embeddingProvider EmbeddingProvider
+	mu                sync.Mutex
+	schemaInstalled   bool
+	features          schemaFeatures
 }
 
 // NewSQLiteIndexManager creates a SQLite index manager.
@@ -33,6 +34,19 @@ func NewSQLiteIndexManager(cfg IndexManagerConfig) *SQLiteIndexManager {
 	}
 	if strings.TrimSpace(cfg.Provider) == "" {
 		cfg.Provider = "none"
+	}
+	if cfg.CandidateMultiplier <= 0 {
+		cfg.CandidateMultiplier = 4
+	}
+	if cfg.VectorWeight == 0 && cfg.KeywordWeight == 0 {
+		cfg.VectorWeight = 0.8
+		cfg.KeywordWeight = 0.2
+	}
+	if cfg.VectorWeight < 0 {
+		cfg.VectorWeight = 0
+	}
+	if cfg.KeywordWeight < 0 {
+		cfg.KeywordWeight = 0
 	}
 	return &SQLiteIndexManager{cfg: cfg}
 }
