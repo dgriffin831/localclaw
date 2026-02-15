@@ -33,10 +33,19 @@ func New(cfg config.Config) (*App, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
+	agentWorkspaces := make(map[string]string, len(cfg.Agents.List))
+	for _, agent := range cfg.Agents.List {
+		agentWorkspaces[agent.ID] = agent.Workspace
+	}
+
 	return &App{
-		cfg:       cfg,
-		memory:    memory.NewLocalStore(cfg.Memory.Path),
-		workspace: workspace.NewLocalManager(cfg.Workspace.Root),
+		cfg:    cfg,
+		memory: memory.NewLocalStore(cfg.Memory.Path),
+		workspace: workspace.NewLocalManager(workspace.Settings{
+			StateRoot:        cfg.State.Root,
+			DefaultWorkspace: cfg.Agents.Defaults.Workspace,
+			AgentWorkspaces:  agentWorkspaces,
+		}),
 		skills:    skills.NewLocalRegistry(),
 		cron:      cron.NewInProcessScheduler(cfg.Cron.Enabled),
 		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
