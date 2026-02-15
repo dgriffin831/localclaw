@@ -42,7 +42,7 @@ func TestValidateRequiresGovCloudRegion(t *testing.T) {
 	}
 }
 
-func fatalf(t *testing.T, format string, args ...any) {
+func fatalf(t *testing.T, format string, args ...interface{}) {
 	t.Helper()
 	t.Fatalf(format, args...)
 }

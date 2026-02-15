@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 )
 
@@ -124,7 +123,7 @@ func (c Config) Validate() error {
 	if c.LLM.ClaudeCode.BinaryPath == "" {
 		return errors.New("llm.claude_code.binary_path is required")
 	}
-	if !slices.Contains(allowedClaudeAuthModes, c.LLM.ClaudeCode.AuthMode) {
+	if !containsString(allowedClaudeAuthModes, c.LLM.ClaudeCode.AuthMode) {
 		return fmt.Errorf("unsupported llm.claude_code.auth_mode %q", c.LLM.ClaudeCode.AuthMode)
 	}
 	if c.LLM.ClaudeCode.UseGovCloud && strings.TrimSpace(c.LLM.ClaudeCode.BedrockRegion) == "" {
@@ -135,7 +134,7 @@ func (c Config) Validate() error {
 	}
 	seen := map[string]struct{}{}
 	for _, channel := range c.Channels.Enabled {
-		if !slices.Contains(allowedChannels, channel) {
+		if !containsString(allowedChannels, channel) {
 			return fmt.Errorf("unsupported channel %q", channel)
 		}
 		if _, ok := seen[channel]; ok {
@@ -147,6 +146,15 @@ func (c Config) Validate() error {
 		return errors.New("heartbeat.interval_seconds must be > 0")
 	}
 	return c.ValidateLocalOnlyPolicy()
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateLocalOnlyPolicy enforces startup guardrails to keep localclaw non-network-exposed.

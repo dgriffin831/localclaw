@@ -70,3 +70,13 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	return nil
 }
+
+// Prompt sends a single input to the configured local LLM client.
+func (a *App) Prompt(ctx context.Context, input string) (string, error) {
+	return a.llm.Prompt(ctx, input)
+}
+
+// PromptStream sends input to the local LLM client and yields incremental output events.
+func (a *App) PromptStream(ctx context.Context, input string) (<-chan claudecode.StreamEvent, <-chan error) {
+	return a.llm.PromptStream(ctx, input)
+}

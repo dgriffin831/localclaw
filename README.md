@@ -27,11 +27,51 @@ This repository is initialized as a greenfield MVP kickoff with:
 /usr/local/go/bin/go run ./cmd/localclaw
 ```
 
+Run full-screen TUI mode:
+
+```bash
+/usr/local/go/bin/go run ./cmd/localclaw tui
+```
+
+TUI controls:
+
+- `Enter` send message
+- `Alt+Enter` insert newline
+- `Esc` abort active run
+- `Ctrl+T` toggle thinking visibility
+- `Ctrl+O` toggle tool-card mode
+- `Ctrl+C` clear input (press twice quickly to exit)
+- `Ctrl+D` exit when input is empty
+
+TUI slash commands:
+
+- `/help`
+- `/status`
+- `/clear`
+- `/thinking <on|off>`
+- `/verbose <on|off>`
+- `/model <name>`
+- `/exit`
+
 Optional config file:
 
 ```bash
 /usr/local/go/bin/go run ./cmd/localclaw -config ./localclaw.json
+/usr/local/go/bin/go run ./cmd/localclaw -config ./localclaw.json tui
 ```
+
+## Documentation map
+
+- `AGENTS.md` - repository workflow, TDD loop, and validation gates.
+- `docs/README.md` - docs index and structure.
+- `docs/ARCHITECTURE.md` - implementation-detail architecture map.
+- `docs/RUNTIME.md` - startup flow and command mode behavior.
+- `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
+- `docs/TUI.md` - terminal UX behavior and controls.
+- `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
+- `docs/TESTING.md` - test coverage and Red/Green command loops.
+- `docs/specs` - feature specs and implementation plans.
+- `docs/adr` - architecture decision records.
 
 ## Scope guardrails
 
