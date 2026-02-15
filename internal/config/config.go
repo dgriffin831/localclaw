@@ -67,12 +67,26 @@ type AgentsConfig struct {
 type AgentDefaultsConfig struct {
 	Workspace    string             `json:"workspace"`
 	MemorySearch MemorySearchConfig `json:"memorySearch"`
+	Compaction   CompactionConfig   `json:"compaction"`
 }
 
 type AgentConfig struct {
 	ID           string             `json:"id"`
 	Workspace    string             `json:"workspace,omitempty"`
 	MemorySearch MemorySearchConfig `json:"memorySearch,omitempty"`
+	Compaction   CompactionConfig   `json:"compaction,omitempty"`
+}
+
+type CompactionConfig struct {
+	MemoryFlush MemoryFlushConfig `json:"memoryFlush"`
+}
+
+type MemoryFlushConfig struct {
+	Enabled             bool   `json:"enabled"`
+	ThresholdTokens     int    `json:"thresholdTokens"`
+	TriggerWindowTokens int    `json:"triggerWindowTokens"`
+	Prompt              string `json:"prompt"`
+	TimeoutSeconds      int    `json:"timeoutSeconds"`
 }
 
 type SessionConfig struct {
@@ -200,6 +214,15 @@ func Default() Config {
 		Agents: AgentsConfig{
 			Defaults: AgentDefaultsConfig{
 				Workspace: ".",
+				Compaction: CompactionConfig{
+					MemoryFlush: MemoryFlushConfig{
+						Enabled:             false,
+						ThresholdTokens:     28000,
+						TriggerWindowTokens: 4000,
+						Prompt:              "",
+						TimeoutSeconds:      20,
+					},
+				},
 				MemorySearch: MemorySearchConfig{
 					Enabled:    false,
 					Sources:    []string{"memory"},
@@ -337,6 +360,12 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate agent id %q", agentID)
 		}
 		seenAgentIDs[agentID] = struct{}{}
+		if err := validateMemoryFlushConfig(agent.Compaction.MemoryFlush, "agents.list[].compaction.memoryFlush"); err != nil {
+			return err
+		}
+	}
+	if err := validateMemoryFlushConfig(c.Agents.Defaults.Compaction.MemoryFlush, "agents.defaults.compaction.memoryFlush"); err != nil {
+		return err
 	}
 	if c.Heartbeat.Enabled && c.Heartbeat.IntervalSeconds <= 0 {
 		return errors.New("heartbeat.interval_seconds must be > 0")
@@ -383,6 +412,19 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func validateMemoryFlushConfig(cfg MemoryFlushConfig, fieldPrefix string) error {
+	if cfg.ThresholdTokens < 0 {
+		return fmt.Errorf("%s.thresholdTokens must be >= 0", fieldPrefix)
+	}
+	if cfg.TriggerWindowTokens < 0 {
+		return fmt.Errorf("%s.triggerWindowTokens must be >= 0", fieldPrefix)
+	}
+	if cfg.TimeoutSeconds < 0 {
+		return fmt.Errorf("%s.timeoutSeconds must be >= 0", fieldPrefix)
+	}
+	return nil
 }
 
 // ValidateLocalOnlyPolicy enforces startup guardrails to keep localclaw non-network-exposed.

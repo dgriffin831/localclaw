@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dgriffin831/localclaw/internal/channels/signal"
 	"github.com/dgriffin831/localclaw/internal/channels/slack"
@@ -151,4 +152,96 @@ func (a *App) Prompt(ctx context.Context, input string) (string, error) {
 // PromptStream sends input to the local LLM client and yields incremental output events.
 func (a *App) PromptStream(ctx context.Context, input string) (<-chan claudecode.StreamEvent, <-chan error) {
 	return a.llm.PromptStream(ctx, input)
+}
+
+func (a *App) AddSessionTokens(ctx context.Context, agentID, sessionID string, delta int) error {
+	if delta <= 0 {
+		return nil
+	}
+	resolution := ResolveSession(agentID, sessionID)
+	_, err := a.sessions.Update(ctx, resolution.AgentID, resolution.SessionID, func(entry *session.SessionEntry) error {
+		entry.Key = resolution.SessionKey
+		entry.TotalTokens += delta
+		return nil
+	})
+	return err
+}
+
+func (a *App) RunMemoryFlushIfNeeded(ctx context.Context, agentID, sessionID string) error {
+	resolution := ResolveSession(agentID, sessionID)
+	workspacePath, err := a.ResolveWorkspacePath(resolution.AgentID)
+	if err != nil {
+		return err
+	}
+
+	cfg := a.resolveMemoryFlushConfig(resolution.AgentID)
+	if !cfg.Enabled {
+		return nil
+	}
+	_, err = memory.MaybeRunMemoryFlush(ctx, memory.FlushRunRequest{
+		AgentID:           resolution.AgentID,
+		SessionID:         resolution.SessionID,
+		SessionKey:        resolution.SessionKey,
+		WorkspacePath:     workspacePath,
+		WorkspaceWritable: memory.IsWorkspaceWritable(workspacePath),
+		Settings: memory.FlushSettings{
+			Enabled:                   cfg.Enabled,
+			CompactionThresholdTokens: cfg.ThresholdTokens,
+			TriggerWindowTokens:       cfg.TriggerWindowTokens,
+			Prompt:                    cfg.Prompt,
+			Timeout:                   time.Duration(cfg.TimeoutSeconds) * time.Second,
+		},
+	}, a.sessions, a.llm)
+	return err
+}
+
+func (a *App) RunMemoryFlushIfNeededAsync(ctx context.Context, agentID, sessionID string) {
+	go func() {
+		_ = a.RunMemoryFlushIfNeeded(ctx, agentID, sessionID)
+	}()
+}
+
+func (a *App) resolveMemoryFlushConfig(agentID string) config.MemoryFlushConfig {
+	resolved := a.cfg.Agents.Defaults.Compaction.MemoryFlush
+	normalizedAgentID := ResolveAgentID(agentID)
+	for _, agent := range a.cfg.Agents.List {
+		if ResolveAgentID(agent.ID) != normalizedAgentID {
+			continue
+		}
+		override := agent.Compaction.MemoryFlush
+		if !hasMemoryFlushOverride(override) {
+			break
+		}
+		resolved = mergeMemoryFlushConfig(resolved, override)
+		break
+	}
+	return resolved
+}
+
+func hasMemoryFlushOverride(cfg config.MemoryFlushConfig) bool {
+	return cfg.Enabled ||
+		cfg.ThresholdTokens > 0 ||
+		cfg.TriggerWindowTokens > 0 ||
+		strings.TrimSpace(cfg.Prompt) != "" ||
+		cfg.TimeoutSeconds > 0
+}
+
+func mergeMemoryFlushConfig(base, override config.MemoryFlushConfig) config.MemoryFlushConfig {
+	merged := base
+	if override.Enabled {
+		merged.Enabled = true
+	}
+	if override.ThresholdTokens > 0 {
+		merged.ThresholdTokens = override.ThresholdTokens
+	}
+	if override.TriggerWindowTokens > 0 {
+		merged.TriggerWindowTokens = override.TriggerWindowTokens
+	}
+	if strings.TrimSpace(override.Prompt) != "" {
+		merged.Prompt = override.Prompt
+	}
+	if override.TimeoutSeconds > 0 {
+		merged.TimeoutSeconds = override.TimeoutSeconds
+	}
+	return merged
 }

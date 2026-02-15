@@ -18,6 +18,7 @@ import (
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
+	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/runtime"
 )
 
@@ -623,6 +624,10 @@ func (m *model) startRun(input string) {
 	m.setStatus(statusSending)
 
 	m.addUser(input)
+	if m.app != nil {
+		_ = m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, memory.EstimateTokensFromText(input))
+		m.app.RunMemoryFlushIfNeededAsync(m.ctx, m.agentID, m.sessionID)
+	}
 
 	runCtx, cancel := context.WithCancel(m.ctx)
 	m.runCancel = cancel
@@ -684,6 +689,9 @@ func (m *model) applyFinal(final string) {
 		msg.Raw = trimmed
 	} else if strings.TrimSpace(msg.Raw) == "" {
 		msg.Raw = "(no output)"
+	}
+	if m.app != nil {
+		_ = m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, memory.EstimateTokensFromText(msg.Raw))
 	}
 	msg.Streaming = false
 	msg.ThinkingPlaceholder = false

@@ -28,6 +28,9 @@ func TestDefaultConfigIncludesStateAndAgentScaffolding(t *testing.T) {
 	if !strings.Contains(cfg.Session.Store, "{agentId}") {
 		fatalf(t, "expected session.store to support {agentId} placeholder, got %q", cfg.Session.Store)
 	}
+	if cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens <= 0 {
+		fatalf(t, "expected agents.defaults.compaction.memoryFlush.thresholdTokens default")
+	}
 }
 
 func TestLoadMapsLegacyWorkspaceAndMemoryFields(t *testing.T) {
@@ -202,6 +205,26 @@ func TestValidateRejectsWhitespaceAgentWorkspaceOverride(t *testing.T) {
 	}
 	if err := cfg.Validate(); err == nil {
 		fatalf(t, "expected invalid agents.list[].workspace error")
+	}
+}
+
+func TestValidateRejectsNegativeMemoryFlushValues(t *testing.T) {
+	cfg := Default()
+	cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens = -1
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected negative thresholdTokens error")
+	}
+
+	cfg = Default()
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TriggerWindowTokens = -1
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected negative triggerWindowTokens error")
+	}
+
+	cfg = Default()
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TimeoutSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected negative timeoutSeconds error")
 	}
 }
 

@@ -73,3 +73,80 @@ func TestAppResolvesWorkspaceAndSessionPaths(t *testing.T) {
 		t.Fatalf("unexpected transcript path %q", transcriptPath)
 	}
 }
+
+func TestResolveMemoryFlushConfigMergesAgentOverride(t *testing.T) {
+	cfg := config.Default()
+	cfg.Agents.Defaults.Compaction.MemoryFlush.Enabled = true
+	cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens = 28000
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TriggerWindowTokens = 4000
+	cfg.Agents.Defaults.Compaction.MemoryFlush.Prompt = "default prompt"
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TimeoutSeconds = 20
+	cfg.Agents.List = []config.AgentConfig{
+		{
+			ID: "writer",
+			Compaction: config.CompactionConfig{
+				MemoryFlush: config.MemoryFlushConfig{
+					Prompt: "agent prompt",
+				},
+			},
+		},
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	resolved := app.resolveMemoryFlushConfig("writer")
+	if !resolved.Enabled {
+		t.Fatalf("expected enabled to inherit from defaults")
+	}
+	if resolved.ThresholdTokens != 28000 {
+		t.Fatalf("expected thresholdTokens=28000, got %d", resolved.ThresholdTokens)
+	}
+	if resolved.TriggerWindowTokens != 4000 {
+		t.Fatalf("expected triggerWindowTokens=4000, got %d", resolved.TriggerWindowTokens)
+	}
+	if resolved.TimeoutSeconds != 20 {
+		t.Fatalf("expected timeoutSeconds=20, got %d", resolved.TimeoutSeconds)
+	}
+	if resolved.Prompt != "agent prompt" {
+		t.Fatalf("expected prompt override to be applied, got %q", resolved.Prompt)
+	}
+}
+
+func TestResolveMemoryFlushConfigWithoutAgentOverrideUsesDefaults(t *testing.T) {
+	cfg := config.Default()
+	cfg.Agents.Defaults.Compaction.MemoryFlush.Enabled = true
+	cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens = 28000
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TriggerWindowTokens = 4000
+	cfg.Agents.Defaults.Compaction.MemoryFlush.Prompt = "default prompt"
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TimeoutSeconds = 20
+	cfg.Agents.List = []config.AgentConfig{
+		{
+			ID: "writer",
+		},
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	resolved := app.resolveMemoryFlushConfig("writer")
+	if !resolved.Enabled {
+		t.Fatalf("expected enabled to match defaults")
+	}
+	if resolved.ThresholdTokens != 28000 {
+		t.Fatalf("expected thresholdTokens=28000, got %d", resolved.ThresholdTokens)
+	}
+	if resolved.TriggerWindowTokens != 4000 {
+		t.Fatalf("expected triggerWindowTokens=4000, got %d", resolved.TriggerWindowTokens)
+	}
+	if resolved.TimeoutSeconds != 20 {
+		t.Fatalf("expected timeoutSeconds=20, got %d", resolved.TimeoutSeconds)
+	}
+	if resolved.Prompt != "default prompt" {
+		t.Fatalf("expected default prompt to be preserved, got %q", resolved.Prompt)
+	}
+}
