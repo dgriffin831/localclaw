@@ -43,7 +43,7 @@ The following capabilities are required for parity completion:
 2. Per-agent workspace resolution with default + overrides.
 3. Workspace bootstrap file loading and session-aware filtering.
 4. Durable memory files (`MEMORY.md`, `memory/*.md`, optional extra paths).
-5. Per-agent SQLite memory index with chunking and embeddings.
+5. Per-agent SQLite memory index with chunking and optional local embeddings (disabled by default).
 6. Hybrid retrieval (vector + keyword where available), snippet results with line ranges.
 7. Optional session transcript indexing as memory source.
 8. Safe memory file read API (`memory_get` equivalent behavior).
@@ -106,8 +106,8 @@ Add agent-aware and memory-search configuration while preserving backward compat
   - `enabled`
   - `sources` (`memory`, `sessions`)
   - `extraPaths`
-  - `provider` (`openai`, `gemini`, `local`, `auto`)
-  - `fallback` (`openai`, `gemini`, `local`, `none`)
+  - `provider` (`none`, `local`)
+  - `fallback` (`none`, `local`)
   - `model`
   - `store.path` (supports `{agentId}`)
   - `store.vector.enabled`
@@ -117,7 +117,6 @@ Add agent-aware and memory-search configuration while preserving backward compat
   - `sync.sessions.deltaBytes`, `sync.sessions.deltaMessages`
   - `cache.enabled`, `cache.maxEntries`
   - `local.modelPath`, `local.modelCacheDir`
-  - `remote.baseURL`, `remote.apiKey`, `remote.headers`, `remote.batch.*`
 - `agents.defaults.compaction.memoryFlush.*`
 - `hooks.sessionMemory.*`
 
@@ -238,18 +237,16 @@ Tables:
 
 Providers:
 
-- `openai`
-- `gemini`
-- `local`
-- `auto` (provider auto-selection order)
+- `none` (default; keyword/metadata retrieval only)
+- `local` (optional; local model only)
 
 Requirements:
 
-- Provider abstraction in Go.
-- Query and batch embedding methods.
-- Retry/backoff for rate-limits/transient failures.
-- Timeout controls for query and batch operations.
-- Fallback provider activation on embedding failures.
+- Provider abstraction in Go with no direct cloud AI provider integrations.
+- Query and batch embedding methods for local provider only.
+- Embeddings must remain optional; core memory search works without embeddings.
+- Timeout controls for local query and batch operations.
+- Fallback between `local` and `none` only.
 - Provider-keyed cache isolation.
 
 ## Sync Model
@@ -325,8 +322,8 @@ Add command group:
 
 Status output includes:
 
-- provider/model/requested provider
-- fallback info
+- provider mode (`none` or `local`)
+- fallback info (`local`/`none`)
 - indexed files/chunks totals
 - source breakdown (`memory`, `sessions`)
 - dirty state
@@ -351,7 +348,7 @@ Acceptance:
 ## Phase 2: Core memory indexing and retrieval
 
 - Implement memory file discovery, chunking, SQLite schema, indexing.
-- Implement search/get with vector fallback and optional FTS.
+- Implement search/get with keyword/FTS-first behavior; vector path is optional local-only when enabled.
 - Add memory manager status/probe/sync/close lifecycle.
 
 Acceptance:
@@ -361,8 +358,8 @@ Acceptance:
 
 ## Phase 3: Provider + sync maturity
 
-- Add provider abstraction (`openai`, `gemini`, `local`, `auto`).
-- Add fallback logic, retry, timeout, cache, and batch embedding flows.
+- Add provider abstraction (`none`, `local`) with `none` as default.
+- Add fallback logic, timeout, cache, and batch embedding flows for local-only mode.
 - Add watch/interval/session-delta sync scheduling.
 - Add safe reindex swap.
 
@@ -405,7 +402,7 @@ Each milestone below is intended to be merged as an independent PR with green te
 - [ ] PR-04 Runtime Integration of Workspace + Session
 - [ ] PR-05 Memory File Discovery + Chunking Core
 - [ ] PR-06 SQLite Memory Schema + Index Manager Skeleton
-- [ ] PR-07 Embedding Provider Interface + OpenAI/Gemini/Local Providers
+- [ ] PR-07 Embedding Provider Interface (Local + None Only)
 - [ ] PR-08 Search + Read APIs (`memory_search`/`memory_get` semantics)
 - [ ] PR-09 CLI `memory` Commands
 - [ ] PR-10 Watch/Interval Sync + Safe Reindex Swap
@@ -531,7 +528,7 @@ Scope:
 
 - Introduce SQLite-backed index manager:
   - DB open/close
-  - schema install (`meta`, `files`, `chunks`, optional `fts`, `embedding_cache`)
+  - schema install (`meta`, `files`, `chunks`, optional `fts`, optional `embedding_cache`)
   - status snapshot
   - memory sync of files (hash-based skip, stale cleanup)
 - No provider-specific embeddings yet; use pluggable interface.
@@ -549,35 +546,33 @@ Acceptance:
 - Re-running sync without changes is no-op-ish (hash skip).
 - Status returns file/chunk counts.
 
-### PR-07: Embedding Provider Interface + OpenAI/Gemini/Local Providers
+### PR-07: Embedding Provider Interface (Local + None Only)
 
 Scope:
 
-- Add provider interface and selection logic (`openai`, `gemini`, `local`, `auto`).
-- Add fallback provider activation and error messaging.
-- Add query/batch timeout controls + retry for transient failures.
+- Add provider interface and selection logic (`none`, `local`) with `none` default.
+- Add local-only activation/error messaging (no cloud providers).
+- Add query/batch timeout controls for local embedding execution.
 
 Files:
 
 - `internal/memory/embeddings.go`
-- `internal/memory/embeddings_openai.go`
-- `internal/memory/embeddings_gemini.go`
 - `internal/memory/embeddings_local.go`
 - tests under `internal/memory/embeddings*_test.go`
 
 Acceptance:
 
-- Provider resolution honors config + fallback rules.
-- Missing credential/setup errors are explicit and actionable.
-- Retries trigger only for retryable failure classes.
+- Provider resolution honors `none`/`local` config + fallback rules.
+- Missing local model/runtime setup errors are explicit and actionable.
+- Default mode does not require embeddings and remains fully functional.
 
 ### PR-08: Search + Read APIs (`memory_search`/`memory_get` Semantics)
 
 Scope:
 
-- Implement vector search path + in-process cosine fallback.
-- Implement keyword search (FTS when available).
-- Implement hybrid merge weighting and score thresholds.
+- Implement keyword search (FTS when available) as primary path.
+- Implement optional vector search path for local embeddings only.
+- Implement merge weighting/thresholds that work with and without vectors.
 - Implement safe read-file API with path restrictions and line slicing.
 
 Files:
@@ -590,7 +585,7 @@ Acceptance:
 
 - Search returns snippets with path + line ranges + score + source.
 - `memory_get` equivalent rejects out-of-scope paths.
-- Hybrid ranking behavior covered by tests.
+- Ranking behavior is covered for both keyword-only and local-vector modes.
 
 ### PR-09: CLI `memory` Commands
 
@@ -762,7 +757,7 @@ Before starting each PR:
 - Memory file scanner symlink/path restrictions.
 - Chunking and hash determinism.
 - Search ranking and hybrid merge.
-- Embedding retry/fallback/cache behavior.
+- Local embedding enable/disable, fallback (`local`/`none`), and cache behavior.
 - Flush threshold logic.
 - Session hook filename/contents.
 
@@ -792,7 +787,7 @@ Before starting each PR:
 
 - Structured logs for:
   - sync triggers/reasons
-  - provider selection and fallback activation
+  - provider mode selection and fallback activation (`local`/`none`)
   - vector/fts availability
   - index/reindex durations and counts
 - Memory status snapshot callable by CLI and runtime diagnostics.
