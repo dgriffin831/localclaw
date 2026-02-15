@@ -11,6 +11,7 @@ import (
 	"github.com/dgriffin831/localclaw/internal/heartbeat"
 	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
 	"github.com/dgriffin831/localclaw/internal/memory"
+	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/skills"
 	"github.com/dgriffin831/localclaw/internal/workspace"
 )
@@ -19,6 +20,7 @@ import (
 type App struct {
 	cfg       config.Config
 	memory    memory.Store
+	sessions  *session.Store
 	workspace workspace.Manager
 	skills    skills.Registry
 	cron      cron.Scheduler
@@ -34,13 +36,20 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	agentWorkspaces := make(map[string]string, len(cfg.Agents.List))
+	agentIDs := make([]string, 0, len(cfg.Agents.List))
 	for _, agent := range cfg.Agents.List {
 		agentWorkspaces[agent.ID] = agent.Workspace
+		agentIDs = append(agentIDs, agent.ID)
 	}
 
 	return &App{
 		cfg:    cfg,
 		memory: memory.NewLocalStore(cfg.Memory.Path),
+		sessions: session.NewStore(session.Settings{
+			StateRoot:     cfg.State.Root,
+			StorePath:     cfg.Session.Store,
+			KnownAgentIDs: agentIDs,
+		}),
 		workspace: workspace.NewLocalManager(workspace.Settings{
 			StateRoot:        cfg.State.Root,
 			DefaultWorkspace: cfg.Agents.Defaults.Workspace,
@@ -67,6 +76,9 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if err := a.memory.Init(ctx); err != nil {
 		return fmt.Errorf("memory init: %w", err)
+	}
+	if err := a.sessions.Init(ctx); err != nil {
+		return fmt.Errorf("session init: %w", err)
 	}
 	if err := a.skills.Load(ctx); err != nil {
 		return fmt.Errorf("skills load: %w", err)
