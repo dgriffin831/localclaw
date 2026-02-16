@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -59,6 +60,22 @@ func TestNewFailsWhenNetworkServerEnabled(t *testing.T) {
 
 	if _, err := New(cfg); err == nil {
 		t.Fatalf("expected startup failure when HTTP server is enabled")
+	}
+}
+
+func TestNewFailsWhenClaudeMCPWiringInvalid(t *testing.T) {
+	stateRootFile := filepath.Join(t.TempDir(), "state-root-file")
+	if err := os.WriteFile(stateRootFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write state root file: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.State.Root = stateRootFile
+
+	if _, err := New(cfg); err == nil {
+		t.Fatalf("expected startup failure when claude mcp wiring is invalid")
+	} else if !strings.Contains(err.Error(), "invalid claude mcp wiring") {
+		t.Fatalf("expected claude mcp wiring error, got %v", err)
 	}
 }
 
@@ -193,6 +210,81 @@ func TestRunDoesNotOverwriteExistingBootstrappedConfigFile(t *testing.T) {
 	}
 	if string(got) != string(existing) {
 		t.Fatalf("expected existing config to remain unchanged, got %q", string(got))
+	}
+}
+
+func TestNewConfiguresClaudeMCPConfigPathUnderStateRoot(t *testing.T) {
+	stateRoot := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
+	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+`, argsPath)
+	if err := os.WriteFile(claudeScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.State.Root = stateRoot
+	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	requestClient, ok := app.llm.(llm.RequestClient)
+	if !ok {
+		t.Fatalf("expected request-capable llm client")
+	}
+	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("prompt stream request error: %v", err)
+			}
+		}
+	}
+
+	argsFile, err := os.Open(argsPath)
+	if err != nil {
+		t.Fatalf("open captured args: %v", err)
+	}
+	defer argsFile.Close()
+
+	var args []string
+	scanner := bufio.NewScanner(argsFile)
+	for scanner.Scan() {
+		args = append(args, strings.TrimSpace(scanner.Text()))
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan captured args: %v", err)
+	}
+
+	var mcpConfigPath string
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--mcp-config" {
+			mcpConfigPath = args[i+1]
+			break
+		}
+	}
+	if mcpConfigPath == "" {
+		t.Fatalf("expected --mcp-config flag in args: %v", args)
+	}
+	expectedPrefix := filepath.Join(stateRoot, "runtime", "mcp") + string(os.PathSeparator)
+	if !strings.HasPrefix(mcpConfigPath, expectedPrefix) {
+		t.Fatalf("expected mcp config path under state root, got %q (args=%v)", mcpConfigPath, args)
 	}
 }
 

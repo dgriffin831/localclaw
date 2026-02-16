@@ -1,6 +1,11 @@
 package claudecode
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dgriffin831/localclaw/internal/llm"
@@ -17,6 +22,161 @@ func TestBuildCommandArgsUsesStreamJSONVerbose(t *testing.T) {
 		if args[i] != want[i] {
 			t.Fatalf("unexpected arg[%d]: got %q want %q (all=%v)", i, args[i], want[i], args)
 		}
+	}
+}
+
+func TestBuildCommandArgsForRequestIncludesMCPFlagsAndSystemPrompt(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:           "claude",
+		StrictMCPConfig:      true,
+		MCPServerBinaryPath:  "localclaw",
+		MCPServerArgs:        []string{"mcp", "serve"},
+		MCPConfigDir:         t.TempDir(),
+		MCPServerEnvironment: map[string]string{"LOCALCLAW_ENV": "1"},
+	})
+
+	req := llm.Request{
+		Input:         "hello",
+		SystemContext: "system guidance",
+		SkillPrompt:   "skill guidance",
+	}
+	args := client.buildCommandArgsForRequest(req, "/tmp/mcp.json")
+	want := []string{
+		"-p", "hello",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--mcp-config", "/tmp/mcp.json",
+		"--strict-mcp-config",
+		"--append-system-prompt", "system guidance\n\nskill guidance",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("unexpected arg length: got %d want %d (%v)", len(args), len(want), args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("unexpected arg[%d]: got %q want %q (all=%v)", i, args[i], want[i], args)
+		}
+	}
+}
+
+func TestBuildCommandArgsForRequestOmitsStrictFlagWhenDisabled(t *testing.T) {
+	client := NewClient(Settings{BinaryPath: "claude", StrictMCPConfig: false})
+	args := client.buildCommandArgsForRequest(llm.Request{Input: "hello"}, "/tmp/mcp.json")
+	for _, arg := range args {
+		if arg == "--strict-mcp-config" {
+			t.Fatalf("expected strict flag to be omitted when disabled")
+		}
+	}
+}
+
+func TestPrepareRunScopedMCPConfigWritesExpectedPayloadAndCleanup(t *testing.T) {
+	tmpDir := t.TempDir()
+	client := NewClient(Settings{
+		BinaryPath:           "claude",
+		MCPConfigDir:         tmpDir,
+		MCPServerBinaryPath:  "localclaw",
+		MCPServerArgs:        []string{"mcp", "serve"},
+		MCPServerEnvironment: map[string]string{"LOCALCLAW_ENV": "1"},
+	})
+
+	path, cleanup, err := client.prepareRunScopedMCPConfig()
+	if err != nil {
+		t.Fatalf("prepareRunScopedMCPConfig: %v", err)
+	}
+	if filepath.Dir(path) != tmpDir {
+		t.Fatalf("expected config in %q, got %q", tmpDir, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read mcp config: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal mcp config: %v", err)
+	}
+	servers, ok := payload["mcpServers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected mcpServers object")
+	}
+	localclaw, ok := servers["localclaw"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected mcpServers.localclaw object")
+	}
+	if localclaw["type"] != "stdio" {
+		t.Fatalf("expected stdio type, got %#v", localclaw["type"])
+	}
+	if localclaw["command"] != "localclaw" {
+		t.Fatalf("expected command localclaw, got %#v", localclaw["command"])
+	}
+	args, ok := localclaw["args"].([]interface{})
+	if !ok || len(args) != 2 {
+		t.Fatalf("expected args [mcp serve], got %#v", localclaw["args"])
+	}
+	if args[0] != "mcp" || args[1] != "serve" {
+		t.Fatalf("unexpected args: %#v", args)
+	}
+
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected cleanup to remove %q, stat err=%v", path, err)
+	}
+}
+
+func TestPrepareRunScopedMCPConfigRejectsInvalidServerConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings Settings
+		wantErr  string
+	}{
+		{
+			name: "missing binary",
+			settings: Settings{
+				BinaryPath:          "claude",
+				MCPServerBinaryPath: "",
+				MCPServerArgs:       []string{"mcp", "serve"},
+			},
+			wantErr: "mcp server binary path is required",
+		},
+		{
+			name: "missing mcp serve args",
+			settings: Settings{
+				BinaryPath:          "claude",
+				MCPServerBinaryPath: "localclaw",
+				MCPServerArgs:       []string{"serve"},
+			},
+			wantErr: "mcp server args must include \"mcp serve\"",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &LocalClient{settings: tt.settings}
+			_, cleanup, err := client.prepareRunScopedMCPConfig()
+			if cleanup != nil {
+				cleanup()
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestPromptStreamRequestReturnsErrorWhenMCPConfigFails(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:          "claude",
+		MCPServerBinaryPath: "localclaw",
+		MCPServerArgs:       []string{"serve"},
+	})
+
+	events, errs := client.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	if _, ok := <-events; ok {
+		t.Fatalf("expected events channel to be closed")
+	}
+	err := <-errs
+	if err == nil || !strings.Contains(err.Error(), "prepare claude mcp config") {
+		t.Fatalf("expected mcp config preparation error, got %v", err)
 	}
 }
 

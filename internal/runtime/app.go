@@ -113,6 +113,20 @@ func New(cfg config.Config) (*App, error) {
 		DefaultWorkspace: cfg.Agents.Defaults.Workspace,
 		AgentWorkspaces:  agentWorkspaces,
 	})
+	claudeClient := claudecode.NewClient(claudecode.Settings{
+		BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
+		Profile:             cfg.LLM.ClaudeCode.Profile,
+		UseGovCloud:         cfg.LLM.ClaudeCode.UseGovCloud,
+		BedrockRegion:       cfg.LLM.ClaudeCode.BedrockRegion,
+		AuthMode:            cfg.LLM.ClaudeCode.AuthMode,
+		StrictMCPConfig:     true,
+		MCPConfigDir:        filepath.Join(cfg.State.Root, "runtime", "mcp"),
+		MCPServerBinaryPath: "localclaw",
+		MCPServerArgs:       []string{"mcp", "serve"},
+	})
+	if err := claudeClient.ValidateMCPWiring(); err != nil {
+		return nil, fmt.Errorf("invalid claude mcp wiring: %w", err)
+	}
 
 	return &App{
 		cfg:    cfg,
@@ -130,17 +144,11 @@ func New(cfg config.Config) (*App, error) {
 				return workspaceManager.ResolveWorkspace(agentID)
 			},
 		}),
-		cron:      cron.NewInProcessScheduler(cfg.Cron.Enabled),
-		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
-		slack:     slack.NewLocalAdapter(),
-		signal:    signal.NewLocalAdapter(),
-		llm: claudecode.NewClient(claudecode.Settings{
-			BinaryPath:    cfg.LLM.ClaudeCode.BinaryPath,
-			Profile:       cfg.LLM.ClaudeCode.Profile,
-			UseGovCloud:   cfg.LLM.ClaudeCode.UseGovCloud,
-			BedrockRegion: cfg.LLM.ClaudeCode.BedrockRegion,
-			AuthMode:      cfg.LLM.ClaudeCode.AuthMode,
-		}),
+		cron:                cron.NewInProcessScheduler(cfg.Cron.Enabled),
+		heartbeat:           heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
+		slack:               slack.NewLocalAdapter(),
+		signal:              signal.NewLocalAdapter(),
+		llm:                 claudeClient,
 		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
 		now:                 time.Now,
 		skillPromptSnapshot: map[string]skillsSessionSnapshot{},

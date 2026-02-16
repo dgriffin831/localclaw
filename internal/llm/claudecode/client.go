@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -24,11 +25,16 @@ const (
 )
 
 type Settings struct {
-	BinaryPath    string
-	Profile       string
-	UseGovCloud   bool
-	BedrockRegion string
-	AuthMode      string
+	BinaryPath           string
+	Profile              string
+	UseGovCloud          bool
+	BedrockRegion        string
+	AuthMode             string
+	StrictMCPConfig      bool
+	MCPConfigDir         string
+	MCPServerBinaryPath  string
+	MCPServerArgs        []string
+	MCPServerEnvironment map[string]string
 }
 
 type LocalClient struct {
@@ -36,7 +42,24 @@ type LocalClient struct {
 }
 
 func NewClient(settings Settings) *LocalClient {
+	if strings.TrimSpace(settings.MCPServerBinaryPath) == "" {
+		settings.MCPServerBinaryPath = "localclaw"
+	}
+	if len(settings.MCPServerArgs) == 0 {
+		settings.MCPServerArgs = []string{"mcp", "serve"}
+	}
 	return &LocalClient{settings: settings}
+}
+
+func (c *LocalClient) ValidateMCPWiring() error {
+	_, cleanup, err := c.prepareRunScopedMCPConfig()
+	if cleanup != nil {
+		cleanup()
+	}
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *LocalClient) Capabilities() llm.Capabilities {
@@ -83,15 +106,44 @@ func (c *LocalClient) Prompt(ctx context.Context, input string) (string, error) 
 }
 
 func (c *LocalClient) PromptRequest(ctx context.Context, req llm.Request) (string, error) {
-	return c.Prompt(ctx, llm.ComposePromptFallback(req))
+	events, errs := c.PromptStreamRequest(ctx, req)
+	var streamed strings.Builder
+	final := ""
+
+	for events != nil || errs != nil {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			if evt.Type == llm.StreamEventDelta {
+				streamed.WriteString(evt.Text)
+				continue
+			}
+			if evt.Type == llm.StreamEventFinal {
+				final = strings.TrimSpace(evt.Text)
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+
+	if final != "" {
+		return final, nil
+	}
+	return strings.TrimSpace(streamed.String()), nil
 }
 
 func (c *LocalClient) PromptStreamRequest(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
-	return c.PromptStream(ctx, llm.ComposePromptFallback(req))
-}
-
-func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
-	if strings.TrimSpace(input) == "" {
+	trimmedInput := strings.TrimSpace(req.Input)
+	if trimmedInput == "" {
 		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		defer close(events)
@@ -100,11 +152,32 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan ll
 		return events, errs
 	}
 
-	cmd := exec.CommandContext(ctx, c.settings.BinaryPath, c.buildCommandArgs(input)...)
+	mcpConfigPath, cleanup, err := c.prepareRunScopedMCPConfig()
+	if err != nil {
+		events := make(chan llm.StreamEvent)
+		errs := make(chan error, 1)
+		defer close(events)
+		defer close(errs)
+		errs <- fmt.Errorf("prepare claude mcp config: %w", err)
+		return events, errs
+	}
+
+	return c.promptStreamWithArgs(ctx, c.buildCommandArgsForRequest(req, mcpConfigPath), cleanup)
+}
+
+func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
+	return c.PromptStreamRequest(ctx, llm.Request{Input: input})
+}
+
+func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, cleanup func()) (<-chan llm.StreamEvent, <-chan error) {
+	cmd := exec.CommandContext(ctx, c.settings.BinaryPath, args...)
 	cmd.Env = append(os.Environ(), c.buildEnv()...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
 		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		defer close(events)
@@ -114,6 +187,9 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan ll
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
 		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		defer close(events)
@@ -122,6 +198,9 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan ll
 		return events, errs
 	}
 	if err := cmd.Start(); err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
 		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		defer close(events)
@@ -134,6 +213,11 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan ll
 	errs := make(chan error, 1)
 
 	go func() {
+		defer func() {
+			if cleanup != nil {
+				cleanup()
+			}
+		}()
 		defer close(events)
 		defer close(errs)
 
@@ -225,6 +309,138 @@ func (c *LocalClient) buildCommandArgs(input string) []string {
 		"--output-format", "stream-json",
 		"--verbose",
 	}
+}
+
+func (c *LocalClient) buildCommandArgsForRequest(req llm.Request, mcpConfigPath string) []string {
+	args := c.buildCommandArgs(strings.TrimSpace(req.Input))
+	args = append(args, "--mcp-config", mcpConfigPath)
+	if c.settings.StrictMCPConfig {
+		args = append(args, "--strict-mcp-config")
+	}
+	if systemPrompt := buildAppendSystemPrompt(req); systemPrompt != "" {
+		args = append(args, "--append-system-prompt", systemPrompt)
+	}
+	return args
+}
+
+func buildAppendSystemPrompt(req llm.Request) string {
+	parts := make([]string, 0, 2)
+	if system := strings.TrimSpace(req.SystemContext); system != "" {
+		parts = append(parts, system)
+	}
+	if skill := strings.TrimSpace(req.SkillPrompt); skill != "" {
+		parts = append(parts, skill)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+type claudeMCPConfig struct {
+	MCPServers map[string]claudeMCPServer `json:"mcpServers"`
+}
+
+type claudeMCPServer struct {
+	Type    string            `json:"type"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+func (c *LocalClient) prepareRunScopedMCPConfig() (string, func(), error) {
+	serverCommand := strings.TrimSpace(c.settings.MCPServerBinaryPath)
+	if serverCommand == "" {
+		return "", nil, fmt.Errorf("mcp server binary path is required")
+	}
+	serverArgs := normalizeNonBlankArgs(c.settings.MCPServerArgs)
+	if !containsMCPServe(serverArgs) {
+		return "", nil, fmt.Errorf("mcp server args must include \"mcp serve\"")
+	}
+
+	configDir := strings.TrimSpace(c.settings.MCPConfigDir)
+	if configDir == "" {
+		configDir = os.TempDir()
+	}
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return "", nil, fmt.Errorf("create mcp config dir %q: %w", configDir, err)
+	}
+
+	file, err := os.CreateTemp(configDir, "localclaw-claude-mcp-*.json")
+	if err != nil {
+		return "", nil, fmt.Errorf("create run-scoped mcp config file: %w", err)
+	}
+
+	configPath := file.Name()
+	cleanup := func() {
+		_ = os.Remove(configPath)
+	}
+
+	payload := claudeMCPConfig{
+		MCPServers: map[string]claudeMCPServer{
+			"localclaw": {
+				Type:    "stdio",
+				Command: serverCommand,
+				Args:    serverArgs,
+				Env:     copyEnvMap(c.settings.MCPServerEnvironment),
+			},
+		},
+	}
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(payload); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("write mcp config %q: %w", configPath, err)
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("close mcp config %q: %w", configPath, err)
+	}
+	if !filepath.IsAbs(configPath) {
+		cleanup()
+		return "", nil, fmt.Errorf("run-scoped mcp config path must be absolute: %q", configPath)
+	}
+	return configPath, cleanup, nil
+}
+
+func normalizeNonBlankArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func containsMCPServe(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	for i := 0; i < len(args)-1; i++ {
+		if strings.EqualFold(args[i], "mcp") && strings.EqualFold(args[i+1], "serve") {
+			return true
+		}
+	}
+	return false
+}
+
+func copyEnvMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		dst[key] = value
+	}
+	return dst
 }
 
 type claudeStreamEnvelope struct {
