@@ -22,8 +22,6 @@ var errMissingMemorySubcommand = errors.New("memory subcommand is required")
 type statusOutput struct {
 	Command   string          `json:"command"`
 	AgentID   string          `json:"agentId"`
-	Provider  string          `json:"provider"`
-	Fallback  string          `json:"fallback"`
 	Workspace string          `json:"workspace"`
 	StorePath string          `json:"storePath"`
 	DBPath    string          `json:"dbPath"`
@@ -56,15 +54,28 @@ type searchOutput struct {
 	Results     []memory.SearchResult `json:"results"`
 }
 
+type grepOutput struct {
+	Command       string             `json:"command"`
+	AgentID       string             `json:"agentId"`
+	Query         string             `json:"query"`
+	Mode          string             `json:"mode"`
+	CaseSensitive bool               `json:"caseSensitive"`
+	Word          bool               `json:"word"`
+	MaxMatches    int                `json:"maxMatches"`
+	ContextLines  int                `json:"contextLines"`
+	PathGlob      []string           `json:"pathGlob,omitempty"`
+	Source        string             `json:"source"`
+	Count         int                `json:"count"`
+	Matches       []memory.GrepMatch `json:"matches"`
+}
+
 type indexSnapshot struct {
 	FileCount  int `json:"fileCount"`
 	ChunkCount int `json:"chunkCount"`
 }
 
 type featureSnapshot struct {
-	FTSEnabled            bool `json:"ftsEnabled"`
-	VectorEnabled         bool `json:"vectorEnabled"`
-	EmbeddingCacheEnabled bool `json:"embeddingCacheEnabled"`
+	FTSEnabled bool `json:"ftsEnabled"`
 }
 
 type sourceSnapshot struct {
@@ -88,7 +99,7 @@ type syncSnapshot struct {
 	IndexedChunks int `json:"indexedChunks"`
 }
 
-// RunMemoryCommand executes localclaw memory status/index/search commands.
+// RunMemoryCommand executes localclaw memory status/index/search/grep commands.
 func RunMemoryCommand(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdout, stderr io.Writer) error {
 	if stdout == nil {
 		stdout = os.Stdout
@@ -107,8 +118,10 @@ func RunMemoryCommand(ctx context.Context, cfg config.Config, app *runtime.App, 
 		return runMemoryIndex(ctx, cfg, app, args[1:], stdout, stderr)
 	case "search":
 		return runMemorySearch(ctx, cfg, app, args[1:], stdout, stderr)
+	case "grep":
+		return runMemoryGrep(ctx, cfg, app, args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("unknown memory subcommand %q (supported: status, index, search)", args[0])
+		return fmt.Errorf("unknown memory subcommand %q (supported: status, index, search, grep)", args[0])
 	}
 }
 
@@ -151,8 +164,6 @@ func runMemoryStatus(ctx context.Context, cfg config.Config, app *runtime.App, a
 	out := statusOutput{
 		Command:   "memory status",
 		AgentID:   resolved.agentID,
-		Provider:  resolved.provider,
-		Fallback:  resolved.fallback,
 		Workspace: resolved.workspacePath,
 		StorePath: resolved.storePath,
 		DBPath:    status.DBPath,
@@ -161,9 +172,7 @@ func runMemoryStatus(ctx context.Context, cfg config.Config, app *runtime.App, a
 			ChunkCount: status.ChunkCount,
 		},
 		Features: featureSnapshot{
-			FTSEnabled:            status.FTSEnabled,
-			VectorEnabled:         resolved.enableVector,
-			EmbeddingCacheEnabled: status.EmbeddingCacheEnabled,
+			FTSEnabled: status.FTSEnabled,
 		},
 		Sources: sourceSnapshot{
 			Configured: append([]string{}, resolved.sources...),
@@ -193,11 +202,10 @@ func runMemoryStatus(ctx context.Context, cfg config.Config, app *runtime.App, a
 	}
 
 	fmt.Fprintf(stdout, "agent: %s\n", out.AgentID)
-	fmt.Fprintf(stdout, "provider: %s (fallback: %s)\n", out.Provider, out.Fallback)
 	fmt.Fprintf(stdout, "workspace: %s\n", out.Workspace)
 	fmt.Fprintf(stdout, "store: %s\n", out.StorePath)
 	fmt.Fprintf(stdout, "db: %s\n", out.DBPath)
-	fmt.Fprintf(stdout, "index: files=%d chunks=%d fts=%t vector=%t cache=%t\n", out.Index.FileCount, out.Index.ChunkCount, out.Features.FTSEnabled, out.Features.VectorEnabled, out.Features.EmbeddingCacheEnabled)
+	fmt.Fprintf(stdout, "index: files=%d chunks=%d fts=%t\n", out.Index.FileCount, out.Index.ChunkCount, out.Features.FTSEnabled)
 	fmt.Fprintf(stdout, "sources: memory=%d sessions=%d extra=%d\n", out.Sources.Memory, out.Sources.Sessions, out.Sources.Extra)
 	fmt.Fprintf(stdout, "dirty: %t\n", out.Dirty)
 	if out.Sync != nil {
@@ -333,6 +341,109 @@ func runMemorySearch(ctx context.Context, cfg config.Config, app *runtime.App, a
 	return nil
 }
 
+func runMemoryGrep(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("memory grep", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	agentID := fs.String("agent", "", "agent id")
+	mode := fs.String("mode", "", "match mode: literal or regex")
+	caseSensitive := fs.Bool("case-sensitive", false, "case sensitive matching")
+	word := fs.Bool("word", false, "match whole words only (literal mode)")
+	maxMatches := fs.Int("max-matches", 0, "max matches")
+	contextLines := fs.Int("context-lines", 0, "context lines before/after each match")
+	source := fs.String("source", "", "source filter: memory, sessions, all")
+	asJSON := fs.Bool("json", false, "emit JSON output")
+	var pathGlob stringSliceFlag
+	fs.Var(&pathGlob, "path-glob", "workspace-relative glob filter (repeatable)")
+
+	flagArgs, query, err := splitGrepArgs(args)
+	if err != nil {
+		return err
+	}
+	if err := fs.Parse(flagArgs); err != nil {
+		return err
+	}
+	if query == "" {
+		return errors.New("memory grep query is required")
+	}
+
+	resolved, manager, _, err := newMemoryCommandContext(ctx, cfg, app, *agentID, false)
+	if err != nil {
+		return err
+	}
+	defer manager.Close()
+
+	opts := memory.GrepOptions{
+		Mode:          *mode,
+		CaseSensitive: *caseSensitive,
+		Word:          *word,
+		MaxMatches:    *maxMatches,
+		ContextLines:  *contextLines,
+		PathGlob:      append([]string{}, pathGlob...),
+		Source:        *source,
+	}
+	opts = normalizeCLIGrepOptions(opts)
+	result, err := manager.Grep(ctx, query, opts)
+	if err != nil {
+		return fmt.Errorf("memory grep: %w", err)
+	}
+
+	out := grepOutput{
+		Command:       "memory grep",
+		AgentID:       resolved.agentID,
+		Query:         query,
+		Mode:          opts.Mode,
+		CaseSensitive: opts.CaseSensitive,
+		Word:          opts.Word,
+		MaxMatches:    opts.MaxMatches,
+		ContextLines:  opts.ContextLines,
+		PathGlob:      append([]string{}, opts.PathGlob...),
+		Source:        opts.Source,
+		Count:         result.Count,
+		Matches:       result.Matches,
+	}
+	if *asJSON {
+		return writeJSON(stdout, out)
+	}
+
+	if len(out.Matches) == 0 {
+		fmt.Fprintln(stdout, "no memory matches")
+		return nil
+	}
+	for i, match := range out.Matches {
+		fmt.Fprintf(stdout, "%d. %s:%d source=%s\n", i+1, match.Path, match.Line, match.Source)
+		fmt.Fprintf(stdout, "   %s\n", strings.TrimSpace(match.Text))
+	}
+	return nil
+}
+
+func normalizeCLIGrepOptions(opts memory.GrepOptions) memory.GrepOptions {
+	normalized := opts
+	normalized.Mode = strings.ToLower(strings.TrimSpace(normalized.Mode))
+	if normalized.Mode == "" {
+		normalized.Mode = "literal"
+	}
+	if normalized.Mode == "regex" {
+		normalized.Word = false
+	}
+	if normalized.MaxMatches <= 0 {
+		normalized.MaxMatches = 50
+	}
+	if normalized.MaxMatches > 500 {
+		normalized.MaxMatches = 500
+	}
+	if normalized.ContextLines < 0 {
+		normalized.ContextLines = 0
+	}
+	if normalized.ContextLines > 5 {
+		normalized.ContextLines = 5
+	}
+	normalized.Source = strings.ToLower(strings.TrimSpace(normalized.Source))
+	if normalized.Source == "" {
+		normalized.Source = "all"
+	}
+	return normalized
+}
+
 func splitSearchArgs(args []string) ([]string, string, error) {
 	flagArgs := make([]string, 0, len(args))
 	queryParts := make([]string, 0, len(args))
@@ -360,14 +471,53 @@ func splitSearchArgs(args []string) ([]string, string, error) {
 	return flagArgs, query, nil
 }
 
+func splitGrepArgs(args []string) ([]string, string, error) {
+	flagArgs := make([]string, 0, len(args))
+	queryParts := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--agent", "--mode", "--max-matches", "--context-lines", "--path-glob", "--source":
+			if i+1 >= len(args) {
+				return nil, "", fmt.Errorf("flag %s requires a value", arg)
+			}
+			flagArgs = append(flagArgs, arg, args[i+1])
+			i++
+		case "--json", "--case-sensitive", "--word":
+			flagArgs = append(flagArgs, arg)
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return nil, "", fmt.Errorf("unknown flag %q", arg)
+			}
+			queryParts = append(queryParts, arg)
+		}
+	}
+
+	query := strings.TrimSpace(strings.Join(queryParts, " "))
+	return flagArgs, query, nil
+}
+
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return errors.New("path glob cannot be empty")
+	}
+	*s = append(*s, trimmed)
+	return nil
+}
+
 type memoryCommandResolution struct {
 	agentID         string
 	sources         []string
-	provider        string
-	fallback        string
 	workspacePath   string
 	storePath       string
-	enableVector    bool
 	queryMaxResults int
 	queryMinScore   float64
 }
@@ -392,17 +542,18 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	}
 	sessionsRoot := filepath.Dir(sessionsPath)
 
-	searchCfg := cfg.Agents.Defaults.MemorySearch
-	storePath, err := resolveStorePath(cfg.State.Root, searchCfg.Store.Path, resolvedAgent)
+	// TODO: Resolve per-agent memory config with the same merge logic used by runtime (including agent overrides) instead of always using defaults.
+	memoryCfg := cfg.Agents.Defaults.Memory
+	storePath, err := resolveStorePath(cfg.App.Root, memoryCfg.Store.Path, resolvedAgent)
 	if err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("resolve memory store path: %w", err)
 	}
 
-	sourceSet := normalizeSources(searchCfg.Sources)
+	sourceSet := normalizeSources(memoryCfg.Sources)
 	allowMemorySource := sourceSet["memory"]
 	allowSessionsSource := sourceSet["sessions"]
 
-	extraPaths := append([]string{}, searchCfg.ExtraPaths...)
+	extraPaths := append([]string{}, memoryCfg.ExtraPaths...)
 	if !allowMemorySource {
 		extraPaths = nil
 	}
@@ -411,24 +562,13 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 		DBPath:               storePath,
 		WorkspaceRoot:        workspacePath,
 		SessionsRoot:         sessionsRoot,
-		Sources:              searchCfg.Sources,
+		Sources:              memoryCfg.Sources,
 		ExtraPaths:           extraPaths,
-		ChunkTokens:          searchCfg.Chunking.Tokens,
-		ChunkOverlap:         searchCfg.Chunking.Overlap,
-		Provider:             searchCfg.Provider,
-		Model:                searchCfg.Model,
-		Fallback:             searchCfg.Fallback,
-		Local:                memory.LocalEmbeddingConfig{ModelPath: searchCfg.Local.ModelPath, ModelCacheDir: searchCfg.Local.ModelCacheDir},
+		ChunkTokens:          memoryCfg.Chunking.Tokens,
+		ChunkOverlap:         memoryCfg.Chunking.Overlap,
 		EnableFTS:            true,
-		EnableVector:         searchCfg.Store.Vector.Enabled,
-		EnableEmbeddingCache: searchCfg.Cache.Enabled,
-		EmbeddingCacheMax:    searchCfg.Cache.MaxEntries,
-		HybridEnabled:        searchCfg.Query.Hybrid.Enabled,
-		VectorWeight:         searchCfg.Query.Hybrid.VectorWeight,
-		KeywordWeight:        searchCfg.Query.Hybrid.KeywordWeight,
-		CandidateMultiplier:  searchCfg.Query.Hybrid.CandidateMultiplier,
-		SessionDeltaBytes:    searchCfg.Sync.Sessions.DeltaBytes,
-		SessionDeltaMessages: searchCfg.Sync.Sessions.DeltaMessages,
+		SessionDeltaBytes:    memoryCfg.Sync.Sessions.DeltaBytes,
+		SessionDeltaMessages: memoryCfg.Sync.Sessions.DeltaMessages,
 	})
 	if err := manager.Open(ctx); err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("open memory index: %w", err)
@@ -436,7 +576,7 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 
 	scan := sourceScanDetails{}
 	if deep {
-		scan = scanSources(workspacePath, searchCfg.Sources, searchCfg.ExtraPaths)
+		scan = scanSources(workspacePath, memoryCfg.Sources, memoryCfg.ExtraPaths)
 	} else {
 		scan.Issues = []string{}
 	}
@@ -450,25 +590,13 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 		configuredSources = []string{"memory"}
 	}
 
-	provider := strings.TrimSpace(searchCfg.Provider)
-	if provider == "" {
-		provider = memory.EmbeddingProviderNone
-	}
-	fallback := strings.TrimSpace(searchCfg.Fallback)
-	if fallback == "" {
-		fallback = memory.EmbeddingProviderNone
-	}
-
 	resolution := memoryCommandResolution{
 		agentID:         resolvedAgent,
 		sources:         configuredSources,
-		provider:        provider,
-		fallback:        fallback,
 		workspacePath:   workspacePath,
 		storePath:       storePath,
-		enableVector:    searchCfg.Store.Vector.Enabled,
-		queryMaxResults: searchCfg.Query.MaxResults,
-		queryMinScore:   searchCfg.Query.MinScore,
+		queryMaxResults: memoryCfg.Query.MaxResults,
+		queryMinScore:   memoryCfg.Query.MinScore,
 	}
 	if resolution.queryMaxResults <= 0 {
 		resolution.queryMaxResults = 8
@@ -497,6 +625,7 @@ func scanSources(workspacePath string, sources []string, extraPaths []string) so
 	}
 
 	if sourceSet["sessions"] {
+		// TODO: Implement deep session-source discovery/counting under sessionsRoot for memory status --deep and remove this placeholder issue.
 		result.Issues = append(result.Issues, "sessions source scanning is not yet available")
 	}
 
@@ -572,7 +701,7 @@ func normalizeSources(values []string) map[string]bool {
 func resolveStorePath(stateRoot string, storePattern string, agentID string) (string, error) {
 	pattern := strings.TrimSpace(storePattern)
 	if pattern == "" {
-		return "", errors.New("memorySearch.store.path is required")
+		return "", errors.New("memory.store.path is required")
 	}
 
 	pattern = strings.ReplaceAll(pattern, "{agentId}", agentID)

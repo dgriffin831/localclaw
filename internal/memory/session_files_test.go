@@ -53,7 +53,6 @@ func TestSQLiteIndexManagerSyncIndexesSessionSource(t *testing.T) {
 		SessionsRoot:  sessionsRoot,
 		ChunkTokens:   32,
 		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderNone,
 		EnableFTS:     true,
 	})
 	if err := m.Open(ctx); err != nil {

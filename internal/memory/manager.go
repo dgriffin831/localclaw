@@ -19,29 +19,17 @@ type IndexManagerConfig struct {
 	ExtraPaths           []string
 	ChunkTokens          int
 	ChunkOverlap         int
-	Provider             string
-	Model                string
-	Fallback             string
-	Local                LocalEmbeddingConfig
 	EnableFTS            bool
-	EnableVector         bool
-	EnableEmbeddingCache bool
-	HybridEnabled        bool
-	VectorWeight         float64
-	KeywordWeight        float64
-	CandidateMultiplier  int
-	EmbeddingCacheMax    int
 	SessionDeltaBytes    int
 	SessionDeltaMessages int
 }
 
 // IndexStatus is a lightweight snapshot of indexed memory state.
 type IndexStatus struct {
-	DBPath                string
-	FileCount             int
-	ChunkCount            int
-	FTSEnabled            bool
-	EmbeddingCacheEnabled bool
+	DBPath     string
+	FileCount  int
+	ChunkCount int
+	FTSEnabled bool
 }
 
 // SyncResult captures indexing work from one sync pass.
@@ -94,6 +82,35 @@ type GetResult struct {
 	Source    string
 }
 
+// GrepOptions controls grep-style retrieval for exact or regex matches.
+type GrepOptions struct {
+	Mode          string
+	CaseSensitive bool
+	Word          bool
+	MaxMatches    int
+	ContextLines  int
+	PathGlob      []string
+	Source        string
+}
+
+// GrepMatch captures one matching line and optional surrounding context.
+type GrepMatch struct {
+	Path   string   `json:"path"`
+	Line   int      `json:"line"`
+	Start  int      `json:"start,omitempty"`
+	End    int      `json:"end,omitempty"`
+	Text   string   `json:"text"`
+	Before []string `json:"before,omitempty"`
+	After  []string `json:"after,omitempty"`
+	Source string   `json:"source"`
+}
+
+// GrepResult is a bounded, deterministically ordered grep response payload.
+type GrepResult struct {
+	Count   int         `json:"count"`
+	Matches []GrepMatch `json:"matches"`
+}
+
 // IndexManager defines the SQLite-backed memory indexing behavior.
 type IndexManager interface {
 	Open(ctx context.Context) error
@@ -105,4 +122,5 @@ type IndexManager interface {
 	Status(ctx context.Context) (IndexStatus, error)
 	Search(ctx context.Context, query string, opts SearchOptions) ([]SearchResult, error)
 	Get(ctx context.Context, path string, opts GetOptions) (GetResult, error)
+	Grep(ctx context.Context, query string, opts GrepOptions) (GrepResult, error)
 }

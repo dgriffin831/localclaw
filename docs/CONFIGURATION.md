@@ -5,7 +5,8 @@
 ## Loading rules
 
 - If `-config` is omitted, `config.Default()` is used.
-- If `-config` is provided, file JSON is unmarshaled into defaults (merge-by-field behavior).
+- If `-config` is provided, file JSON is decoded into defaults (merge-by-field behavior).
+- Config decoding is strict: unknown/removed keys fail parsing.
 - Config always passes `Validate()` before runtime startup.
 - On startup, `App.Run` creates `~/.localclaw/localclaw.json` if missing.
   - This scaffold file is not auto-loaded unless passed via `-config`.
@@ -13,14 +14,10 @@
 ## Top-level schema
 
 - `app`
-- `security`
 - `llm`
 - `channels`
-- `state`
 - `agents`
 - `session`
-- `memory`
-- `workspace`
 - `cron`
 - `heartbeat`
 
@@ -29,45 +26,44 @@
 ```json
 {
   "app": {
-    "name": "localclaw"
-  },
-  "security": {
-    "enforce_local_only": true,
-    "enable_gateway": false,
-    "enable_http_server": false,
-    "listen_address": ""
+    "name": "localclaw",
+    "root": "~/.localclaw"
   },
   "llm": {
     "provider": "claudecode",
     "claude_code": {
       "binary_path": "claude",
-      "profile": "default",
-      "use_govcloud": false,
-      "bedrock_region": "",
-      "auth_mode": "default"
+      "profile": "default"
+    },
+    "codex": {
+      "binary_path": "codex",
+      "profile": "",
+      "model": "",
+      "mcp": {
+        "config_path": "",
+        "use_isolated_home": true,
+        "home_path": "",
+        "server_name": "localclaw"
+      }
     }
   },
   "channels": {
     "enabled": ["slack", "signal"]
   },
-  "state": {
-    "root": "~/.localclaw"
-  },
   "agents": {
     "defaults": {
       "workspace": ".",
-      "memorySearch": {
-        "enabled": false,
+      "memory": {
+        "enabled": true,
+        "tools": {
+          "get": true,
+          "search": true,
+          "grep": true
+        },
         "sources": ["memory"],
         "extraPaths": [],
-        "provider": "auto",
-        "fallback": "none",
-        "model": "",
         "store": {
-          "path": "~/.localclaw/memory/{agentId}.sqlite",
-          "vector": {
-            "enabled": true
-          }
+          "path": "~/.localclaw/memory/{agentId}.sqlite"
         },
         "chunking": {
           "tokens": 400,
@@ -75,40 +71,13 @@
         },
         "query": {
           "maxResults": 8,
-          "minScore": 0,
-          "hybrid": {
-            "enabled": true,
-            "vectorWeight": 0.8,
-            "keywordWeight": 0.2,
-            "candidateMultiplier": 4
-          }
+          "minScore": 0
         },
         "sync": {
-          "onSessionStart": false,
           "onSearch": false,
-          "watch": false,
-          "watchDebounceMs": 500,
-          "intervalMinutes": 0,
           "sessions": {
             "deltaBytes": 32768,
             "deltaMessages": 20
-          }
-        },
-        "cache": {
-          "enabled": true,
-          "maxEntries": 1000
-        },
-        "local": {
-          "modelPath": "",
-          "modelCacheDir": ""
-        },
-        "remote": {
-          "baseURL": "",
-          "apiKey": "",
-          "headers": {},
-          "batch": {
-            "enabled": false,
-            "size": 16
           }
         }
       },
@@ -127,12 +96,6 @@
   "session": {
     "store": "~/.localclaw/agents/{agentId}/sessions/sessions.json"
   },
-  "memory": {
-    "path": ".localclaw/memory.json"
-  },
-  "workspace": {
-    "root": "."
-  },
   "cron": {
     "enabled": true
   },
@@ -143,36 +106,20 @@
 }
 ```
 
-## Compatibility mappings
-
-`applyCompatibilityMappings()` currently performs:
-
-- `workspace.root` -> `agents.defaults.workspace` when the new field is unset/defaulted.
-- `agents.defaults.workspace` -> `workspace.root` when legacy field is empty.
-- `memory.path` -> `agents.defaults.memorySearch.legacyImportPath` when unset.
-- If `state.root` changes and derived defaults are still untouched:
-  - rebase `session.store`
-  - rebase `agents.defaults.memorySearch.store.path`
-
-Notes:
-
-- `memory.path` is legacy compatibility metadata only in current runtime.
-- Startup does not automatically import legacy JSON memory into `MEMORY.md`.
-
 ## Validation rules
 
 General:
 
 - `app.name` is required.
+- `app.root` is required.
 - `app.thinking_messages` entries must be non-blank when provided.
-- `llm.provider` must be `claudecode`.
+- `llm.provider` must be `claudecode` or `codex`.
 - `llm.claude_code.binary_path` is required.
-- `llm.claude_code.auth_mode` allowlist: `default`, `aws_profile`, `bedrock`.
-- if `llm.claude_code.use_govcloud=true`, `llm.claude_code.bedrock_region` is required.
+- `llm.codex.binary_path` is required when `llm.provider` is `codex`.
 - `channels.enabled` must contain at least one value.
 - `channels.enabled` allowlist: `slack`, `signal`.
 - duplicate channel names are rejected.
-- `state.root`, `agents.defaults.workspace`, and `session.store` are required.
+- `agents.defaults.workspace` and `session.store` are required.
 - each `agents.list[].id` is required and unique.
 - `agents.list[].workspace` cannot be blank-whitespace.
 - memory flush numeric fields must be non-negative:
@@ -181,29 +128,47 @@ General:
   - `timeoutSeconds`
 - if heartbeat is enabled, `heartbeat.interval_seconds` must be `> 0`.
 
-Local-only hard guardrails (`ValidateLocalOnlyPolicy`):
+Local-only boundary:
 
-- `security.enforce_local_only` must stay `true`.
-- `security.enable_gateway` must stay `false`.
-- `security.enable_http_server` must stay `false`.
-- `security.listen_address` must stay empty.
+- `localclaw` does not expose config flags for gateway/listener behavior.
+- Removed/deprecated config keys are rejected instead of silently accepted.
+- Runtime remains single-process and local-only by architecture.
 
-## Memory-search configuration notes
+## Memory configuration notes
 
-`memorySearch` is defined on `agents.defaults` with optional per-agent values under `agents.list[].memorySearch`.
+`memory` is defined on `agents.defaults` with optional per-agent overrides under `agents.list[].memory`.
 
 Implementation details to be aware of:
 
-- Runtime tooling (`internal/runtime/tools.go`) resolves per-agent overrides with additive merge semantics.
+- Runtime memory tool availability is controlled by `agents.defaults.memory` with optional per-agent overrides under `agents.list[].memory`.
+  - `memory.enabled` gates all runtime/MCP memory tools.
+  - `memory.tools.get`, `memory.tools.search`, and `memory.tools.grep` gate each memory tool individually.
+  - All memory flags default to enabled.
+  - Per-agent memory flags support explicit true/false overrides.
+- Runtime memory indexing/search settings (`internal/runtime/tools.go`) are also read from `memory`:
+  - `memory.sources`
+  - `memory.extraPaths`
+  - `memory.store.path`
+  - `memory.chunking.{tokens,overlap}`
+  - `memory.query.{maxResults,minScore}`
+  - `memory.sync.onSearch`
+  - `memory.sync.sessions.{deltaBytes,deltaMessages}`
+- Runtime memory config resolution uses additive merge semantics for per-agent overrides.
   - Practical effect: override fields are applied when they are non-empty/non-zero/true.
   - Fields are not currently "explicitly unset" per-agent (for example, setting a bool to false does not force-disable a true default).
-- Memory CLI (`internal/cli/memory.go`) currently uses `agents.defaults.memorySearch` settings for index/search behavior.
+- Memory CLI (`internal/cli/memory.go`) currently uses `agents.defaults.memory` settings for index/search behavior.
 
-Provider values:
+Compatibility behavior:
 
-- Config accepts provider/fallback strings without strict validation.
-- Memory manager currently supports local-only embedding modes: `none` and `local`.
-- Unsupported provider values fail when memory manager resolves embedding provider.
+- Removed/deprecated config keys are not supported.
+- Removed runtime tool-policy keys:
+  - top-level `tools`
+  - top-level `skills`
+  - `agents.defaults.tools`
+  - `agents.defaults.skills`
+  - `agents.list[].tools`
+  - `agents.list[].skills`
+- Update config files to the current schema before startup.
 
 ## Optional TUI waiting text
 

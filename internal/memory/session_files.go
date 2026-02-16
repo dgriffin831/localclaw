@@ -56,7 +56,7 @@ func DiscoverSessionFiles(sessionsRoot string) ([]MemoryFile, error) {
 		if !strings.EqualFold(filepath.Ext(path), ".jsonl") {
 			return nil
 		}
-		if hasLink, err := pathHasSymlinkComponent(path); err != nil {
+		if hasLink, err := pathHasSymlinkComponentWithin(rootAbs, path); err != nil {
 			return err
 		} else if hasLink {
 			return nil

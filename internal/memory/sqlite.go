@@ -23,13 +23,12 @@ const (
 
 // SQLiteIndexManager provides local SQLite-backed file/chunk indexing.
 type SQLiteIndexManager struct {
-	cfg               IndexManagerConfig
-	db                *sql.DB
-	embeddingProvider EmbeddingProvider
-	mu                sync.Mutex
-	schemaInstalled   bool
-	features          schemaFeatures
-	syncMu            sync.Mutex
+	cfg             IndexManagerConfig
+	db              *sql.DB
+	mu              sync.Mutex
+	schemaInstalled bool
+	features        schemaFeatures
+	syncMu          sync.Mutex
 
 	stateMu           sync.Mutex
 	dirty             bool
@@ -59,22 +58,6 @@ func NewSQLiteIndexManager(cfg IndexManagerConfig) *SQLiteIndexManager {
 	}
 	if cfg.ChunkOverlap < 0 {
 		cfg.ChunkOverlap = 0
-	}
-	if strings.TrimSpace(cfg.Provider) == "" {
-		cfg.Provider = "none"
-	}
-	if cfg.CandidateMultiplier <= 0 {
-		cfg.CandidateMultiplier = 4
-	}
-	if cfg.VectorWeight == 0 && cfg.KeywordWeight == 0 {
-		cfg.VectorWeight = 0.8
-		cfg.KeywordWeight = 0.2
-	}
-	if cfg.VectorWeight < 0 {
-		cfg.VectorWeight = 0
-	}
-	if cfg.KeywordWeight < 0 {
-		cfg.KeywordWeight = 0
 	}
 	if len(cfg.Sources) == 0 {
 		cfg.Sources = []string{"memory"}
@@ -191,6 +174,7 @@ func (m *SQLiteIndexManager) Sync(ctx context.Context, force bool) (SyncResult, 
 
 // StartAutoSync starts background watch/interval sync loops.
 func (m *SQLiteIndexManager) StartAutoSync(ctx context.Context, cfg AutoSyncConfig) error {
+	// TODO: Runtime startup should call StartAutoSync for active agents and keep the lifecycle tied to app startup/shutdown; today this path is available but not wired.
 	if !cfg.Watch && cfg.Interval <= 0 && !m.sourceEnabled("sessions") {
 		return nil
 	}
@@ -270,6 +254,7 @@ func (m *SQLiteIndexManager) LastBackgroundError() error {
 
 // HandleTranscriptUpdate handles session transcript append notifications.
 func (m *SQLiteIndexManager) HandleTranscriptUpdate(ctx context.Context, update session.TranscriptUpdate) error {
+	// TODO: Runtime transcript writes should emit TranscriptUpdate events into this handler so session delta bytes/messages can trigger autosync as designed.
 	_ = ctx
 	if !m.sourceEnabled("sessions") {
 		return nil
@@ -326,11 +311,10 @@ func (m *SQLiteIndexManager) Status(ctx context.Context) (IndexStatus, error) {
 	}
 
 	return IndexStatus{
-		DBPath:                m.cfg.DBPath,
-		FileCount:             fileCount,
-		ChunkCount:            chunkCount,
-		FTSEnabled:            m.features.ftsEnabled,
-		EmbeddingCacheEnabled: m.features.embeddingCacheEnabled,
+		DBPath:     m.cfg.DBPath,
+		FileCount:  fileCount,
+		ChunkCount: chunkCount,
+		FTSEnabled: m.features.ftsEnabled,
 	}, nil
 }
 
@@ -505,14 +489,13 @@ func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force b
 
 		chunks := chunkTextWithLines(doc.Text, m.cfg.ChunkTokens, m.cfg.ChunkOverlap)
 		for _, chunk := range chunks {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO chunks(path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-				VALUES(?, ?, ?, ?, ?, ?, ?, NULL, ?);`,
+			if _, err := tx.ExecContext(ctx, `INSERT INTO chunks(path, source, start_line, end_line, hash, text, updated_at)
+				VALUES(?, ?, ?, ?, ?, ?, ?);`,
 				doc.Path,
 				doc.Source,
 				chunk.StartLine,
 				chunk.EndLine,
 				chunk.Hash,
-				m.cfg.Model,
 				chunk.Text,
 				now,
 			); err != nil {

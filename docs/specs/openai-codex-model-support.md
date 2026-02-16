@@ -24,6 +24,8 @@ The existing `/model` slash command is also a placeholder and does not apply any
 4. Introduce provider-agnostic LLM stream/event interfaces so runtime/TUI are not tied to one provider package.
 5. Implement practical model override behavior in TUI (`/model <name>`) for providers that support model flags.
 6. Maintain backward compatibility for existing Claude Code configs and workflows.
+7. Surface provider-native tool inventory in TUI (`/tools`) alongside localclaw tools.
+8. Require safe structured tool-call parity for Codex and Claude (custom/local tools, not only provider built-ins).
 
 ## Scope
 
@@ -31,6 +33,7 @@ The existing `/model` slash command is also a placeholder and does not apply any
 - Runtime/provider abstraction refactor needed to support multiple subprocess-backed LLM adapters.
 - New Codex adapter package with prompt/stream/error handling.
 - TUI `/model` behavior from placeholder to effective runtime override flow.
+- Structured tool-call ownership/source separation and runtime pass-through semantics.
 - Required test and documentation updates for changed behavior contracts.
 
 ## Out of Scope
@@ -77,7 +80,10 @@ The existing `/model` slash command is also a placeholder and does not apply any
 - `PromptStream(...)` yields stream events:
   - `delta` chunks
   - `final` completion text
+  - `provider_metadata` (provider name/model/tool inventory when available)
+  - structured tool events with explicit source ownership (`localclaw_local` vs `provider_native`)
 - TUI header/status show selected provider and effective model info.
+- `/tools` shows provider, provider tool inventory (when discovered), and localclaw tools.
 
 ### Error Paths
 
@@ -90,7 +96,7 @@ The existing `/model` slash command is also a placeholder and does not apply any
 
 ### Unchanged Behavior
 
-- Local-only policy enforcement (`security.*`) remains unchanged.
+- Local-only policy enforcement remains unchanged.
 - Command modes remain `check`, `tui`, `memory`.
 - Prompt assembly semantics in runtime (`buildPromptInput`) remain unchanged.
 - Claude Code remains default provider in `Default()`.
@@ -131,7 +137,27 @@ JSON stream parsing contract:
 - parse JSONL events from stdout.
 - treat Codex `item.completed` with `item.type=="agent_message"` as assistant content.
 - emit as `delta` and aggregate for `final` event.
-- ignore non-message events except for diagnostics hooks.
+- parse provider init/capability metadata (when present) and emit `provider_metadata` with:
+  - provider id (`codex`)
+  - model (if present)
+  - provider-native tools (if present)
+- parse tool lifecycle events for shell/tool execution:
+  - `item.started` + `item.type=="command_execution"` -> emit `tool_call`
+    - `tool_call.id` = item `id`
+    - `tool_call.name` = `command_execution`
+    - `tool_call.class` = provider-native/delegated
+    - `tool_call.args.command` = item `command`
+  - `item.completed` + `item.type=="command_execution"` -> emit `tool_result`
+    - `tool_result.call_id` = item `id`
+    - `tool_result.tool` = `command_execution`
+    - `tool_result.status` = item `status` (for example `completed`, `failed`, `cancelled`)
+    - `tool_result.ok` = true only when status indicates success and `exit_code==0`
+    - `tool_result.error` populated when non-zero `exit_code` or provider reports failure text
+    - `tool_result.data` includes:
+      - `command`
+      - `aggregated_output`
+      - `exit_code`
+- ignore non-tool/non-message events by default (for example `thread.started`, `turn.started`, `turn.completed`, reasoning items), while keeping parser tolerant to unknown future event types.
 
 Failure contract:
 - capture stderr; include it in wait/start/read errors.
@@ -204,7 +230,39 @@ Runtime/TUI call path:
 - providers that support override (Codex) apply it.
 - providers that do not (Claude, unless future support exists) ignore with explicit `/status` note or one-time system message.
 
-## 7) Documentation Changes
+## 7) `/tools` Provider + Local Tool Inventory
+
+Add `/tools` slash behavior contract:
+
+- always show configured/discovered provider id
+- show provider-native tools from latest `provider_metadata` stream event
+- show localclaw runtime tools from `App.ToolDefinitions(...)`
+- if provider metadata has not been observed yet, render `provider tools: not discovered yet`
+
+Provider adapter requirements:
+
+- Claude adapter emits `provider_metadata` from `system/init` stream event
+- Codex adapter emits `provider_metadata` from its equivalent init/capability stream event
+
+## 7A) Structured Tool Call Contract Alignment
+
+This provider spec adopts the safety contract in:
+
+- `docs/specs/structured-tool-calls-safe-migration.md`
+
+Provider requirements for Codex support:
+
+- Codex adapter must support host-managed local/custom tools in-run (not only built-ins).
+- Adapter must classify tool calls by source:
+  - `localclaw_local`: runtime executes and responds with tool result in the same run.
+  - `provider_native`: runtime pass-through only (no local execution).
+- `StructuredToolCalls=true` must remain disabled unless the codex adapter passes bidirectional contract tests (call -> local execute -> result injection -> final output).
+
+Claude parity requirement:
+
+- Claude adapter must satisfy the same host-managed custom/local tool contract before default structured mode is enabled globally.
+
+## 8) Documentation Changes
 
 Update:
 
@@ -218,11 +276,11 @@ Add:
 
 - `docs/CODEX.md` parallel to `docs/CLAUDE_CODE.md`, documenting Codex adapter command/stream/error behavior.
 
-## 8) Security and Policy Notes
+## 9) Security and Policy Notes
 
 - `localclaw` still does not expose any network listener or model HTTP client.
 - Codex and Claude remain subprocess integrations only.
-- Keep policy guardrails unchanged (`security.enforce_local_only`, no gateway/listener flags).
+- Keep policy guardrails unchanged (no gateway/listener config surface).
 - Ensure adapter construction never shells out via `sh -c`; pass args directly to `exec.CommandContext`.
 
 ## Implementation Plan (TDD-First)
@@ -233,6 +291,7 @@ Changes:
 - add provider-agnostic LLM interface/types package.
 - refactor runtime and TUI to use shared stream types.
 - add provider factory and `cfg.LLM.Provider` switch.
+- include `provider_metadata` stream event in shared contracts.
 
 Red tests:
 - runtime creation path selects codex provider when configured.
@@ -253,6 +312,9 @@ Red tests:
 - stdout JSON message parsing produces expected final text.
 - stderr surfaced on non-zero exit.
 - cancellation terminates subprocess.
+- init/capability metadata emits `provider_metadata` with provider-native tools when available.
+- host-managed custom tool call can be round-tripped with in-run tool result response.
+- provider-native tool calls are classified as pass-through (never locally executed).
 
 Green:
 - implement adapter + helpers; keep subprocess + stream cleanup robust.
@@ -272,7 +334,7 @@ Red tests:
 Green:
 - implement schema/validation changes with backward compatibility.
 
-## Phase 4: TUI `/model` Override
+## Phase 4: TUI `/model` Override + `/tools` Inventory
 
 Changes:
 - add model override state to TUI model.
@@ -283,6 +345,7 @@ Red tests:
 - `/model` sets override.
 - `/model default` clears override.
 - `/status` includes provider + effective model.
+- `/tools` includes provider + provider-native tools + localclaw tools.
 
 Green:
 - implement state handling and display updates.
@@ -309,8 +372,11 @@ Unit tests to add/update:
   - runtime new/select provider behavior.
 - `internal/runtime/tools_test.go`
   - prompt assembly unchanged across providers.
+  - runtime executes only `localclaw_local` calls in structured mode.
+  - provider-native tool calls are pass-through only.
 - `internal/tui/app_test.go`
   - `/model` functional behavior and status/header output.
+  - `/tools` rendering with provider metadata + localclaw tool definitions.
 - `internal/llm/codex/client_test.go` (new)
   - JSON event parse, stderr error surfacing, cancellation, empty input.
 - optional: `internal/llm/claudecode/client_test.go` (new baseline parity tests).
@@ -336,6 +402,8 @@ Full validation:
 - [ ] Codex adapter supports prompt + stream behavior and context cancellation.
 - [ ] Existing Claude adapter behavior remains backward compatible.
 - [ ] `/model <name>` applies model override in TUI for subsequent prompts.
+- [ ] Structured tool events are ownership-separated (`localclaw_local` vs `provider_native`) with pass-through for provider-native.
+- [ ] Codex and Claude both support custom/local tools (not only built-ins) before global `StructuredToolCalls=true`.
 - [ ] Config validation/docs/security docs reflect new provider allowlist.
 - [ ] Full test suite passes (`go test ./...`) and formatting is clean.
 
@@ -349,6 +417,7 @@ Mitigations:
 - keep parser tolerant to unknown event types.
 - add adapter-focused regression tests for both providers.
 - isolate provider selection logic to a small factory.
+- gate `StructuredToolCalls=true` behind bidirectional host-managed tool contract tests.
 
 Rollback:
 - restore `llm.provider=claudecode` allowlist only.

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dgriffin831/localclaw/internal/channels/signal"
@@ -17,7 +18,9 @@ import (
 	"github.com/dgriffin831/localclaw/internal/cron"
 	"github.com/dgriffin831/localclaw/internal/heartbeat"
 	"github.com/dgriffin831/localclaw/internal/hooks"
+	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
+	"github.com/dgriffin831/localclaw/internal/llm/codex"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/skills"
@@ -27,18 +30,25 @@ import (
 // App composes all localclaw capabilities in a single process.
 type App struct {
 	cfg        config.Config
-	memory     memory.Store
 	tools      *skills.ToolRegistry
 	sessions   *session.Store
 	workspace  workspace.Manager
 	skills     skills.Registry
 	cron       cron.Scheduler
 	heartbeat  heartbeat.Monitor
-	slack      slack.Client
-	signal     signal.Client
-	llm        claudecode.Client
+	slack      slack.Client  // TODO: Wire outbound Slack dispatch once channel execution is implemented.
+	signal     signal.Client // TODO: Wire outbound Signal dispatch once channel execution is implemented.
+	llm        llm.Client
 	transcript *session.TranscriptWriter
 	now        func() time.Time
+
+	snapshotMu          sync.Mutex
+	skillPromptSnapshot map[string]skillsSessionSnapshot
+}
+
+type skillsSessionSnapshot struct {
+	CompactionCount int
+	Prompt          string
 }
 
 const (
@@ -89,6 +99,10 @@ func New(cfg config.Config) (*App, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	resolvedStateRoot, err := resolveAbsolutePath(cfg.App.Root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve state root: %w", err)
+	}
 
 	agentWorkspaces := make(map[string]string, len(cfg.Agents.List))
 	agentIDs := make([]string, 0, len(cfg.Agents.List))
@@ -97,35 +111,101 @@ func New(cfg config.Config) (*App, error) {
 		agentIDs = append(agentIDs, agent.ID)
 	}
 
+	workspaceManager := workspace.NewLocalManager(workspace.Settings{
+		StateRoot:        cfg.App.Root,
+		DefaultWorkspace: cfg.Agents.Defaults.Workspace,
+		AgentWorkspaces:  agentWorkspaces,
+	})
+	var llmClient llm.Client
+	switch strings.TrimSpace(cfg.LLM.Provider) {
+	case "claudecode":
+		claudeClient := claudecode.NewClient(claudecode.Settings{
+			BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
+			Profile:             cfg.LLM.ClaudeCode.Profile,
+			StrictMCPConfig:     true,
+			MCPConfigDir:        filepath.Join(resolvedStateRoot, "runtime", "mcp"),
+			MCPServerBinaryPath: "localclaw",
+			MCPServerArgs:       []string{"mcp", "serve"},
+		})
+		if err := claudeClient.ValidateMCPWiring(); err != nil {
+			return nil, fmt.Errorf("invalid claude mcp wiring: %w", err)
+		}
+		llmClient = claudeClient
+	case "codex":
+		codexHomePath := strings.TrimSpace(cfg.LLM.Codex.MCP.HomePath)
+		if cfg.LLM.Codex.MCP.UseIsolatedHome && codexHomePath == "" {
+			codexHomePath = filepath.Join(resolvedStateRoot, "runtime", "codex", "home")
+		}
+		codexClient := codex.NewClient(codex.Settings{
+			BinaryPath:       cfg.LLM.Codex.BinaryPath,
+			Profile:          cfg.LLM.Codex.Profile,
+			Model:            cfg.LLM.Codex.Model,
+			WorkingDirectory: cfg.Agents.Defaults.Workspace,
+			MCP: codex.MCPSettings{
+				ConfigPath:       cfg.LLM.Codex.MCP.ConfigPath,
+				UseIsolatedHome:  cfg.LLM.Codex.MCP.UseIsolatedHome,
+				HomePath:         codexHomePath,
+				ServerName:       cfg.LLM.Codex.MCP.ServerName,
+				ServerBinaryPath: "localclaw",
+				ServerArgs:       []string{"mcp", "serve"},
+			},
+		})
+		if err := codexClient.ValidateMCPWiring(); err != nil {
+			return nil, fmt.Errorf("invalid codex mcp wiring: %w", err)
+		}
+		llmClient = codexClient
+	default:
+		return nil, fmt.Errorf("unsupported llm provider %q", cfg.LLM.Provider)
+	}
+
 	return &App{
-		cfg:    cfg,
-		memory: memory.NewLocalStore(cfg.Memory.Path),
-		tools:  skills.DefaultToolRegistry(),
+		cfg:   cfg,
+		tools: skills.DefaultToolRegistry(),
 		sessions: session.NewStore(session.Settings{
-			StateRoot:     cfg.State.Root,
+			StateRoot:     cfg.App.Root,
 			StorePath:     cfg.Session.Store,
 			KnownAgentIDs: agentIDs,
 		}),
-		workspace: workspace.NewLocalManager(workspace.Settings{
-			StateRoot:        cfg.State.Root,
-			DefaultWorkspace: cfg.Agents.Defaults.Workspace,
-			AgentWorkspaces:  agentWorkspaces,
+		workspace: workspaceManager,
+		skills: skills.NewLocalRegistry(skills.LocalRegistrySettings{
+			AgentIDs: agentIDs,
+			ResolveWorkspace: func(agentID string) (string, error) {
+				return workspaceManager.ResolveWorkspace(agentID)
+			},
 		}),
-		skills:    skills.NewLocalRegistry(),
 		cron:      cron.NewInProcessScheduler(cfg.Cron.Enabled),
 		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
-		slack:     slack.NewLocalAdapter(),
-		signal:    signal.NewLocalAdapter(),
-		llm: claudecode.NewClient(claudecode.Settings{
-			BinaryPath:    cfg.LLM.ClaudeCode.BinaryPath,
-			Profile:       cfg.LLM.ClaudeCode.Profile,
-			UseGovCloud:   cfg.LLM.ClaudeCode.UseGovCloud,
-			BedrockRegion: cfg.LLM.ClaudeCode.BedrockRegion,
-			AuthMode:      cfg.LLM.ClaudeCode.AuthMode,
-		}),
-		transcript: session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
-		now:        time.Now,
+		// TODO: Honor channels.enabled by gating adapter wiring and channel usage per configured allowlist instead of unconditionally wiring both adapters.
+		slack:  slack.NewLocalAdapter(),
+		signal: signal.NewLocalAdapter(),
+		llm:    llmClient,
+		// TODO: Wire transcript appends into memory autosync (StartAutoSync/HandleTranscriptUpdate) via a runtime event bus so session delta indexing is active at startup.
+		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
+		now:                 time.Now,
+		skillPromptSnapshot: map[string]skillsSessionSnapshot{},
 	}, nil
+}
+
+func resolveAbsolutePath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("path is required")
+	}
+	if strings.HasPrefix(trimmed, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home dir: %w", err)
+		}
+		trimmed = filepath.Join(home, strings.TrimPrefix(trimmed, "~"))
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed), nil
+	}
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path: %w", err)
+	}
+	return filepath.Clean(absPath), nil
 }
 
 func (a *App) ResolveWorkspacePath(agentID string) (string, error) {
@@ -147,9 +227,6 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if err := a.bootstrapDefaultConfigFile(); err != nil {
 		return fmt.Errorf("bootstrap config: %w", err)
-	}
-	if err := a.memory.Init(ctx); err != nil {
-		return fmt.Errorf("memory init: %w", err)
 	}
 	if err := a.sessions.Init(ctx); err != nil {
 		return fmt.Errorf("session init: %w", err)
@@ -205,18 +282,49 @@ func (a *App) Prompt(ctx context.Context, input string) (string, error) {
 }
 
 // PromptStream sends input to the local LLM client and yields incremental output events.
-func (a *App) PromptStream(ctx context.Context, input string) (<-chan claudecode.StreamEvent, <-chan error) {
+func (a *App) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
 	return a.PromptStreamForSession(ctx, DefaultAgentID, DefaultSessionID, input)
 }
 
 // PromptForSession sends a single input with the resolved agent/session context.
 func (a *App) PromptForSession(ctx context.Context, agentID, sessionID, input string) (string, error) {
-	return a.llm.Prompt(ctx, a.buildPromptInput(ctx, agentID, sessionID, input))
+	events, errs := a.PromptStreamForSession(ctx, agentID, sessionID, input)
+	var streamed strings.Builder
+	final := ""
+	for events != nil || errs != nil {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			switch evt.Type {
+			case llm.StreamEventDelta:
+				streamed.WriteString(evt.Text)
+			case llm.StreamEventFinal:
+				final = strings.TrimSpace(evt.Text)
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if final != "" {
+		return final, nil
+	}
+	return strings.TrimSpace(streamed.String()), nil
 }
 
 // PromptStreamForSession streams output with the resolved agent/session context.
-func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, input string) (<-chan claudecode.StreamEvent, <-chan error) {
-	return a.llm.PromptStream(ctx, a.buildPromptInput(ctx, agentID, sessionID, input))
+func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, input string) (<-chan llm.StreamEvent, <-chan error) {
+	resolution := ResolveSession(agentID, sessionID)
+	req := a.buildPromptRequest(ctx, resolution, input)
+	return a.promptStreamFromClient(ctx, req)
 }
 
 func (a *App) AddSessionTokens(ctx context.Context, agentID, sessionID string, delta int) error {
@@ -309,8 +417,10 @@ func (a *App) ResetSession(ctx context.Context, req ResetSessionRequest) Session
 	}
 
 	if !req.StartNew {
+		a.clearSkillPromptSnapshot(current.SessionKey)
 		return current
 	}
+	a.clearSkillPromptSnapshot(current.SessionKey)
 	nextID := a.nextSessionID(ctx, current.AgentID, current.SessionID)
 	return ResolveSession(current.AgentID, nextID)
 }
@@ -357,6 +467,7 @@ func (a *App) resolveMemoryFlushConfig(agentID string) config.MemoryFlushConfig 
 }
 
 func hasMemoryFlushOverride(cfg config.MemoryFlushConfig) bool {
+	// TODO: Replace truthy/positive heuristic detection with explicit optional override fields so agents can intentionally disable inherited defaults (for example enabled=false or threshold=0).
 	return cfg.Enabled ||
 		cfg.ThresholdTokens > 0 ||
 		cfg.TriggerWindowTokens > 0 ||
@@ -366,6 +477,7 @@ func hasMemoryFlushOverride(cfg config.MemoryFlushConfig) bool {
 
 func mergeMemoryFlushConfig(base, override config.MemoryFlushConfig) config.MemoryFlushConfig {
 	merged := base
+	// TODO: Support explicit false/zero overrides from agent config; current merge only applies enabling/positive values and cannot turn inherited settings off.
 	if override.Enabled {
 		merged.Enabled = true
 	}

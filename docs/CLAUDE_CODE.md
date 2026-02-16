@@ -8,9 +8,16 @@ Implementation location:
 
 ## Execution model
 
-- `PromptStream` executes `claude -p <input>` using `exec.CommandContext`.
-- stdout is streamed as `StreamEventDelta` chunks.
-- on successful completion, a `StreamEventFinal` event is emitted with full trimmed output.
+- `PromptStream` executes:
+  - `claude -p <input> --output-format stream-json --verbose --mcp-config <run-scoped.json>`
+  - with `--strict-mcp-config` when enabled
+  - via `exec.CommandContext`.
+- stdout JSONL stream is parsed into provider-agnostic events:
+  - assistant text blocks -> `StreamEventDelta`
+  - assistant tool-use blocks -> `StreamEventToolCall`
+  - user tool-result blocks -> `StreamEventToolResult`
+  - result event `result` field -> `StreamEventFinal`
+- if a line is not valid JSON, adapter falls back to treating it as raw delta text.
 - stderr is captured and included in surfaced execution errors.
 
 `Prompt` is a synchronous wrapper over `PromptStream`:
@@ -33,13 +40,11 @@ Implementation location:
 Client appends environment values when configured:
 
 - `AWS_PROFILE=<profile>` when `llm.claude_code.profile` is set.
-- `AWS_REGION` and `AWS_DEFAULT_REGION` when `llm.claude_code.bedrock_region` is set.
-- `LOCALCLAW_GOVCLOUD_MODE=1` when `llm.claude_code.use_govcloud=true`.
+- Other AWS/GovCloud settings are inherited from the parent process environment.
 
 ## Configuration notes
 
-- `llm.provider` is currently constrained to `claudecode`.
-- `llm.claude_code.auth_mode` is validated (`default|aws_profile|bedrock`) but is not yet translated into explicit CLI flags inside this adapter.
+- `llm.provider` supports `claudecode` and `codex`.
 - `localclaw` does not implement direct network model clients.
 
 ## Error behavior
@@ -47,3 +52,4 @@ Client appends environment values when configured:
 - stdout/stderr pipe setup errors are returned immediately.
 - command start failures include context (`start claude code cli: ...`).
 - non-zero exits return wrapped errors and include stderr text when available.
+- `result` events with `is_error=true` are surfaced as adapter errors (even when process exits successfully).

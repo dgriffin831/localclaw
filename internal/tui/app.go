@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,7 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/dgriffin831/localclaw/internal/config"
-	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
+	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/runtime"
 )
@@ -46,19 +49,24 @@ type slashCommandDef struct {
 	Name        string
 	Args        string
 	Description string
+	Shortcut    string
 }
 
 var slashCommandDefs = []slashCommandDef{
 	{Name: "help", Description: "show this help"},
 	{Name: "status", Description: "show current status and session info"},
+	{Name: "tools", Description: "show provider and available localclaw tools", Shortcut: "Ctrl+O"},
 	{Name: "clear", Description: "clear the visible transcript"},
 	{Name: "reset", Description: "reset the current session"},
 	{Name: "new", Description: "start a new session"},
-	{Name: "thinking", Args: "<on|off>", Description: "toggle thinking visibility"},
+	{Name: "thinking", Args: "<on|off>", Description: "toggle thinking visibility", Shortcut: "Ctrl+T"},
 	{Name: "verbose", Args: "<on|off>", Description: "toggle verbose mode"},
+	{Name: "mouse", Args: "<on|off>", Description: "toggle mouse capture (wheel/selection tradeoff)", Shortcut: "Ctrl+Y"},
+	{Name: "shortcuts", Description: "show keyboard shortcuts"},
+	// TODO: Implement /model override plumbing through runtime request options and provider adapters; currently this command is intentionally informational-only.
 	{Name: "model", Args: "<name>", Description: "set model override (not implemented)"},
-	{Name: "exit", Description: "exit the TUI"},
-	{Name: "quit", Description: "alias for /exit"},
+	{Name: "exit", Description: "exit the TUI", Shortcut: "Ctrl+D"},
+	{Name: "quit", Description: "alias for /exit", Shortcut: "Ctrl+D"},
 }
 
 type chatMessage struct {
@@ -67,11 +75,24 @@ type chatMessage struct {
 	RenderMarkdown      bool
 	Streaming           bool
 	ThinkingPlaceholder bool
+	ToolCard            *toolCardMessage
+}
+
+type toolCardMessage struct {
+	CallID    string
+	ToolName  string
+	Ownership string
+	Args      map[string]interface{}
+	HasResult bool
+	OK        bool
+	Status    string
+	Error     string
+	Data      map[string]interface{}
 }
 
 type streamEventMsg struct {
 	RunID int
-	Event claudecode.StreamEvent
+	Event llm.StreamEvent
 	OK    bool
 }
 
@@ -111,15 +132,24 @@ type model struct {
 	showThinking          bool
 	verbose               bool
 	toolsExpanded         bool
+	mouseEnabled          bool
 	thinkingMessages      []string
 	thinkingMessageIdx    int
 	activeThinkingMessage string
+	providerName          string
+	providerModel         string
+	providerTools         []string
+	toolCallOwnershipByID map[string]llm.ToolClass
+	toolCardIndexByCallID map[string]int
+
+	streamDeltaEvents int
+	streamDeltaChars  int
 
 	runSeq             int
 	activeRunID        int
 	activeAssistantIdx int
 	runCancel          context.CancelFunc
-	streamEvents       <-chan claudecode.StreamEvent
+	streamEvents       <-chan llm.StreamEvent
 	streamErrs         <-chan error
 
 	renderer      *glamour.TermRenderer
@@ -138,17 +168,12 @@ type model struct {
 
 var (
 	colorPrimary        = lipgloss.Color("#fab283")
-	colorSecondary      = lipgloss.Color("#5c9cf5")
-	colorAccent         = lipgloss.Color("#9d7cd8")
 	colorError          = lipgloss.Color("#e06c75")
 	colorWarning        = lipgloss.Color("#f5a742")
-	colorSuccess        = lipgloss.Color("#7fd88f")
-	colorInfo           = lipgloss.Color("#56b6c2")
 	colorText           = lipgloss.Color("#eeeeee")
 	colorTextMuted      = lipgloss.Color("#808080")
 	colorBackground     = lipgloss.Color("#0a0a0a")
 	colorBackgroundPane = lipgloss.Color("#141414")
-	colorBackgroundElem = lipgloss.Color("#1e1e1e")
 	colorBorder         = lipgloss.Color("#484848")
 	colorBorderSubtle   = lipgloss.Color("#3c3c3c")
 
@@ -215,7 +240,7 @@ var (
 
 func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	resolution := runtime.ResolveSession("", "")
-	workspacePath := cfg.Workspace.Root
+	workspacePath := cfg.Agents.Defaults.Workspace
 	if app != nil {
 		if resolvedPath, err := app.ResolveWorkspacePath(resolution.AgentID); err == nil {
 			workspacePath = resolvedPath
@@ -231,7 +256,7 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	input.CharLimit = 100000
 	input.Prompt = "❯ "
 	input.SetHeight(1)
-	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter"))
+	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
 
 	focused, blurred := textarea.DefaultStyles()
 	focused.Base = focused.Base.Background(colorBackgroundPane).Foreground(colorText)
@@ -255,21 +280,25 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	vp.MouseWheelEnabled = true
 
 	m := model{
-		ctx:                ctx,
-		app:                app,
-		cfg:                cfg,
-		agentID:            resolution.AgentID,
-		sessionID:          resolution.SessionID,
-		sessionKey:         resolution.SessionKey,
-		workspacePath:      workspacePath,
-		viewport:           vp,
-		input:              input,
-		spinner:            sp,
-		status:             statusIdle,
-		showThinking:       true,
-		historyIdx:         -1,
-		activeAssistantIdx: -1,
-		thinkingMessages:   resolveThinkingMessages(cfg.App.ThinkingMessages),
+		ctx:                   ctx,
+		app:                   app,
+		cfg:                   cfg,
+		agentID:               resolution.AgentID,
+		sessionID:             resolution.SessionID,
+		sessionKey:            resolution.SessionKey,
+		workspacePath:         workspacePath,
+		viewport:              vp,
+		input:                 input,
+		spinner:               sp,
+		status:                statusIdle,
+		showThinking:          true,
+		mouseEnabled:          true,
+		historyIdx:            -1,
+		activeAssistantIdx:    -1,
+		thinkingMessages:      resolveThinkingMessages(cfg.App.ThinkingMessages),
+		providerName:          strings.TrimSpace(cfg.LLM.Provider),
+		toolCallOwnershipByID: map[string]llm.ToolClass{},
+		toolCardIndexByCallID: map[string]int{},
 	}
 	m.addSystem("localclaw ready. Type /help for commands.")
 	if welcome := m.loadWelcomeMessage(); welcome != "" {
@@ -361,6 +390,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+y"))) {
+			m.mouseEnabled = !m.mouseEnabled
+			m.addSystem(fmt.Sprintf("mouse capture: %s", onOff(m.mouseEnabled)))
+			m.refreshViewport(true)
+			if m.mouseEnabled {
+				return m, tea.EnableMouseCellMotion
+			}
+			return m, tea.DisableMouse
+		}
+
 		if msg.Type == tea.KeyShiftTab {
 			if m.moveSlashSelection(-1) {
 				return m, nil
@@ -375,7 +414,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if msg.Type == tea.KeyEnter && !msg.Alt {
+		if msg.Type == tea.KeyEnter && !msg.Alt && !key.Matches(msg, m.input.KeyMap.InsertNewline) {
 			cmd := m.submitInput()
 			return m, cmd
 		}
@@ -400,10 +439,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.moveSlashSelection(-1) {
 				return m, nil
 			}
+			if m.canUseArrowHistory() && m.useHistory(-1) {
+				m.updateSlashAutocomplete()
+				m.adjustInputHeight()
+				return m, nil
+			}
 		}
 
 		if msg.Type == tea.KeyDown {
 			if m.moveSlashSelection(1) {
+				return m, nil
+			}
+			if m.canUseArrowHistory() && m.useHistory(1) {
+				m.updateSlashAutocomplete()
+				m.adjustInputHeight()
 				return m, nil
 			}
 		}
@@ -425,20 +474,101 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !msg.OK {
+			m.addVerbose("stream: event channel closed")
 			m.streamEvents = nil
 			return m, nil
 		}
 
 		switch msg.Event.Type {
-		case claudecode.StreamEventDelta:
+		case llm.StreamEventDelta:
+			m.streamDeltaEvents++
+			m.streamDeltaChars += len(msg.Event.Text)
+			if m.streamDeltaEvents == 1 {
+				m.addVerbose("stream: first delta received")
+			}
 			m.setStatus(statusStreaming)
 			m.hasStreamDelta = true
 			m.applyDelta(msg.Event.Text)
 			m.refreshViewport(true)
-		case claudecode.StreamEventFinal:
+		case llm.StreamEventFinal:
 			m.applyFinal(msg.Event.Text)
+			m.addVerbose("stream: final received delta_events=%d delta_chars=%d final_chars=%d", m.streamDeltaEvents, m.streamDeltaChars, len(strings.TrimSpace(msg.Event.Text)))
 			m.finishRun(statusIdle)
 			m.refreshViewport(true)
+		case llm.StreamEventToolCall:
+			toolName := "tool"
+			toolClass := llm.ToolClassUnspecified
+			callID := ""
+			args := map[string]interface{}{}
+			if msg.Event.ToolCall != nil && strings.TrimSpace(msg.Event.ToolCall.Name) != "" {
+				toolName = msg.Event.ToolCall.Name
+			}
+			if msg.Event.ToolCall != nil {
+				toolClass = msg.Event.ToolCall.Class
+				class := string(msg.Event.ToolCall.Class)
+				if class == "" {
+					class = "unspecified"
+				}
+				callID = strings.TrimSpace(msg.Event.ToolCall.ID)
+				if callID != "" {
+					m.toolCallOwnershipByID[callID] = toolClass
+				}
+				displayCallID := callID
+				if displayCallID == "" {
+					displayCallID = "n/a"
+				}
+				args = copyInterfaceMap(msg.Event.ToolCall.Args)
+				m.addVerbose("tool call details: id=%s class=%s args=%s", displayCallID, class, summarizeVerboseMap(msg.Event.ToolCall.Args))
+			}
+			ownership := toolOwnershipLabel(toolClass)
+			m.setStatus(fmt.Sprintf("tool [%s] %s", ownership, toolName))
+			m.recordToolCallCard(callID, toolName, ownership, args)
+			m.refreshViewport(true)
+		case llm.StreamEventToolResult:
+			if msg.Event.ToolResult != nil {
+				toolName := msg.Event.ToolResult.Tool
+				toolClass := msg.Event.ToolResult.Class
+				callID := strings.TrimSpace(msg.Event.ToolResult.CallID)
+				if toolClass == llm.ToolClassUnspecified && callID != "" {
+					toolClass = m.toolCallOwnershipByID[callID]
+				}
+				if callID != "" {
+					delete(m.toolCallOwnershipByID, callID)
+				}
+				if toolName == "" && msg.Event.ToolCall != nil {
+					toolName = msg.Event.ToolCall.Name
+				}
+				ownership := toolOwnershipLabel(toolClass)
+				m.recordToolResultCard(callID, toolName, ownership, msg.Event.ToolResult)
+				if callID == "" {
+					callID = "n/a"
+				}
+				status := strings.TrimSpace(msg.Event.ToolResult.Status)
+				if status == "" {
+					status = "n/a"
+				}
+				errText := strings.TrimSpace(msg.Event.ToolResult.Error)
+				if errText == "" {
+					errText = "none"
+				}
+				m.addVerbose("tool result details: call_id=%s tool=%s ok=%t status=%s error=%s data_keys=%s", callID, toolName, msg.Event.ToolResult.OK, status, truncateVerboseText(errText), summarizeVerboseKeys(msg.Event.ToolResult.Data))
+			}
+			if m.running {
+				m.setStatus(statusWaiting)
+			}
+			m.refreshViewport(true)
+		case llm.StreamEventProviderMetadata:
+			if msg.Event.ProviderMetadata != nil {
+				metadata := msg.Event.ProviderMetadata
+				if provider := strings.TrimSpace(metadata.Provider); provider != "" {
+					m.providerName = provider
+				}
+				if model := strings.TrimSpace(metadata.Model); model != "" {
+					m.providerModel = model
+				}
+				m.providerTools = normalizeProviderToolList(metadata.Tools)
+				m.addVerbose("provider metadata: provider=%s model=%s tools=%s", valueOrDefault(strings.TrimSpace(m.providerName), "n/a"), valueOrDefault(strings.TrimSpace(m.providerModel), "n/a"), summarizeVerboseList(m.providerTools))
+			}
 		}
 
 		if m.streamEvents != nil {
@@ -450,10 +580,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if !msg.OK {
+			m.addVerbose("stream: error channel closed")
 			m.streamErrs = nil
 			return m, nil
 		}
 		if msg.Err != nil {
+			m.addVerbose("stream: error=%s", truncateVerboseText(msg.Err.Error()))
 			m.addSystem(fmt.Sprintf("prompt error: %v", msg.Err))
 			m.finishRun(statusError)
 			m.refreshViewport(true)
@@ -529,14 +661,15 @@ func (m *model) statusView() string {
 		base = m.currentThinkingMessage()
 	}
 	settings := fmt.Sprintf(
-		"thinking:%s  verbose:%s  tools:%s  /status",
+		"thinking:%s  verbose:%s  tools:%s  mouse:%s  /status",
 		onOff(m.showThinking),
 		onOff(m.verbose),
 		mapBool(m.toolsExpanded, "expanded", "collapsed"),
+		onOff(m.mouseEnabled),
 	)
 	innerWidth := panelInnerWidth(m.width)
 	if innerWidth < 70 {
-		settings = fmt.Sprintf("t:%s v:%s /status", onOff(m.showThinking), onOff(m.verbose))
+		settings = fmt.Sprintf("t:%s v:%s m:%s /status", onOff(m.showThinking), onOff(m.verbose), onOff(m.mouseEnabled))
 	}
 	if innerWidth < 42 {
 		settings = "/status"
@@ -553,12 +686,15 @@ func (m *model) statusView() string {
 }
 
 func (m *model) inputView() string {
-	hintText := "Enter send • Tab autocomplete • Alt+Enter newline • Ctrl+T thinking • /help"
+	hintText := "Ctrl+J newline • Ctrl+Y mouse • Ctrl+O tools • Ctrl+T thinking • /shortcuts"
+	if panelInnerWidth(m.width) < 90 {
+		hintText = "Ctrl+J newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
+	}
 	if panelInnerWidth(m.width) < 70 {
-		hintText = "Enter send • Tab autocomplete • Alt+Enter newline • /help"
+		hintText = "Ctrl+J newline • Ctrl+Y mouse • /shortcuts"
 	}
 	if panelInnerWidth(m.width) < 42 {
-		hintText = "Enter send • Tab complete • /help"
+		hintText = "Ctrl+J • /shortcuts"
 	}
 	hint := inputHintStyle.Render(truncateText(hintText, panelInnerWidth(m.width)))
 	body := m.input.View()
@@ -647,10 +783,15 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 	switch name {
 	case "help":
 		m.addSystem(slashHelpText())
+	case "shortcuts":
+		m.addSystem(keyboardShortcutsText())
 	case "status":
-		m.addSystem(fmt.Sprintf("status=%s model=%s agent=%s session=%s workspace=%s thinking=%s verbose=%s", m.status, m.cfg.LLM.Provider, m.agentID, m.sessionID, m.workspacePath, onOff(m.showThinking), onOff(m.verbose)))
+		m.addSystem(fmt.Sprintf("status=%s model=%s agent=%s session=%s workspace=%s thinking=%s verbose=%s mouse=%s", m.status, m.cfg.LLM.Provider, m.agentID, m.sessionID, m.workspacePath, onOff(m.showThinking), onOff(m.verbose), onOff(m.mouseEnabled)))
+	case "tools":
+		m.addSystem(m.toolsSummary())
 	case "clear":
 		m.messages = nil
+		resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 	case "reset":
 		m.runSessionReset(false, "/reset")
 	case "new":
@@ -678,10 +819,25 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 		} else {
 			m.addSystem("usage: /verbose <on|off>")
 		}
+	case "mouse":
+		if arg == "on" {
+			m.mouseEnabled = true
+			m.addSystem("mouse capture: on")
+			m.refreshViewport(true)
+			return tea.EnableMouseCellMotion
+		} else if arg == "off" {
+			m.mouseEnabled = false
+			m.addSystem("mouse capture: off")
+			m.refreshViewport(true)
+			return tea.DisableMouse
+		} else {
+			m.addSystem("usage: /mouse <on|off>")
+		}
 	case "model":
 		if strings.TrimSpace(arg) == "" {
 			m.addSystem("usage: /model <name>")
 		} else {
+			// TODO: Persist requested model override in TUI state and propagate it into runtime prompt requests instead of returning this placeholder message.
 			m.addSystem(fmt.Sprintf("model override is not implemented yet (%s)", arg))
 		}
 	default:
@@ -689,6 +845,98 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 	}
 	m.refreshViewport(true)
 	return nil
+}
+
+func (m *model) toolsSummary() string {
+	provider := strings.TrimSpace(m.providerName)
+	if provider == "" {
+		provider = strings.TrimSpace(m.cfg.LLM.Provider)
+	}
+	if provider == "" {
+		provider = "unknown"
+	}
+
+	lines := []string{fmt.Sprintf("provider=%s", provider)}
+	if strings.TrimSpace(m.providerModel) != "" {
+		lines = append(lines, "provider model: "+m.providerModel)
+	}
+
+	lines = append(lines, "provider_native:")
+	if len(m.providerTools) == 0 {
+		lines = append(lines, "- not discovered yet")
+	} else {
+		lines = append(lines, "- "+strings.Join(m.providerTools, ", "))
+	}
+
+	lines = append(lines, "localclaw_mcp:")
+
+	if m.app == nil {
+		lines = append(lines, "- runtime unavailable")
+		return strings.Join(lines, "\n")
+	}
+
+	tools := m.app.ToolDefinitions(m.agentID)
+	if len(tools) == 0 {
+		lines = append(lines, "- none enabled")
+		return strings.Join(lines, "\n")
+	}
+
+	parts := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		parts = append(parts, tool.Name)
+	}
+	lines = append(lines, "- "+strings.Join(parts, ", "))
+	return strings.Join(lines, "\n")
+}
+
+func toolOwnershipLabel(class llm.ToolClass) string {
+	switch class {
+	case llm.ToolClassDelegated:
+		return "provider_native"
+	case llm.ToolClassLocal:
+		return "localclaw_mcp"
+	default:
+		return "unspecified"
+	}
+}
+
+func resetToolCallOwnershipByID(values map[string]llm.ToolClass) {
+	for id := range values {
+		delete(values, id)
+	}
+}
+
+func resetToolCardIndexByCallID(values map[string]int) {
+	for id := range values {
+		delete(values, id)
+	}
+}
+
+func normalizeProviderToolList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]string{}
+	for _, raw := range values {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = name
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for _, name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func parseSlash(raw string) (string, string) {
@@ -776,7 +1024,7 @@ func (m *model) slashMenuView() string {
 	lines := make([]string, 0, limit+1)
 	for i := 0; i < limit; i++ {
 		cmd := m.slashMatches[i]
-		line := fmt.Sprintf("%-22s %s", formatSlashUsage(cmd), cmd.Description)
+		line := formatSlashMenuLine(cmd)
 		prefix := "  "
 		style := slashMenuItemStyle
 		if i == m.slashSelected {
@@ -846,9 +1094,40 @@ func slashHelpText() string {
 	lines := make([]string, 0, len(slashCommandDefs)+1)
 	lines = append(lines, "slash commands:")
 	for _, cmd := range slashCommandDefs {
-		lines = append(lines, fmt.Sprintf("%-22s %s", formatSlashUsage(cmd), cmd.Description))
+		lines = append(lines, formatSlashMenuLine(cmd))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func keyboardShortcutsText() string {
+	lines := []string{
+		"keyboard shortcuts:",
+		"Enter                  submit input",
+		"Ctrl+J                 insert newline",
+		"Tab                    autocomplete selected slash command",
+		"Shift+Tab              move slash-command selection backward",
+		"Up/Down                navigate slash menu; when hidden, use history after non-empty draft",
+		"Ctrl+P / Ctrl+N        navigate prompt history",
+		"Alt+Up / Alt+Down      history navigation aliases",
+		"Mouse wheel            scroll transcript viewport",
+		"Esc                    abort active run",
+		"Ctrl+T                 toggle thinking visibility",
+		"Ctrl+O                 toggle tool-card expansion",
+		"Ctrl+Y                 toggle mouse capture",
+		"Ctrl+C                 clear input (press twice quickly to exit)",
+		"Ctrl+D                 exit when input is empty",
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatSlashMenuLine(cmd slashCommandDef) string {
+	usage := formatSlashUsage(cmd)
+	desc := strings.TrimSpace(cmd.Description)
+	shortcut := strings.TrimSpace(cmd.Shortcut)
+	if shortcut == "" {
+		return fmt.Sprintf("%-22s %s", usage, desc)
+	}
+	return fmt.Sprintf("%-22s %-52s %s", usage, desc, shortcut)
 }
 
 func formatSlashUsage(cmd slashCommandDef) string {
@@ -863,19 +1142,37 @@ func formatSlashInput(cmd slashCommandDef) string {
 }
 
 func (m *model) startRun(input string) {
+	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
 	m.runSeq++
 	m.activeRunID = m.runSeq
 	m.running = true
 	m.hasStreamDelta = false
+	m.streamDeltaEvents = 0
+	m.streamDeltaChars = 0
 	m.activeAssistantIdx = -1
 	m.activeThinkingMessage = m.nextThinkingMessage()
 	m.setStatus(statusSending)
+	m.emitVerboseRunStartDiagnostics(input)
 
 	m.addUser(input)
+	if m.app == nil {
+		m.addSystem("runtime unavailable")
+		m.finishRun(statusError)
+		return
+	}
+
+	userTokenDelta := memory.EstimateTokensFromText(input)
 	if m.app != nil {
-		_ = m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, memory.EstimateTokensFromText(input))
-		_ = m.app.AppendSessionTranscriptMessage(m.ctx, m.agentID, m.sessionID, "user", input)
+		if err := m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, userTokenDelta); err != nil {
+			m.addVerbose("transcript write: role=user token_update_error=%s", truncateVerboseText(err.Error()))
+		}
+		if err := m.app.AppendSessionTranscriptMessage(m.ctx, m.agentID, m.sessionID, "user", input); err != nil {
+			m.addVerbose("transcript write: role=user append_error=%s", truncateVerboseText(err.Error()))
+		} else {
+			m.addVerbose("transcript write: role=user chars=%d tokens=%d", len(strings.TrimSpace(input)), userTokenDelta)
+		}
 		m.app.RunMemoryFlushIfNeededAsync(m.ctx, m.agentID, m.sessionID)
+		m.addVerbose("runtime: memory flush check queued")
 	}
 
 	runCtx, cancel := context.WithCancel(m.ctx)
@@ -888,6 +1185,8 @@ func (m *model) finishRun(finalStatus string) {
 	m.running = false
 	m.setStatus(finalStatus)
 	m.activeThinkingMessage = ""
+	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
+	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 	m.activeRunID = 0
 	m.activeAssistantIdx = -1
 	m.streamEvents = nil
@@ -903,6 +1202,8 @@ func (m *model) abortRun(message string) {
 		m.runCancel()
 		m.runCancel = nil
 	}
+	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
+	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 	if m.running {
 		m.running = false
 		m.activeRunID = 0
@@ -942,8 +1243,15 @@ func (m *model) applyFinal(final string) {
 		msg.Raw = "(no output)"
 	}
 	if m.app != nil {
-		_ = m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, memory.EstimateTokensFromText(msg.Raw))
-		_ = m.app.AppendSessionTranscriptMessage(m.ctx, m.agentID, m.sessionID, "assistant", msg.Raw)
+		assistantTokenDelta := memory.EstimateTokensFromText(msg.Raw)
+		if err := m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, assistantTokenDelta); err != nil {
+			m.addVerbose("transcript write: role=assistant token_update_error=%s", truncateVerboseText(err.Error()))
+		}
+		if err := m.app.AppendSessionTranscriptMessage(m.ctx, m.agentID, m.sessionID, "assistant", msg.Raw); err != nil {
+			m.addVerbose("transcript write: role=assistant append_error=%s", truncateVerboseText(err.Error()))
+		} else {
+			m.addVerbose("transcript write: role=assistant chars=%d tokens=%d", len(strings.TrimSpace(msg.Raw)), assistantTokenDelta)
+		}
 	}
 	msg.Streaming = false
 	msg.ThinkingPlaceholder = false
@@ -963,6 +1271,7 @@ func (m *model) runSessionReset(startNew bool, source string) {
 		m.sessionKey = next.SessionKey
 	}
 	m.messages = nil
+	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 	if startNew {
 		m.addSystem(fmt.Sprintf("started new session %s", m.sessionID))
 		if welcome := m.loadWelcomeMessage(); welcome != "" {
@@ -1010,6 +1319,88 @@ func (m *model) addAssistant(text string, thinkingPlaceholder bool) {
 	m.activeAssistantIdx = len(m.messages) - 1
 }
 
+func (m *model) recordToolCallCard(callID, toolName, ownership string, args map[string]interface{}) {
+	card := &toolCardMessage{
+		CallID:    strings.TrimSpace(callID),
+		ToolName:  valueOrDefault(strings.TrimSpace(toolName), "tool"),
+		Ownership: valueOrDefault(strings.TrimSpace(ownership), "unspecified"),
+		Args:      copyInterfaceMap(args),
+	}
+	idx := m.appendToolCard(card)
+	if card.CallID != "" {
+		m.toolCardIndexByCallID[card.CallID] = idx
+	}
+}
+
+func (m *model) recordToolResultCard(callID, toolName, ownership string, result *llm.ToolResult) {
+	if result == nil {
+		return
+	}
+	targetIdx := -1
+	trimmedCallID := strings.TrimSpace(callID)
+	if trimmedCallID != "" {
+		if idx, ok := m.toolCardIndexByCallID[trimmedCallID]; ok && idx >= 0 && idx < len(m.messages) && m.messages[idx].ToolCard != nil {
+			targetIdx = idx
+		}
+		delete(m.toolCardIndexByCallID, trimmedCallID)
+	}
+	if targetIdx == -1 {
+		targetIdx = m.findOpenToolCardIndex(toolName)
+	}
+	if targetIdx == -1 {
+		targetIdx = m.appendToolCard(&toolCardMessage{})
+	}
+	card := m.messages[targetIdx].ToolCard
+	if card == nil {
+		return
+	}
+	if card.CallID == "" {
+		card.CallID = trimmedCallID
+	}
+	if strings.TrimSpace(toolName) != "" {
+		card.ToolName = strings.TrimSpace(toolName)
+	}
+	if strings.TrimSpace(ownership) != "" {
+		card.Ownership = strings.TrimSpace(ownership)
+	}
+	if strings.TrimSpace(card.ToolName) == "" {
+		card.ToolName = "tool"
+	}
+	if strings.TrimSpace(card.Ownership) == "" {
+		card.Ownership = "unspecified"
+	}
+	card.HasResult = true
+	card.OK = result.OK
+	card.Status = strings.TrimSpace(result.Status)
+	card.Error = strings.TrimSpace(result.Error)
+	card.Data = copyInterfaceMap(result.Data)
+}
+
+func (m *model) appendToolCard(card *toolCardMessage) int {
+	if card == nil {
+		card = &toolCardMessage{}
+	}
+	m.messages = append(m.messages, chatMessage{
+		Role:     roleSystem,
+		ToolCard: card,
+	})
+	return len(m.messages) - 1
+}
+
+func (m *model) findOpenToolCardIndex(toolName string) int {
+	targetName := strings.TrimSpace(toolName)
+	for idx := len(m.messages) - 1; idx >= 0; idx-- {
+		card := m.messages[idx].ToolCard
+		if card == nil || card.HasResult {
+			continue
+		}
+		if targetName == "" || strings.EqualFold(strings.TrimSpace(card.ToolName), targetName) {
+			return idx
+		}
+	}
+	return -1
+}
+
 func (m *model) refreshViewport(forceBottom bool) {
 	if m.viewport.Width <= 0 {
 		return
@@ -1036,13 +1427,15 @@ func (m *model) renderTranscript() string {
 	blocks := make([]string, 0, len(m.messages))
 	for _, msg := range m.messages {
 		text := strings.TrimSpace(msg.Raw)
-		if text == "" {
+		if text == "" && msg.ToolCard == nil {
 			continue
 		}
 
 		switch msg.Role {
 		case roleSystem:
-			if msg.RenderMarkdown {
+			if msg.ToolCard != nil {
+				blocks = append(blocks, systemStyle.Render(m.renderToolCard(msg.ToolCard, m.toolsExpanded)))
+			} else if msg.RenderMarkdown {
 				rendered := m.renderMarkdown(text, contentWidth-3)
 				blocks = append(blocks, systemStyle.Render(rendered))
 			} else {
@@ -1060,6 +1453,171 @@ func (m *model) renderTranscript() string {
 	return strings.Join(blocks, "\n\n")
 }
 
+func (m *model) renderToolCard(card *toolCardMessage, expanded bool) string {
+	if card == nil {
+		return ""
+	}
+	toolName := valueOrDefault(strings.TrimSpace(card.ToolName), "tool")
+	ownership := valueOrDefault(strings.TrimSpace(card.Ownership), "unspecified")
+	status := resolveToolCardStatus(card)
+	header := fmt.Sprintf("tool [%s] %s • %s", ownership, toolName, status)
+	if !expanded {
+		return header
+	}
+	lines := []string{
+		header,
+		"call_id: " + valueOrDefault(strings.TrimSpace(card.CallID), "n/a"),
+	}
+	argLines := formatToolCardMap("arg.", card.Args)
+	if len(argLines) == 0 {
+		lines = append(lines, "arg: none")
+	} else {
+		lines = append(lines, argLines...)
+	}
+	lines = append(lines, "status: "+status)
+	if card.HasResult {
+		if strings.TrimSpace(card.Error) != "" {
+			lines = append(lines, "error: "+truncateToolCardText(card.Error))
+		}
+		dataLines := formatToolCardData(card.Data)
+		if len(dataLines) == 0 {
+			lines = append(lines, "data: none")
+		} else {
+			lines = append(lines, dataLines...)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func resolveToolCardStatus(card *toolCardMessage) string {
+	if card == nil || !card.HasResult {
+		return "running"
+	}
+	switch strings.ToLower(strings.TrimSpace(card.Status)) {
+	case "completed":
+		return "completed"
+	case "blocked":
+		return "blocked"
+	case "failed", "error", "cancelled", "canceled":
+		return "failed"
+	}
+	if card.OK {
+		return "completed"
+	}
+	return "failed"
+}
+
+func copyInterfaceMap(values map[string]interface{}) map[string]interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func formatToolCardMap(prefix string, values map[string]interface{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%s%s: %s", prefix, key, truncateToolCardText(fmt.Sprint(values[key]))))
+	}
+	return lines
+}
+
+func formatToolCardData(values map[string]interface{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if key == "provider_result" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if key == "content" {
+			lines = append(lines, formatToolCardContentBlock("data.content", values[key])...)
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("data.%s: %s", key, truncateToolCardText(fmt.Sprint(values[key]))))
+	}
+	return lines
+}
+
+func formatToolCardContentBlock(label string, raw interface{}) []string {
+	language, content := formatToolCardContent(raw)
+	lines := []string{label + ":"}
+	fence := "```"
+	if language != "" {
+		fence += language
+	}
+	lines = append(lines, fence)
+	if content == "" {
+		lines = append(lines, "(empty)")
+	} else {
+		lines = append(lines, content)
+	}
+	lines = append(lines, "```")
+	return lines
+}
+
+func formatToolCardContent(raw interface{}) (language string, content string) {
+	switch value := raw.(type) {
+	case nil:
+		return "", ""
+	case string:
+		if pretty, ok := prettyToolCardJSON(value); ok {
+			return "json", pretty
+		}
+		return "", strings.TrimRight(value, "\n")
+	default:
+		if marshaled, err := json.MarshalIndent(value, "", "  "); err == nil {
+			return "json", string(marshaled)
+		}
+		text := fmt.Sprint(value)
+		if pretty, ok := prettyToolCardJSON(text); ok {
+			return "json", pretty
+		}
+		return "", strings.TrimRight(text, "\n")
+	}
+}
+
+func prettyToolCardJSON(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || !json.Valid([]byte(trimmed)) {
+		return "", false
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, []byte(trimmed), "", "  "); err != nil {
+		return "", false
+	}
+	return buf.String(), true
+}
+
+func truncateToolCardText(value string) string {
+	normalized := strings.TrimSpace(strings.Join(strings.Fields(value), " "))
+	if normalized == "" {
+		return "(empty)"
+	}
+	if len(normalized) <= 180 {
+		return normalized
+	}
+	return normalized[:177] + "..."
+}
+
 func (m *model) renderMarkdown(input string, width int) string {
 	if strings.TrimSpace(input) == "" {
 		return ""
@@ -1071,7 +1629,7 @@ func (m *model) renderMarkdown(input string, width int) string {
 	if m.renderer == nil || m.rendererWidth != width {
 		renderer, err := glamour.NewTermRenderer(
 			glamour.WithWordWrap(width),
-			glamour.WithStyles(opencodeMarkdownStyles()),
+			glamour.WithStyles(localclawMarkdownStyles()),
 		)
 		if err != nil {
 			return input
@@ -1142,6 +1700,13 @@ func (m *model) useHistory(direction int) bool {
 	return true
 }
 
+func (m *model) canUseArrowHistory() bool {
+	if m.historyIdx != -1 {
+		return true
+	}
+	return m.input.Value() != ""
+}
+
 func (m *model) isBusy() bool {
 	return m.status == statusSending || m.status == statusWaiting || m.status == statusStreaming
 }
@@ -1162,7 +1727,7 @@ func (m *model) setStatus(next string) {
 	m.statusStartedAt = time.Time{}
 }
 
-func waitStreamEvent(runID int, ch <-chan claudecode.StreamEvent) tea.Cmd {
+func waitStreamEvent(runID int, ch <-chan llm.StreamEvent) tea.Cmd {
 	return func() tea.Msg {
 		evt, ok := <-ch
 		return streamEventMsg{RunID: runID, Event: evt, OK: ok}
@@ -1215,6 +1780,78 @@ func (m *model) currentThinkingMessage() string {
 		return m.thinkingMessages[0]
 	}
 	return "thinking"
+}
+
+func (m *model) addVerbose(format string, args ...interface{}) {
+	if !m.verbose {
+		return
+	}
+	m.addSystem("[verbose] " + fmt.Sprintf(format, args...))
+}
+
+func (m *model) emitVerboseRunStartDiagnostics(input string) {
+	lineCount := strings.Count(input, "\n") + 1
+	m.addVerbose("prompt: chars=%d lines=%d session=%s", len(strings.TrimSpace(input)), lineCount, m.sessionKey)
+	if m.app == nil {
+		m.addVerbose("runtime: unavailable")
+		return
+	}
+	tools := m.app.ToolDefinitions(m.agentID)
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	m.addVerbose("runtime: agent=%s workspace=%s local_tools=%s", m.agentID, formatWorkspacePath(m.workspacePath), summarizeVerboseList(names))
+}
+
+func summarizeVerboseMap(values map[string]interface{}) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", key, truncateVerboseText(fmt.Sprint(values[key]))))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func summarizeVerboseKeys(values map[string]interface{}) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+func summarizeVerboseList(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	return truncateVerboseText(strings.Join(values, ", "))
+}
+
+func truncateVerboseText(value string) string {
+	trimmed := strings.TrimSpace(strings.Join(strings.Fields(value), " "))
+	if len(trimmed) <= 80 {
+		return trimmed
+	}
+	return trimmed[:77] + "..."
+}
+
+func valueOrDefault(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func onOff(v bool) string {
@@ -1317,7 +1954,7 @@ func truncateText(s string, width int) string {
 	return b.String() + "…"
 }
 
-func opencodeMarkdownStyles() ansi.StyleConfig {
+func localclawMarkdownStyles() ansi.StyleConfig {
 	return ansi.StyleConfig{
 		Document: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{Color: strPtr("#eeeeee")},
@@ -1356,10 +1993,12 @@ func opencodeMarkdownStyles() ansi.StyleConfig {
 			LevelIndent: 2,
 		},
 		Item: ansi.StylePrimitive{
-			Color: strPtr("#fab283"),
+			BlockPrefix: "• ",
+			Color:       strPtr("#fab283"),
 		},
 		Enumeration: ansi.StylePrimitive{
-			Color: strPtr("#56b6c2"),
+			BlockPrefix: ". ",
+			Color:       strPtr("#56b6c2"),
 		},
 		Link: ansi.StylePrimitive{
 			Color:     strPtr("#fab283"),

@@ -10,7 +10,8 @@ Supported command modes:
 
 - `check` (default): runs startup initialization checks, then verifies resolved workspace and session-store paths.
 - `tui`: runs startup initialization, then starts Bubble Tea UI.
-- `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`).
+- `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`, `grep`).
+- `mcp`: runs startup initialization, then serves stdio JSON-RPC MCP requests (`serve` subcommand).
 
 Examples:
 
@@ -21,6 +22,8 @@ go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
+go run ./cmd/localclaw memory grep "incident-1234"
+go run ./cmd/localclaw mcp serve
 ```
 
 ## Runtime construction
@@ -38,7 +41,7 @@ go run ./cmd/localclaw memory search "incident summary"
 - runtime tool registry (`internal/skills` + `internal/runtime/tools.go`)
 - cron scheduler and heartbeat monitor
 - channel adapters (`slack`, `signal`)
-- Claude Code CLI client (`internal/llm/claudecode`)
+- provider-agnostic LLM client contract (`internal/llm`) with Claude Code CLI adapter (`internal/llm/claudecode`)
 
 ## Startup lifecycle
 
@@ -59,40 +62,55 @@ Any step failure aborts startup with wrapped context.
 Runtime exposes session-default and session-explicit prompt paths:
 
 - `Prompt(ctx, input) (string, error)`
-- `PromptStream(ctx, input) (<-chan claudecode.StreamEvent, <-chan error)`
+- `PromptStream(ctx, input) (<-chan llm.StreamEvent, <-chan error)`
 - `PromptForSession(ctx, agentID, sessionID, input)`
 - `PromptStreamForSession(ctx, agentID, sessionID, input)`
 
-Prompt assembly (`buildPromptInput`) behavior:
+Prompt assembly (`buildPromptRequest`) behavior:
 
 - Resolves `agentID/sessionID` into stable `session_key`.
 - Injects workspace bootstrap context on first prompt in a session.
 - Re-injects bootstrap context after compaction count increases.
-- Injects memory recall policy + tool schema when memory tools are enabled.
-- Appends the original user input under `User input:`.
+- Injects a localclaw-authored skills block from workspace skill snapshots.
+
+Provider compatibility:
+
+- Runtime requires provider support for request options (`llm.RequestClient` + `SupportsRequestOptions=true`).
+- If request options are unavailable, runtime returns an error instead of falling back to prompt-string compatibility mode.
+
+MCP-first hard cutover:
+
+- Runtime no longer intercepts or executes provider-emitted structured `tool_call` events in the prompt stream path.
+- `PromptStreamForSession` forwards provider stream events directly.
+- Provider-native and localclaw MCP execution happens provider-side; runtime remains local-only orchestrator and transcript/session manager.
 
 ## Runtime tools
-
-Runtime tool execution surface:
-
-- `ToolDefinitions(agentID)`
-- `ExecuteTool(ctx, ToolExecutionRequest)`
 
 Supported tools:
 
 - `memory_search`
+- `memory_grep`
 - `memory_get`
+
+Retrieval model details and migration notes are documented in `docs/MEMORY.md`.
 
 Tool enablement:
 
-- Controlled by resolved `memorySearch.enabled` for the agent.
+- Controlled by resolved `memory.enabled` and `memory.tools.{search,get,grep}` for the agent.
 - Disabled tools return graceful error payloads instead of panics.
+- `ToolDefinitions(agentID)` only reports locally available memory tools for UI/status surfaces.
+
+Skills snapshot behavior:
+
+- Runtime loads workspace skills from `skills/<name>/SKILL.md`.
+- Snapshot prompt blocks are cached per session key.
+- Snapshot cache refreshes when session compaction count increases or session resets.
 
 Tool manager construction:
 
 - Uses resolved workspace path and session-root path.
-- Resolves SQLite store path from `state.root` + `memorySearch.store.path`.
-- Uses `memory.SQLiteIndexManager` for sync/search/get operations.
+- Resolves SQLite store path from `app.root` + `memory.store.path`.
+- Uses `memory.SQLiteIndexManager` for sync/search/get/grep operations.
 
 ## Session helpers and lifecycle hooks
 
@@ -119,7 +137,7 @@ Memory flush behavior:
 - OS signals (`SIGINT`, `SIGTERM`) cancel root context.
 - TUI `Esc` cancels active run context.
 - Claude CLI invocation uses `exec.CommandContext`, so cancellation terminates subprocesses.
-- Tool failures are returned as structured errors in `ToolExecutionResult`.
+- MCP tool failures are returned from MCP handlers as structured tool errors.
 
 ## Extension rules
 

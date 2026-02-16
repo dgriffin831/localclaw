@@ -136,20 +136,87 @@ func TestRunMemorySearchRequiresQuery(t *testing.T) {
 	}
 }
 
+func TestRunMemoryGrepJSONReturnsMatches(t *testing.T) {
+	ctx := context.Background()
+	cfg, app, workspace := newTestApp(t, []string{"memory"})
+
+	if err := os.WriteFile(filepath.Join(workspace, "MEMORY.md"), []byte("token-123 appears once\nline two"), 0o600); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := RunMemoryCommand(ctx, cfg, app, []string{"index"}, &stdout, &stderr); err != nil {
+		t.Fatalf("index before grep: %v (stderr=%q)", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := RunMemoryCommand(ctx, cfg, app, []string{"grep", "token-123", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("memory grep: %v (stderr=%q)", err, stderr.String())
+	}
+
+	var payload grepOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode grep json: %v\noutput=%s", err, stdout.String())
+	}
+	if payload.Count == 0 {
+		t.Fatalf("expected grep count field")
+	}
+	if payload.Mode != "literal" {
+		t.Fatalf("expected default mode literal, got %q", payload.Mode)
+	}
+	if payload.Source != "all" {
+		t.Fatalf("expected default source all, got %q", payload.Source)
+	}
+	if payload.MaxMatches != 50 {
+		t.Fatalf("expected default maxMatches=50, got %d", payload.MaxMatches)
+	}
+	if payload.ContextLines != 0 {
+		t.Fatalf("expected default contextLines=0, got %d", payload.ContextLines)
+	}
+}
+
+func TestRunMemoryStatusJSONOmitsEmbeddingAndVectorFields(t *testing.T) {
+	ctx := context.Background()
+	cfg, app, _ := newTestApp(t, []string{"memory"})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := RunMemoryCommand(ctx, cfg, app, []string{"status", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run memory status: %v (stderr=%q)", err, stderr.String())
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode status json: %v\noutput=%s", err, stdout.String())
+	}
+	if _, ok := payload["provider"]; ok {
+		t.Fatalf("did not expect provider field in v2 status output")
+	}
+	if _, ok := payload["fallback"]; ok {
+		t.Fatalf("did not expect fallback field in v2 status output")
+	}
+	features, ok := payload["features"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected features object")
+	}
+	if _, ok := features["vectorEnabled"]; ok {
+		t.Fatalf("did not expect features.vectorEnabled in v2 status output")
+	}
+	if _, ok := features["embeddingCacheEnabled"]; ok {
+		t.Fatalf("did not expect features.embeddingCacheEnabled in v2 status output")
+	}
+}
+
 func newTestApp(t *testing.T, sources []string) (config.Config, *runtime.App, string) {
 	t.Helper()
 
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
-	cfg.Agents.Defaults.MemorySearch.Sources = sources
-	cfg.Agents.Defaults.MemorySearch.Provider = "none"
-	cfg.Agents.Defaults.MemorySearch.Fallback = "none"
-	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
-	cfg.Agents.Defaults.MemorySearch.Store.Vector.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Cache.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Query.Hybrid.Enabled = false
+	cfg.Agents.Defaults.Memory.Sources = sources
+	cfg.Agents.Defaults.Memory.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
 	cfg.Heartbeat.Enabled = false
 	cfg.Cron.Enabled = false
 

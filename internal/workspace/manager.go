@@ -81,9 +81,6 @@ func NewLocalManager(settings Settings) *LocalManager {
 		normalizedID := normalizeAgentID(agentID)
 		normalizedAgentWorkspaces[normalizedID] = workspacePath
 	}
-	if normalizedAgentWorkspaces == nil {
-		normalizedAgentWorkspaces = map[string]string{}
-	}
 	settings.AgentWorkspaces = normalizedAgentWorkspaces
 	return &LocalManager{
 		root:     settings.DefaultWorkspace,
@@ -225,7 +222,10 @@ func (m *LocalManager) LoadBootstrapFiles(ctx context.Context, agentID, sessionK
 
 	for _, name := range []string{"MEMORY.md", "memory.md"} {
 		path := filepath.Join(workspacePath, name)
-		if _, err := os.Stat(path); err == nil {
+		if info, err := os.Stat(path); err == nil {
+			if alreadyLoadedBootstrapFile(path, info, files) {
+				continue
+			}
 			file, err := loadBootstrapFile(path, name)
 			if err != nil {
 				return nil, err
@@ -238,6 +238,25 @@ func (m *LocalManager) LoadBootstrapFiles(ctx context.Context, agentID, sessionK
 	}
 
 	return files, nil
+}
+
+func alreadyLoadedBootstrapFile(path string, info os.FileInfo, files []BootstrapFile) bool {
+	if info == nil {
+		return false
+	}
+	for _, file := range files {
+		if file.Missing || strings.TrimSpace(file.Path) == "" {
+			continue
+		}
+		existingInfo, err := os.Stat(file.Path)
+		if err == nil && os.SameFile(existingInfo, info) {
+			return true
+		}
+		if strings.EqualFold(filepath.Clean(file.Path), filepath.Clean(path)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *LocalManager) Root() string {

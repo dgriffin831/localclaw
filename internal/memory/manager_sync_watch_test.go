@@ -19,7 +19,6 @@ func TestSQLiteIndexManagerWatchSyncMarksDirtyAndTriggersSync(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   2,
 		ChunkOverlap:  1,
-		Provider:      "none",
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)

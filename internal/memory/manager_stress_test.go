@@ -25,7 +25,6 @@ func TestSQLiteIndexManagerStressIndexesManyFiles(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   16,
 		ChunkOverlap:  2,
-		Provider:      EmbeddingProviderNone,
 		EnableFTS:     true,
 	})
 	if err := m.Open(ctx); err != nil {
@@ -66,7 +65,6 @@ func TestSQLiteIndexManagerConcurrentSyncRequests(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   24,
 		ChunkOverlap:  3,
-		Provider:      EmbeddingProviderNone,
 		EnableFTS:     true,
 	})
 	if err := m.Open(ctx); err != nil {

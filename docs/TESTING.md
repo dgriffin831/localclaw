@@ -13,14 +13,17 @@ This document describes test coverage, commands, and Red/Green workflow for `loc
 
 | Layer | Primary Locations | What It Validates |
 | --- | --- | --- |
-| Config and policy | `internal/config/config_test.go` | defaults, compatibility mappings, validation allowlists, local-only guardrails |
-| Runtime lifecycle and hooks | `internal/runtime/local_only_test.go`, `internal/runtime/tools_test.go` | startup boundaries, prompt assembly, tool execution, reset/session behavior |
+| Config and policy | `internal/config/config_test.go` | defaults, strict config parsing, validation allowlists, local-only guardrails |
+| Runtime lifecycle and hooks | `internal/runtime/local_only_test.go`, `internal/runtime/tools_test.go` | startup boundaries, request-path prompt assembly, reset/session behavior |
+| LLM contract/adapter compatibility | `internal/runtime/tools_test.go` | request-stream-only runtime path and provider tool-event pass-through behavior |
+| Skills loader/snapshot prompts | `internal/skills/registry_test.go`, `internal/runtime/tools_test.go` | workspace skill discovery, eligibility filtering, prompt-block injection/cache refresh |
 | TUI behavior | `internal/tui/app_test.go` | slash commands, autocomplete, waiting/status UX, welcome rendering, history/keybindings |
 | Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, bootstrap loading/filtering, subagent allowlist |
 | Session store/transcripts | `internal/session/store_test.go` | path resolution, lock behavior, metadata preservation, write safety |
-| Memory CLI | `internal/cli/memory_test.go` | `memory status/index/search` JSON/text output and argument handling |
+| Memory CLI | `internal/cli/memory_test.go` | `memory status/index/search/grep` JSON/text output and argument handling |
+| MCP runtime/tools | `internal/mcp/*_test.go`, `internal/cli/mcp_test.go` | stdio JSON-RPC loop, tool discovery/calls, `mcp serve` routing |
 | Session snapshot hook | `internal/hooks/session_memory_test.go` | snapshot generation, slug/summary fallback, transcript handling |
-| Memory indexing/search/embeddings/flush | `internal/memory/*_test.go` | discovery/chunking, SQLite sync/search/get, autosync, embeddings, flush logic, migration helpers |
+| Memory indexing/search/grep/flush | `internal/memory/*_test.go` | discovery/chunking, SQLite sync/search/get/grep, autosync, flush logic, migration helpers |
 
 ## Command reference
 
@@ -35,12 +38,14 @@ go test ./...
 ```bash
 go test ./internal/config
 go test ./internal/runtime
+go test ./internal/skills
 go test ./internal/tui
 go test ./internal/workspace
 go test ./internal/session
 go test ./internal/cli
 go test ./internal/hooks
 go test ./internal/memory
+go test ./internal/mcp
 ```
 
 ### Focused Red/Green examples
@@ -48,6 +53,8 @@ go test ./internal/memory
 ```bash
 go test ./internal/config -run TestValidate -v
 go test ./internal/runtime -run TestPromptIncludesBootstrapContextOnFirstMessageOnly -v
+go test ./internal/runtime -run TestPromptStreamForSessionPassesThroughProviderToolEvents -v
+go test ./internal/skills -run TestSnapshotContainsEligibleSkillsOnly -v
 go test ./internal/tui -run TestParseSlash -v
 go test ./internal/workspace -run TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles -v
 go test ./internal/memory -run TestSQLiteIndexManagerSyncForceBuildsIndexAndStatus -v
@@ -60,6 +67,7 @@ go run ./cmd/localclaw
 go run ./cmd/localclaw check
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
+go run ./cmd/localclaw mcp serve
 ```
 
 ## Red/Green workflow (default)
@@ -83,7 +91,7 @@ go run ./cmd/localclaw memory status
 ## Common issues
 
 - Startup policy test failures:
-  - verify `security.*` local-only fields in fixtures.
+  - ensure tests do not assume configurable gateway/listener flags.
 - Memory index test flakiness:
   - ensure temporary workspace/session paths are isolated per test.
 - TUI behavior drift:

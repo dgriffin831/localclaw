@@ -85,7 +85,7 @@ func walkOrAddPath(rootAbs string, path string, seen map[string]MemoryFile) erro
 	if info.IsDir() {
 		return walkMarkdownTree(rootAbs, path, seen)
 	}
-	hasSymlink, err := pathHasSymlinkComponent(path)
+	hasSymlink, err := pathHasSymlinkComponentWithin(rootAbs, path)
 	if err != nil {
 		return err
 	}
@@ -151,6 +151,9 @@ func addMarkdownFile(rootAbs string, path string, seen map[string]MemoryFile) er
 	if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
 		return nil
 	}
+	if seenContainsSameFile(info, seen) {
+		return nil
+	}
 
 	absPath, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
@@ -169,6 +172,22 @@ func addMarkdownFile(rootAbs string, path string, seen map[string]MemoryFile) er
 	return nil
 }
 
+func seenContainsSameFile(info os.FileInfo, seen map[string]MemoryFile) bool {
+	if info == nil {
+		return false
+	}
+	for _, file := range seen {
+		existingInfo, err := os.Lstat(file.AbsolutePath)
+		if err != nil {
+			continue
+		}
+		if os.SameFile(info, existingInfo) {
+			return true
+		}
+	}
+	return false
+}
+
 func entryIsSymlink(d fs.DirEntry) (bool, error) {
 	if d.Type()&fs.ModeSymlink != 0 {
 		return true, nil
@@ -183,18 +202,23 @@ func entryIsSymlink(d fs.DirEntry) (bool, error) {
 	return info.Mode()&os.ModeSymlink != 0, nil
 }
 
-func pathHasSymlinkComponent(path string) (bool, error) {
-	clean := filepath.Clean(path)
-	volume := filepath.VolumeName(clean)
-	remainder := strings.TrimPrefix(clean, volume)
+func pathHasSymlinkComponentWithin(rootAbs string, path string) (bool, error) {
+	root := filepath.Clean(rootAbs)
+	target := filepath.Clean(path)
 
-	current := volume
-	if filepath.IsAbs(clean) {
-		current += string(filepath.Separator)
-		remainder = strings.TrimPrefix(remainder, string(filepath.Separator))
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false, err
+	}
+	if rel == "." {
+		return false, nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false, nil
 	}
 
-	parts := strings.Split(remainder, string(filepath.Separator))
+	current := root
+	parts := strings.Split(rel, string(filepath.Separator))
 	for _, part := range parts {
 		if part == "" || part == "." {
 			continue
@@ -202,13 +226,15 @@ func pathHasSymlinkComponent(path string) (bool, error) {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
 		if err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
 			return false, err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return true, nil
 		}
 	}
-
 	return false, nil
 }
 

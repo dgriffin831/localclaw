@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,7 +12,7 @@ import (
 	"time"
 
 	"github.com/dgriffin831/localclaw/internal/config"
-	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
+	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/workspace"
 )
 
@@ -27,12 +28,16 @@ func (f fakeLLMClient) Prompt(ctx context.Context, input string) (string, error)
 	return f.promptResponse, nil
 }
 
-func (f fakeLLMClient) PromptStream(ctx context.Context, input string) (<-chan claudecode.StreamEvent, <-chan error) {
-	events := make(chan claudecode.StreamEvent)
+func (f fakeLLMClient) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
+	events := make(chan llm.StreamEvent)
 	errs := make(chan error)
 	close(events)
 	close(errs)
 	return events, errs
+}
+
+func (f fakeLLMClient) Capabilities() llm.Capabilities {
+	return llm.Capabilities{}
 }
 
 type failingWorkspaceManager struct{}
@@ -49,12 +54,19 @@ func (f failingWorkspaceManager) LoadBootstrapFiles(ctx context.Context, agentID
 }
 func (f failingWorkspaceManager) Root() string { return "" }
 
-func TestNewFailsWhenNetworkServerEnabled(t *testing.T) {
+func TestNewFailsWhenClaudeMCPWiringInvalid(t *testing.T) {
+	stateRootFile := filepath.Join(t.TempDir(), "state-root-file")
+	if err := os.WriteFile(stateRootFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write state root file: %v", err)
+	}
+
 	cfg := config.Default()
-	cfg.Security.EnableHTTPServer = true
+	cfg.App.Root = stateRootFile
 
 	if _, err := New(cfg); err == nil {
-		t.Fatalf("expected startup failure when HTTP server is enabled")
+		t.Fatalf("expected startup failure when claude mcp wiring is invalid")
+	} else if !strings.Contains(err.Error(), "invalid claude mcp wiring") {
+		t.Fatalf("expected claude mcp wiring error, got %v", err)
 	}
 }
 
@@ -74,9 +86,8 @@ func TestResolveSessionDefaults(t *testing.T) {
 func TestAppResolvesWorkspaceAndSessionPaths(t *testing.T) {
 	stateRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.State.Root = stateRoot
+	cfg.App.Root = stateRoot
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)
@@ -121,7 +132,6 @@ func TestRunBootstrapsDefaultConfigFileWhenMissing(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 	cfg.Cron.Enabled = false
 	cfg.Heartbeat.Enabled = false
@@ -170,7 +180,6 @@ func TestRunDoesNotOverwriteExistingBootstrappedConfigFile(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 	cfg.Cron.Enabled = false
 	cfg.Heartbeat.Enabled = false
@@ -192,45 +201,194 @@ func TestRunDoesNotOverwriteExistingBootstrappedConfigFile(t *testing.T) {
 	}
 }
 
-func TestRunDoesNotImportLegacyMemoryJSON(t *testing.T) {
+func TestNewConfiguresClaudeMCPConfigPathUnderStateRoot(t *testing.T) {
 	stateRoot := t.TempDir()
-	legacyPath := filepath.Join(t.TempDir(), "legacy-memory.json")
-	if err := os.WriteFile(legacyPath, []byte(`{"topic":"legacy alpha"}`), 0o600); err != nil {
-		t.Fatalf("write legacy memory json: %v", err)
+	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
+	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+`, argsPath)
+	if err := os.WriteFile(claudeScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
 	}
 
 	cfg := config.Default()
-	cfg.State.Root = stateRoot
-	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
-	cfg.Memory.Path = legacyPath
-	cfg.Cron.Enabled = false
-	cfg.Heartbeat.Enabled = false
+	cfg.App.Root = stateRoot
+	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
 
 	app, err := New(cfg)
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
-	if err := app.Run(context.Background()); err != nil {
-		t.Fatalf("run app: %v", err)
+
+	requestClient, ok := app.llm.(llm.RequestClient)
+	if !ok {
+		t.Fatalf("expected request-capable llm client")
+	}
+	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("prompt stream request error: %v", err)
+			}
+		}
 	}
 
-	workspacePath, err := app.ResolveWorkspacePath("")
+	argsFile, err := os.Open(argsPath)
 	if err != nil {
-		t.Fatalf("resolve workspace path: %v", err)
+		t.Fatalf("open captured args: %v", err)
 	}
-	memoryPath := filepath.Join(workspacePath, "MEMORY.md")
-	body, err := os.ReadFile(memoryPath)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read MEMORY.md: %v", err)
+	defer argsFile.Close()
+
+	var args []string
+	scanner := bufio.NewScanner(argsFile)
+	for scanner.Scan() {
+		args = append(args, strings.TrimSpace(scanner.Text()))
 	}
-	if err == nil && strings.Contains(string(body), "\"legacy alpha\"") {
-		t.Fatalf("did not expect legacy JSON data to be imported into MEMORY.md")
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan captured args: %v", err)
 	}
 
-	markerPath := filepath.Join(workspacePath, ".localclaw-legacy-memory-import-v1")
-	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
-		t.Fatalf("did not expect legacy import marker file, got err=%v", err)
+	var mcpConfigPath string
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--mcp-config" {
+			mcpConfigPath = args[i+1]
+			break
+		}
+	}
+	if mcpConfigPath == "" {
+		t.Fatalf("expected --mcp-config flag in args: %v", args)
+	}
+	expectedPrefix := filepath.Join(stateRoot, "runtime", "mcp") + string(os.PathSeparator)
+	if !strings.HasPrefix(mcpConfigPath, expectedPrefix) {
+		t.Fatalf("expected mcp config path under state root, got %q (args=%v)", mcpConfigPath, args)
+	}
+}
+
+func TestNewConfiguresCodexMCPHomeUnderStateRoot(t *testing.T) {
+	stateRoot := t.TempDir()
+	tmpDir := t.TempDir()
+	argsPath := filepath.Join(tmpDir, "codex-args.txt")
+	envPath := filepath.Join(tmpDir, "codex-env.txt")
+	codexScriptPath := filepath.Join(tmpDir, "codex")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+env | grep '^CODEX_HOME=' > %q || true
+printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'
+`, argsPath, envPath)
+	if err := os.WriteFile(codexScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex script: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.App.Root = stateRoot
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.BinaryPath = codexScriptPath
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	requestClient, ok := app.llm.(llm.RequestClient)
+	if !ok {
+		t.Fatalf("expected request-capable llm client")
+	}
+	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("prompt stream request error: %v", err)
+			}
+		}
+	}
+
+	envPayload, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read captured env: %v", err)
+	}
+	expectedHome := filepath.Join(stateRoot, "runtime", "codex", "home")
+	if !strings.Contains(string(envPayload), "CODEX_HOME="+expectedHome) {
+		t.Fatalf("expected CODEX_HOME under state root, got %q", strings.TrimSpace(string(envPayload)))
+	}
+}
+
+func TestPromptForSessionDoesNotSetAllowedToolsForClaude(t *testing.T) {
+	stateRoot := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
+	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+`, argsPath)
+	if err := os.WriteFile(claudeScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.App.Root = stateRoot
+	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
+	cfg.Agents.Defaults.Memory.Enabled = true
+	cfg.Agents.Defaults.Memory.Tools.Get = true
+	cfg.Agents.Defaults.Memory.Tools.Search = true
+	cfg.Agents.Defaults.Memory.Tools.Grep = true
+	cfg.Agents.Defaults.Memory.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	if _, err := app.PromptForSession(context.Background(), "", "", "hello"); err != nil {
+		t.Fatalf("prompt for session: %v", err)
+	}
+
+	argsFile, err := os.Open(argsPath)
+	if err != nil {
+		t.Fatalf("open captured args: %v", err)
+	}
+	defer argsFile.Close()
+
+	var args []string
+	scanner := bufio.NewScanner(argsFile)
+	for scanner.Scan() {
+		args = append(args, strings.TrimSpace(scanner.Text()))
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan captured args: %v", err)
+	}
+
+	var allowedTools string
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--allowed-tools" {
+			allowedTools = args[i+1]
+			break
+		}
+	}
+	if allowedTools != "" {
+		t.Fatalf("did not expect --allowed-tools flag in args: %v", args)
 	}
 }
 
@@ -315,9 +473,8 @@ func TestResetSessionCreatesSessionMemorySnapshot(t *testing.T) {
 	ctx := context.Background()
 	stateRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.State.Root = stateRoot
+	cfg.App.Root = stateRoot
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)
@@ -378,9 +535,8 @@ func TestResetSessionCreatesSessionMemorySnapshot(t *testing.T) {
 func TestResetSessionHookFailureIsNonFatal(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)
@@ -411,9 +567,8 @@ func TestResetSessionHookFailureIsNonFatal(t *testing.T) {
 func TestResetSessionStartNewAvoidsCurrentSessionIDCollision(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)
@@ -445,9 +600,8 @@ func TestResetSessionStartNewAvoidsCurrentSessionIDCollision(t *testing.T) {
 func TestResetSessionStartNewAvoidsExistingTranscriptCollision(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)

@@ -16,13 +16,11 @@ func TestSQLiteIndexManagerSyncForceBuildsIndexAndStatus(t *testing.T) {
 	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "delta\nepsilon\nzeta")
 
 	m := NewSQLiteIndexManager(IndexManagerConfig{
-		DBPath:               dbPath,
-		WorkspaceRoot:        workspace,
-		ChunkTokens:          2,
-		ChunkOverlap:         1,
-		Provider:             "none",
-		EnableFTS:            true,
-		EnableEmbeddingCache: true,
+		DBPath:        dbPath,
+		WorkspaceRoot: workspace,
+		ChunkTokens:   2,
+		ChunkOverlap:  1,
+		EnableFTS:     true,
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)
@@ -73,7 +71,6 @@ func TestSQLiteIndexManagerSyncNoChangesMostlyNoop(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   2,
 		ChunkOverlap:  1,
-		Provider:      "none",
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)
@@ -114,7 +111,6 @@ func TestSQLiteIndexManagerSyncRemovesStaleFiles(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   2,
 		ChunkOverlap:  1,
-		Provider:      "none",
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)

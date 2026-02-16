@@ -35,17 +35,17 @@ Behavior notes:
 - Busy statuses show spinner + elapsed time.
 - While waiting and no stream delta has arrived, status text shows active thinking message when thinking visibility is on.
 - Thinking messages come from `app.thinking_messages`; fallback is `thinking`.
-- `Ctrl+O` toggles an internal `toolsExpanded` flag and status text only (tool cards are not currently rendered as a separate transcript type).
+- `Ctrl+O` toggles tool-card expansion in the transcript (`collapsed` summary vs `expanded` details).
 
 ## Input and keybindings
 
 Composer behavior:
 
 - `Enter`: submit input
-- `Alt+Enter`: insert newline
+- `Ctrl+J`: insert newline
 - `Tab`: autocomplete selected slash command when typing `/...`
 - `Shift+Tab`: move slash menu selection backward
-- `Up/Down`: slash-menu navigation when visible
+- `Up/Down`: slash-menu navigation when visible; with menu closed they continue prompt history traversal only after a non-empty draft (or active history selection), otherwise they pass through for transcript scrolling
 - `Ctrl+P` / `Ctrl+N`: prompt history navigation
 - `Alt+Up` / `Alt+Down`: history navigation aliases
 - `Mouse wheel`: transcript scroll
@@ -54,7 +54,8 @@ Global controls:
 
 - `Esc`: abort active run
 - `Ctrl+T`: toggle thinking visibility
-- `Ctrl+O`: toggle tool expansion flag
+- `Ctrl+O`: toggle tool-card expansion
+- `Ctrl+Y`: toggle mouse capture (turn off to allow terminal text selection)
 - `Ctrl+C`: clear composer; second press within 1 second exits
 - `Ctrl+D`: exit when composer is empty
 
@@ -68,19 +69,30 @@ History rules:
 Implemented command set:
 
 - `/help`
+- `/shortcuts`
 - `/status`
+- `/tools`
 - `/clear`
 - `/reset`
 - `/new`
 - `/thinking <on|off>`
 - `/verbose <on|off>`
+- `/mouse <on|off>`
 - `/model <name>`
 - `/exit`
 - `/quit`
 
 Command behavior details:
 
-- `/status` prints one system line containing status, provider, agent, session, workspace, thinking, and verbose flags.
+- `/shortcuts` prints all available keyboard shortcuts and their behavior.
+- `/status` prints one system line containing status, provider, agent, session, workspace, thinking, verbose, and mouse-capture flags.
+- `/tools` prints provider plus explicit ownership sections:
+  - `provider_native` for provider-discovered native tools.
+  - `localclaw_mcp` for localclaw runtime tools for the active agent.
+- `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
+- `/verbose off` suppresses the additional `[verbose]` diagnostics.
+- `/mouse off` disables mouse capture so the terminal can highlight/select text normally.
+- `/mouse on` re-enables wheel/click mouse capture for TUI interactions.
 - `/clear` clears transcript messages without adding a confirmation line.
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
@@ -92,6 +104,7 @@ Slash-menu behavior:
 - Opens when composer input is a single-token slash prefix (`/`, `/h`, etc.).
 - Closes when input contains whitespace/newlines after slash command token.
 - Shows up to 6 entries, with `+N more` hint when filtered results exceed limit.
+- Shows keyboard shortcut text as a right-hand column for commands that have direct keybinding equivalents.
 
 ## Startup and session reset/new UX
 
@@ -129,6 +142,11 @@ Completion behavior:
 - Final payload replaces assistant text when non-empty.
 - If final and delta are both empty, assistant message becomes `(no output)`.
 - Assistant final text is appended to transcript file and token accounting.
+- Tool call/result activity renders as transcript tool cards with ownership labels (`provider_native` or `localclaw_mcp`).
+- Collapsed cards show summary (`tool`, ownership, terminal status).
+- Expanded cards include call ID, arguments, status, error (if any), and result data keys/values.
+- `data.provider_result` is intentionally hidden in expanded cards.
+- `data.content` is rendered in a fenced block without truncation; JSON content is pretty-printed.
 
 ## Rendering
 
@@ -141,7 +159,7 @@ Completion behavior:
 Current tests in `internal/tui/app_test.go` cover:
 
 - slash parsing and autocomplete behavior
-- `/help`, `/new`, `/reset` command effects
+- `/help`, `/tools`, `/new`, `/reset` command effects
 - welcome message startup/new rendering
 - status/thinking message behavior
 - history navigation keybindings

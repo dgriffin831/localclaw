@@ -8,8 +8,7 @@ import (
 	"testing"
 
 	"github.com/dgriffin831/localclaw/internal/config"
-	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
-	"github.com/dgriffin831/localclaw/internal/memory"
+	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/skills"
 )
@@ -23,10 +22,53 @@ func (c *captureLLMClient) Prompt(ctx context.Context, input string) (string, er
 	return "ok", nil
 }
 
-func (c *captureLLMClient) PromptStream(ctx context.Context, input string) (<-chan claudecode.StreamEvent, <-chan error) {
+func (c *captureLLMClient) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
 	c.lastPromptInput = input
-	events := make(chan claudecode.StreamEvent)
+	events := make(chan llm.StreamEvent)
 	errs := make(chan error)
+	close(events)
+	close(errs)
+	return events, errs
+}
+
+func (c *captureLLMClient) Capabilities() llm.Capabilities {
+	return llm.Capabilities{}
+}
+
+type captureRequestLLMClient struct {
+	lastRequest llm.Request
+	streamFn    func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error)
+}
+
+func (c *captureRequestLLMClient) Capabilities() llm.Capabilities {
+	return llm.Capabilities{SupportsRequestOptions: true}
+}
+
+func (c *captureRequestLLMClient) Prompt(ctx context.Context, input string) (string, error) {
+	return "ok", nil
+}
+
+func (c *captureRequestLLMClient) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
+	events := make(chan llm.StreamEvent)
+	errs := make(chan error)
+	close(events)
+	close(errs)
+	return events, errs
+}
+
+func (c *captureRequestLLMClient) PromptRequest(ctx context.Context, req llm.Request) (string, error) {
+	c.lastRequest = req
+	return "ok", nil
+}
+
+func (c *captureRequestLLMClient) PromptStreamRequest(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+	c.lastRequest = req
+	if c.streamFn != nil {
+		return c.streamFn(ctx, req)
+	}
+	events := make(chan llm.StreamEvent, 1)
+	errs := make(chan error)
+	events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "ok"}
 	close(events)
 	close(errs)
 	return events, errs
@@ -37,7 +79,7 @@ func TestToolDefinitionsIncludeMemoryToolsWhenEnabled(t *testing.T) {
 
 	tools := app.ToolDefinitions("")
 	if len(tools) == 0 {
-		t.Fatalf("expected runtime tools when memory search is enabled")
+		t.Fatalf("expected runtime tools when memory is enabled")
 	}
 
 	toolNames := map[string]bool{}
@@ -50,135 +92,106 @@ func TestToolDefinitionsIncludeMemoryToolsWhenEnabled(t *testing.T) {
 	if !toolNames[skills.ToolMemoryGet] {
 		t.Fatalf("expected %s tool in registry", skills.ToolMemoryGet)
 	}
-}
-
-func TestExecuteToolMemorySearchReturnsResults(t *testing.T) {
-	ctx := context.Background()
-	_, app, workspace := newToolTestApp(t, true)
-
-	if err := osWriteFile(filepath.Join(workspace, "MEMORY.md"), "tool memory match\nsecond line"); err != nil {
-		t.Fatalf("write memory file: %v", err)
-	}
-
-	res := app.ExecuteTool(ctx, ToolExecutionRequest{
-		Name: skills.ToolMemorySearch,
-		Args: map[string]interface{}{
-			"query": "tool memory",
-		},
-	})
-	if !res.OK {
-		t.Fatalf("expected memory_search success, got error %q", res.Error)
-	}
-
-	rawResults, ok := res.Data["results"]
-	if !ok {
-		t.Fatalf("expected results payload")
-	}
-	results, ok := rawResults.([]memory.SearchResult)
-	if !ok {
-		t.Fatalf("expected []memory.SearchResult payload, got %T", rawResults)
-	}
-	if len(results) == 0 {
-		t.Fatalf("expected at least one memory result")
+	if !toolNames[skills.ToolMemoryGrep] {
+		t.Fatalf("expected %s tool in registry", skills.ToolMemoryGrep)
 	}
 }
 
-func TestExecuteToolFailureIsGraceful(t *testing.T) {
+func TestToolDefinitionsExcludeMemoryToolWhenDisabledByFlag(t *testing.T) {
+	_, app, _ := newToolTestApp(t, true)
+	app.cfg.Agents.Defaults.Memory.Tools.Search = false
+
+	tools := app.ToolDefinitions("")
+	toolNames := map[string]bool{}
+	for _, tool := range tools {
+		toolNames[tool.Name] = true
+	}
+	if toolNames[skills.ToolMemorySearch] {
+		t.Fatalf("expected memory_search tool to be hidden when agents.defaults.memory.tools.search=false")
+	}
+	if !toolNames[skills.ToolMemoryGet] {
+		t.Fatalf("expected memory_get to remain enabled")
+	}
+	if !toolNames[skills.ToolMemoryGrep] {
+		t.Fatalf("expected memory_grep to remain enabled")
+	}
+}
+
+func TestPromptStreamForSessionUsesRequestPathAndSessionMetadata(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)
-	app.cfg.Agents.Defaults.MemorySearch.Store.Path = ""
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
 
-	res := app.ExecuteTool(ctx, ToolExecutionRequest{
-		Name: skills.ToolMemorySearch,
-		Args: map[string]interface{}{"query": "anything"},
-	})
-	if res.OK {
-		t.Fatalf("expected failure result when store path is invalid")
+	events, errs := app.PromptStreamForSession(ctx, "agent-2", "s-42", "hello")
+	for range events {
 	}
-	if res.Error == "" {
-		t.Fatalf("expected error payload on tool failure")
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+	}
+
+	if llmClient.lastRequest.Session.SessionKey != "agent-2/s-42" {
+		t.Fatalf("expected session_key in request metadata, got %q", llmClient.lastRequest.Session.SessionKey)
+	}
+	if len(llmClient.lastRequest.ToolDefinitions) != 0 {
+		t.Fatalf("expected no runtime tool definitions in request, got %d", len(llmClient.lastRequest.ToolDefinitions))
 	}
 }
 
-func TestPromptIncludesMemoryRecallPolicyWhenToolsEnabled(t *testing.T) {
+func TestPromptStreamForSessionErrorsWhenRequestPathUnsupported(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)
-	llm := &captureLLMClient{}
-	app.llm = llm
+	app.llm = &captureLLMClient{}
 
-	if _, err := app.Prompt(ctx, "hello"); err != nil {
-		t.Fatalf("prompt: %v", err)
+	events, errs := app.PromptStreamForSession(ctx, "", "", "hello")
+	for range events {
 	}
-	if !strings.Contains(llm.lastPromptInput, "Memory recall is mandatory") {
-		t.Fatalf("expected memory recall policy in prompt")
+	seenErr := ""
+	for err := range errs {
+		if err != nil {
+			seenErr = err.Error()
+		}
 	}
-	if !strings.Contains(llm.lastPromptInput, "memory_search") {
-		t.Fatalf("expected memory_search tool schema in prompt")
-	}
-	if !strings.Contains(llm.lastPromptInput, "User input:\nhello") {
-		t.Fatalf("expected original user input in composed prompt")
-	}
-}
-
-func TestPromptOmitsMemoryRecallPolicyWhenToolsDisabled(t *testing.T) {
-	ctx := context.Background()
-	_, app, _ := newToolTestApp(t, false)
-	llm := &captureLLMClient{}
-	app.llm = llm
-
-	if _, err := app.Prompt(ctx, "hello"); err != nil {
-		t.Fatalf("prompt: %v", err)
-	}
-	if strings.Contains(llm.lastPromptInput, "Memory recall is mandatory") {
-		t.Fatalf("memory recall policy should be omitted when tools disabled")
-	}
-	if _, err := app.Prompt(ctx, "hello again"); err != nil {
-		t.Fatalf("second prompt: %v", err)
-	}
-	if llm.lastPromptInput != "hello again" {
-		t.Fatalf("expected prompt passthrough after bootstrap load when tools disabled, got %q", llm.lastPromptInput)
+	if !strings.Contains(seenErr, "request-based prompt streaming") {
+		t.Fatalf("expected request-stream support error, got %q", seenErr)
 	}
 }
 
 func TestPromptIncludesBootstrapContextOnFirstMessageOnly(t *testing.T) {
 	ctx := context.Background()
 	_, app, workspace := newToolTestApp(t, false)
-	llm := &captureLLMClient{}
-	app.llm = llm
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
 
 	if err := osWriteFile(filepath.Join(workspace, "AGENTS.md"), "# AGENTS\n\nbootstrap-marker\n"); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
 
-	if _, err := app.PromptForSession(ctx, "default", "main", "first input"); err != nil {
+	if _, err := app.PromptForSession(ctx, "default", "main", "hello"); err != nil {
 		t.Fatalf("first prompt: %v", err)
 	}
-	if !strings.Contains(llm.lastPromptInput, "Workspace bootstrap context") {
-		t.Fatalf("expected bootstrap context in first prompt, got %q", llm.lastPromptInput)
+	if !strings.Contains(llmClient.lastRequest.SystemContext, "Workspace bootstrap context") {
+		t.Fatalf("expected bootstrap section in first prompt")
 	}
-	if !strings.Contains(llm.lastPromptInput, "## AGENTS.md") {
-		t.Fatalf("expected AGENTS.md section in first prompt")
-	}
-	if !strings.Contains(llm.lastPromptInput, "bootstrap-marker") {
+	if !strings.Contains(llmClient.lastRequest.SystemContext, "bootstrap-marker") {
 		t.Fatalf("expected AGENTS.md content in first prompt")
 	}
 
-	if _, err := app.PromptForSession(ctx, "default", "main", "second input"); err != nil {
+	if _, err := app.PromptForSession(ctx, "default", "main", "hello again"); err != nil {
 		t.Fatalf("second prompt: %v", err)
 	}
-	if strings.Contains(llm.lastPromptInput, "Workspace bootstrap context") {
-		t.Fatalf("bootstrap context should not be included on non-first message without compaction")
-	}
-	if llm.lastPromptInput != "second input" {
-		t.Fatalf("expected second prompt passthrough, got %q", llm.lastPromptInput)
+	if strings.Contains(llmClient.lastRequest.SystemContext, "bootstrap-marker") {
+		t.Fatalf("expected bootstrap context to be omitted after initial injection")
 	}
 }
 
-func TestPromptReinjectsBootstrapAfterCompactionIncrement(t *testing.T) {
+func TestPromptIncludesBootstrapContextAfterCompaction(t *testing.T) {
 	ctx := context.Background()
 	_, app, workspace := newToolTestApp(t, false)
-	llm := &captureLLMClient{}
-	app.llm = llm
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
 
 	if err := osWriteFile(filepath.Join(workspace, "AGENTS.md"), "# AGENTS\n\nreinjection-marker\n"); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
@@ -187,6 +200,7 @@ func TestPromptReinjectsBootstrapAfterCompactionIncrement(t *testing.T) {
 	if _, err := app.PromptForSession(ctx, "default", "main", "before compaction"); err != nil {
 		t.Fatalf("first prompt: %v", err)
 	}
+
 	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
 		entry.CompactionCount++
 		return nil
@@ -198,47 +212,122 @@ func TestPromptReinjectsBootstrapAfterCompactionIncrement(t *testing.T) {
 	if _, err := app.PromptForSession(ctx, "default", "main", "after compaction"); err != nil {
 		t.Fatalf("second prompt: %v", err)
 	}
-	if !strings.Contains(llm.lastPromptInput, "Workspace bootstrap context") {
-		t.Fatalf("expected bootstrap reinjection after compaction increment")
-	}
-	if !strings.Contains(llm.lastPromptInput, "reinjection-marker") {
-		t.Fatalf("expected AGENTS.md content after compaction reinjection")
+	if !strings.Contains(llmClient.lastRequest.SystemContext, "reinjection-marker") {
+		t.Fatalf("expected AGENTS.md content reinjected after compaction")
 	}
 }
 
-func TestPromptStreamForSessionIncludesResolvedSessionKey(t *testing.T) {
+func TestPromptStreamForSessionPassesThroughProviderToolEvents(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)
-	llm := &captureLLMClient{}
-	app.llm = llm
+	respondCalled := false
 
-	events, errs := app.PromptStreamForSession(ctx, "agent-2", "s-42", "hello")
-	for range events {
-	}
-	for range errs {
-	}
-
-	if !strings.Contains(llm.lastPromptInput, "Current session_key: agent-2/s-42") {
-		t.Fatalf("expected resolved session key in composed prompt, got %q", llm.lastPromptInput)
-	}
-}
-
-func TestExecuteToolRejectsFractionalMaxResults(t *testing.T) {
-	ctx := context.Background()
-	_, app, _ := newToolTestApp(t, true)
-
-	res := app.ExecuteTool(ctx, ToolExecutionRequest{
-		Name: skills.ToolMemorySearch,
-		Args: map[string]interface{}{
-			"query":       "tool memory",
-			"max_results": 2.5,
+	app.llm = &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			events := make(chan llm.StreamEvent, 2)
+			errs := make(chan error)
+			events <- llm.StreamEvent{
+				Type: llm.StreamEventToolCall,
+				ToolCall: &llm.ToolCall{
+					ID:   "call-1",
+					Name: "Bash",
+					Respond: func(ctx context.Context, result llm.ToolResult) error {
+						respondCalled = true
+						return nil
+					},
+				},
+			}
+			events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "final output"}
+			close(events)
+			close(errs)
+			return events, errs
 		},
-	})
-	if res.OK {
-		t.Fatalf("expected failure for fractional max_results")
 	}
-	if !strings.Contains(res.Error, "max_results must be an integer") {
-		t.Fatalf("expected integer validation error, got %q", res.Error)
+
+	events, errs := app.PromptStreamForSession(ctx, "", "", "hello")
+	sawToolCall := false
+	sawToolResult := false
+	for events != nil || errs != nil {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			if evt.Type == llm.StreamEventToolCall {
+				sawToolCall = true
+			}
+			if evt.Type == llm.StreamEventToolResult {
+				sawToolResult = true
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("unexpected stream error: %v", err)
+			}
+		}
+	}
+
+	if !sawToolCall {
+		t.Fatalf("expected provider tool call event to pass through")
+	}
+	if sawToolResult {
+		t.Fatalf("did not expect runtime to execute tool loop")
+	}
+	if respondCalled {
+		t.Fatalf("did not expect runtime to invoke tool responder")
+	}
+}
+
+func TestPromptForSessionCachesSkillsSnapshotUntilCompaction(t *testing.T) {
+	ctx := context.Background()
+	_, app, workspace := newToolTestApp(t, false)
+
+	writeSkillFile(t, workspace, "writer", `---
+name: writer
+description: Old summary
+---
+# writer`)
+
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
+
+	if _, err := app.PromptForSession(ctx, "default", "main", "hello"); err != nil {
+		t.Fatalf("first prompt: %v", err)
+	}
+	if !strings.Contains(llmClient.lastRequest.SkillPrompt, "Old summary") {
+		t.Fatalf("expected initial skill snapshot in prompt, got %q", llmClient.lastRequest.SkillPrompt)
+	}
+
+	writeSkillFile(t, workspace, "writer", `---
+name: writer
+description: New summary
+---
+# writer`)
+
+	if _, err := app.PromptForSession(ctx, "default", "main", "hello again"); err != nil {
+		t.Fatalf("second prompt: %v", err)
+	}
+	if strings.Contains(llmClient.lastRequest.SkillPrompt, "New summary") {
+		t.Fatalf("expected cached snapshot before compaction, got %q", llmClient.lastRequest.SkillPrompt)
+	}
+
+	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		entry.CompactionCount++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("increment compaction count: %v", err)
+	}
+
+	if _, err := app.PromptForSession(ctx, "default", "main", "after compaction"); err != nil {
+		t.Fatalf("third prompt: %v", err)
+	}
+	if !strings.Contains(llmClient.lastRequest.SkillPrompt, "New summary") {
+		t.Fatalf("expected refreshed skills snapshot after compaction, got %q", llmClient.lastRequest.SkillPrompt)
 	}
 }
 
@@ -246,19 +335,16 @@ func newToolTestApp(t *testing.T, toolsEnabled bool) (config.Config, *App, strin
 	t.Helper()
 
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
-	cfg.Session.Store = filepath.Join(cfg.State.Root, "agents", "{agentId}", "sessions", "sessions.json")
-	cfg.Agents.Defaults.MemorySearch.Enabled = toolsEnabled
-	cfg.Agents.Defaults.MemorySearch.Sources = []string{"memory"}
-	cfg.Agents.Defaults.MemorySearch.Provider = "none"
-	cfg.Agents.Defaults.MemorySearch.Fallback = "none"
-	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
-	cfg.Agents.Defaults.MemorySearch.Store.Vector.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Cache.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Query.Hybrid.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Sync.OnSearch = true
+	cfg.Session.Store = filepath.Join(cfg.App.Root, "agents", "{agentId}", "sessions", "sessions.json")
+	cfg.Agents.Defaults.Memory.Enabled = toolsEnabled
+	cfg.Agents.Defaults.Memory.Tools.Get = toolsEnabled
+	cfg.Agents.Defaults.Memory.Tools.Search = toolsEnabled
+	cfg.Agents.Defaults.Memory.Tools.Grep = toolsEnabled
+	cfg.Agents.Defaults.Memory.Sources = []string{"memory"}
+	cfg.Agents.Defaults.Memory.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
+	cfg.Agents.Defaults.Memory.Sync.OnSearch = true
 	cfg.Heartbeat.Enabled = false
 	cfg.Cron.Enabled = false
 
@@ -278,4 +364,15 @@ func newToolTestApp(t *testing.T, toolsEnabled bool) (config.Config, *App, strin
 
 func osWriteFile(path string, body string) error {
 	return os.WriteFile(path, []byte(body), 0o600)
+}
+
+func writeSkillFile(t *testing.T, workspacePath, skillName, body string) {
+	t.Helper()
+	skillDir := filepath.Join(workspacePath, "skills", skillName)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write skill file: %v", err)
+	}
 }
