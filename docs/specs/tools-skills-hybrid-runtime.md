@@ -1,325 +1,611 @@
-# Hybrid Tools + Skills Runtime Spec
+# Tools + Skills Hybrid Runtime Spec (MCP-First)
 
 ## Status
 
-Draft v1.0
+Draft v3.0
 
 ## Problem / Motivation
 
-`localclaw` currently has:
+`localclaw` currently has partial host-managed structured tool-call plumbing, but the product direction is to extend existing provider runtimes instead of replacing them.
 
-- local runtime memory tools (`memory_search`, `memory_get`) and a tool registry
-- prompt-level tool instructions injected into user input
-- no model-driven tool-call orchestration loop
-- no real skills loader/eligibility/snapshot pipeline (skills registry is a stub)
+For Claude Code and Codex, the highest-leverage architecture is:
 
-This creates a mismatch against the desired design:
+- keep provider inner loops as the primary reasoning/tool-selection loop
+- expose localclaw-owned capabilities through a local MCP tool server
+- preserve local-only policy and strong ownership boundaries
 
-- localclaw-owned tools should be authoritative
-- delegated provider/client tools should be possible, but policy-gated
-- skills should be localclaw-governed and provider-agnostic
+Re-owning full tool orchestration inside localclaw for these providers introduces unnecessary drift and maintenance cost.
 
-We need an implementation plan that preserves local-only, single-process boundaries while enabling hybrid tool execution.
+## Decision Summary
 
-## Goals
+Adopt an MCP-first hybrid runtime:
 
-1. Define a hybrid execution model where local tools are authoritative and delegated tools are optional.
-2. Add provider-agnostic runtime interfaces that support structured tool-call events when available.
-3. Preserve current behavior for non-structured providers (prompt-injected fallback path).
-4. Introduce localclaw-managed skills loading/filtering/snapshot prompt injection.
-5. Add explicit policy controls for local vs delegated tools.
-6. Keep runtime local-only and single-process.
+1. **Provider inner loop is primary** (Claude/Codex decides when and how to call tools).
+2. **`localclaw` runs as a stdio MCP server** for localclaw-managed capabilities.
+3. **Tool ownership is explicit and enforced**:
+   - `provider_native`
+   - `localclaw_mcp`
+4. Runtime/TUI/telemetry must preserve this ownership split end-to-end.
+5. Migration is a hard cutover: no legacy runtime fallback path is retained.
+
+## Scope
+
+- MCP-first runtime contract for Claude and Codex integrations.
+- `localclaw mcp serve` command mode for stdio MCP serving.
+- Localclaw MCP tools for memory/workspace/cron/orchestration.
+- Provider wiring expectations:
+  - Claude: MCP flags + `--append-system-prompt`
+  - Codex: MCP config file path contract
+- Config/schema updates required to support MCP runtime.
+- Package/file touch points and rollout/test plan.
 
 ## Out of Scope
 
-- HTTP/gateway/server runtime inside `localclaw`.
-- Direct remote MCP/gateway bridges.
-- Full parity with OpenClaw channel/plugin tool ecosystem.
-- Automatic remote skill registry installation in v1.
-- Multi-provider fallback orchestration in one run loop (outside existing provider selection specs).
+- Rebuilding a provider-independent inner agent loop for Claude/Codex.
+- Executing provider-native tools inside localclaw.
+- HTTP/gateway/listener transport for MCP serving in v1.
+- Remote MCP bridging or multi-hop tool execution.
 
 ## Constraints
 
 - Go `1.17`.
-- `cmd/localclaw` single-process only.
-- Local subprocess model execution only.
-- Startup/runtime boundaries in `internal/runtime` remain centralized.
-- Existing memory tool behavior and tests must not regress.
+- Single-process local CLI architecture remains intact.
+- Local-only security guardrails remain mandatory.
+- MCP transport is stdio only in v1.
 
-## Current State Summary
+## Terminology
 
-- Skills registry is currently a no-op (`Load` returns nil, `List` returns empty).  
-  `internal/skills/registry.go`
-- Tool registry only includes memory tools and runtime executes them directly.  
-  `internal/skills/registry.go`  
-  `internal/runtime/tools.go`
-- Prompt assembly injects memory recall policy + tool schema text, then sends one composed prompt to Claude CLI.  
-  `internal/runtime/tools.go`  
-  `internal/runtime/app.go`  
-  `internal/llm/claudecode/client.go`
-- No runtime loop exists to receive model tool-call events and feed tool results back to the model.
+- `provider_native`: built-in provider tools (for example shell/web tools surfaced by provider runtime).
+- `localclaw_mcp`: tools served by `localclaw mcp serve` and executed by localclaw handlers.
+- **Provider inner loop**: provider-owned turn continuation after tool calls/results.
+- **Hybrid runtime**: provider-managed loop + localclaw-managed state/policy/tool services.
 
-## Proposed Design
+## Behavior Contract
 
-### 1) Tool Ownership Model
+### Inputs
 
-Tool classes:
+- Config:
+  - provider selection (`claudecode` or `codex`)
+  - MCP runtime config (`llm.mcp.*`, provider MCP wiring blocks)
+  - existing tool/skill policies
+- Prompt input plus resolved `agent/session/workspace` context.
+- Local state roots (workspace, memory SQLite, sessions, cron state).
 
-- `local`: implemented/executed by localclaw (authoritative path)
-- `delegated`: declared by provider/client and executed outside localclaw runtime
+### Outputs
 
-Rules:
+- Provider output stream (delta/final/metadata) remains primary response channel.
+- MCP tool invocations execute localclaw handlers and return JSON-RPC tool results to provider.
+- `/tools` and runtime telemetry show separate inventories for `provider_native` and `localclaw_mcp`.
+- Session/transcript/memory side effects are persisted by existing localclaw modules.
 
-- Local tools are always mediated by localclaw policy and execution.
-- Delegated tools are disabled by default.
-- Delegated tools can be enabled only via explicit allowlist policy.
-- Any unknown tool call is rejected with a structured error result.
+### Error Paths
 
-### 2) Provider-Agnostic LLM Runtime Contract
+- MCP server start failure: run fails with provider-specific context.
+- Provider MCP wiring invalid/missing: explicit startup/run error (hard fail).
+- Tool policy denial: structured tool error returned to provider; run continues unless provider aborts.
+- Handler validation/runtime failure: structured `{ok:false,error:...}` tool result; run continues.
 
-Introduce a shared `internal/llm` contract package:
+### Unchanged Behavior
 
-- stream events: text delta/final + optional structured tool-call events
-- provider capability flags (e.g. supports structured tool calls)
-- request options including:
-  - system context
-  - tool definitions
-  - skill prompt block
-  - session metadata
+- Local-only enforcement (`security.*`) remains required.
+- Startup order in `App.Run` remains deterministic.
+- Existing non-MCP modes (`check`, `tui`, `memory`) remain available.
 
-Compatibility mode:
+## Architecture
 
-- For providers without structured tool support (current Claude CLI path), runtime continues using prompt-injection fallback.
-- Structured providers can opt into evented tool-call orchestration when available.
+### Ownership Split (Normative)
 
-### 3) Tool Execution Loop
+| Class | Owner | Executed By | Policy Authority |
+| --- | --- | --- | --- |
+| `provider_native` | Provider runtime | Provider runtime only | Provider + localclaw visibility only |
+| `localclaw_mcp` | localclaw | localclaw MCP handlers | localclaw policy and schema validation |
 
-Add a runtime run-loop abstraction:
+Hard rules:
 
-1. Build session context (bootstrap + skill prompt + tool defs + user input).
-2. Start model run.
-3. On tool-call event:
-   - evaluate policy
-   - route to local executor or delegated handler
-   - emit structured tool result back into model run (when supported)
-4. Continue until final assistant output.
+- localclaw never executes `provider_native` tools.
+- provider never directly executes `localclaw_mcp` capabilities except through MCP calls.
+- all tool events and logs include ownership class.
 
-Fallback semantics:
+### Runtime Topology
 
-- If provider does not support structured tool calls, retain current one-shot `Prompt`/`PromptStream` behavior.
-- Memory recall policy injection remains active in fallback mode.
+For each run:
 
-### 4) Policy Model
+1. Resolve `agent/session/workspace` context.
+2. Build provider wiring (MCP config + system guidance).
+3. Start provider subprocess (non-interactive mode).
+4. Provider runs inner loop and calls localclaw MCP tools as needed.
+5. localclaw serves tool calls over stdio JSON-RPC.
+6. localclaw captures provider stream + MCP telemetry and persists side effects.
 
-Add tool policy config with global defaults and optional per-agent overrides.
+### Skills in Hybrid Runtime
 
-Initial schema shape (v1):
+- Provider-native skills/tooling remain provider-owned.
+- localclaw workspace skill snapshots remain localclaw-authored context.
+- localclaw does not reimplement provider skill routing; it only supplies concise policy/tool guidance.
 
-- `tools.allow` / `tools.deny`
-- `tools.delegated.enabled` (default `false`)
-- `tools.delegated.allow` / `tools.delegated.deny`
-- `agents.defaults.tools.*` and `agents.list[].tools.*` override support
+## `localclaw mcp serve` Command Mode
 
-Policy precedence:
+### Command Contract
 
-1. global
-2. agent default
-3. specific agent
+Add command mode:
 
-Evaluation order:
+- `localclaw mcp serve`
 
-- normalize tool name
-- deny match blocks
-- allowlist applies when non-empty
-- delegated tools require both delegated-enabled and allowlist pass
+Initial behavior:
 
-### 5) Skills Model (Localclaw-Governed)
+- transport: stdio JSON-RPC only
+- no HTTP bind/listen mode
+- server lifecycle tied to stdio session
+- tool handlers call existing internal modules (`memory`, `workspace`, `cron`, `session`, `runtime` policy helpers)
 
-Add actual skill loading and prompt assembly in `internal/skills`:
+### Tool Surface (v1)
 
-- load from workspace `skills/<name>/SKILL.md` (v1 scope)
-- parse minimal frontmatter:
-  - `name`, `description`
-  - `user-invocable` (default true)
-  - `disable-model-invocation` (default false)
-- eligibility checks:
-  - skill enabled/disabled in config
-  - required bins/env/config flags (optional extensions)
+Memory:
 
-Session handling:
+- `localclaw_memory_search`
+- `localclaw_memory_get`
 
-- build a per-session skills snapshot on first message (or on explicit refresh triggers)
-- inject concise “available skills” prompt block into runtime prompt assembly
+Workspace:
 
-Invocation guidance:
+- `localclaw_workspace_status`
+- `localclaw_workspace_bootstrap_context`
 
-- system prompt guidance should remain localclaw-authored (not provider-authored)
-- skills are selected and read by the model under localclaw prompt governance
+Cron:
 
-### 6) Transcript + Observability
+- `localclaw_cron_list`
+- `localclaw_cron_add`
+- `localclaw_cron_remove`
+- `localclaw_cron_run`
 
-Add structured logging/transcript events for:
+Orchestration:
 
-- tool call started
-- tool call blocked (policy reason)
-- tool call completed (ok/error)
-- delegated tool call emitted (pending)
+- `localclaw_sessions_list`
+- `localclaw_sessions_history`
+- `localclaw_sessions_send`
+- `localclaw_session_status`
 
-TUI should surface tool activity consistently (existing tool-card scaffolding can be reused).
+Naming rule:
 
-### 7) Error Contract
+- exported MCP tool names are `localclaw_*` prefixed to avoid collision with provider-native names.
 
-Tool errors must be non-fatal by default:
+## Provider Wiring Expectations
 
-- local executor errors return structured tool result `{ok:false,error:"..."}`
-- unknown/blocked tools return policy-denied error result
-- runtime continues unless provider/session abort conditions occur
+### Claude Code Wiring (Required Contract)
 
-Delegated tool failures:
+Localclaw must prepare a run-scoped MCP config JSON and launch Claude with explicit MCP flags.
 
-- represented explicitly as delegated failure results
-- no silent drops
+Expected invocation shape:
 
-### 8) Security / Boundary Contract
+```bash
+claude -p "<prompt>" \
+  --output-format stream-json \
+  --verbose \
+  --mcp-config "<run_scoped_mcp_config.json>" \
+  --strict-mcp-config \
+  --append-system-prompt "<localclaw_guidance>"
+```
 
-Unchanged:
+Minimum required flags for MCP-first mode:
 
-- no HTTP/gateway/listener runtime in localclaw
-- subprocess-only model adapters
-- local-only policy validation remains enforced
+- `--mcp-config`
+- `--strict-mcp-config`
+- `--append-system-prompt`
 
-New constraints:
+Example MCP config payload shape:
 
-- delegated tools must never bypass localclaw policy checks
-- local tool execution remains the only path for filesystem/process access in localclaw
+```json
+{
+  "mcpServers": {
+    "localclaw": {
+      "type": "stdio",
+      "command": "localclaw",
+      "args": ["mcp", "serve"],
+      "env": {}
+    }
+  }
+}
+```
 
-## Implementation Notes
+Notes:
 
-Expected package touch points:
+- use run-scoped config files; avoid mutating user/global Claude settings.
+- keep `--append-system-prompt` concise and tool-policy focused.
 
-- `internal/config/config.go`
-  - tool policy/delegation schema + defaults + validation
-- `internal/llm/*`
-  - shared interface package and provider capability plumbing
-- `internal/runtime/*`
-  - orchestration loop, tool routing, policy checks, prompt assembly updates
-- `internal/skills/*`
-  - loader, frontmatter parsing, snapshot generation, prompt rendering
+### Codex Wiring (Required Contract)
+
+Codex does not expose a direct `--mcp-config` execution flag; MCP servers are read from config TOML.
+
+Config path contract:
+
+1. `llm.codex.mcp.config_path` when explicitly set.
+2. `$CODEX_HOME/config.toml` when `CODEX_HOME` is set.
+3. `~/.codex/config.toml` default path when no explicit override is set.
+
+Localclaw default strategy:
+
+- prefer isolated `CODEX_HOME` under localclaw state root (run/profile scoped).
+- write/merge `mcp_servers.localclaw` entry in the effective config file.
+- avoid unsafe mutation of user-global config unless explicitly configured.
+
+Required MCP server entry shape:
+
+```toml
+[mcp_servers.localclaw]
+command = "localclaw"
+args = ["mcp", "serve"]
+```
+
+Expected non-interactive run shape:
+
+```bash
+codex exec --json -C "<workspace>" "<prompt>"
+```
+
+Optional flags (`-p`, `-m`, `-c`) continue to apply. MCP activation is driven by effective config path content.
+
+## Prompting Strategy
+
+System guidance remains localclaw-authored and concise:
+
+- use `localclaw_memory_search` before finalizing responses when recall is needed
+- use `localclaw_memory_get` for exact snippets/lines
+- use localclaw tools for workspace/cron/session operations
+- explicitly report when localclaw memory data is unavailable
+
+Injection path:
+
+- Claude: `--append-system-prompt`
+- Codex: existing request/system-context composition in adapter/runtime
+
+## Config / Schema Changes
+
+### New MCP-Oriented Config Blocks
+
+Extend `llm` config with MCP runtime settings:
+
+```json
+{
+  "llm": {
+    "provider": "claudecode",
+    "mcp": {
+      "transport": "stdio",
+      "server": {
+        "binary_path": "localclaw",
+        "args": ["mcp", "serve"],
+        "env": {},
+        "startup_timeout_seconds": 10
+      },
+      "tools": {
+        "allow": ["*"],
+        "deny": []
+      }
+    },
+    "claude_code": {
+      "binary_path": "claude",
+      "mcp": {
+        "strict_config": true
+      }
+    },
+    "codex": {
+      "binary_path": "codex",
+      "mcp": {
+        "config_path": "",
+        "use_isolated_home": true,
+        "home_path": "",
+        "server_name": "localclaw"
+      }
+    }
+  }
+}
+```
+
+### Validation Rules
+
+- `llm.mcp.transport` allowlist: `stdio` only.
+- `llm.mcp.server.binary_path` is required.
+- `llm.mcp.server.args` must include command path to `mcp serve`.
+- `llm.mcp.tools.allow/deny` reject blank and duplicate entries.
+- provider-specific MCP blocks validate required fields for active provider wiring.
+- existing local-only policy validation remains unchanged and mandatory.
+
+### Policy Precedence
+
+For `localclaw_mcp` tools:
+
+1. global MCP tool policy (`llm.mcp.tools`)
+2. existing runtime tool policy (`tools.*`, `agents.*.tools.*`)
+3. deny overrides allow
+
+`provider_native` tools are never re-routed into localclaw policy execution.
+
+## Runtime / Package / File Touch Points
+
+### Entrypoint and Command Wiring
+
+- `cmd/localclaw/main.go`
+  - add `mcp` mode
+  - add `serve` subcommand dispatch
+  - update unknown-command text to include `mcp`
+
+### New MCP Package Surface
+
+- `internal/mcp/server.go` (server lifecycle + stdio JSON-RPC loop)
+- `internal/mcp/protocol/*.go` (MCP request/response/tool schemas)
+- `internal/mcp/tools/memory.go`
+- `internal/mcp/tools/workspace.go`
+- `internal/mcp/tools/cron.go`
+- `internal/mcp/tools/orchestration.go`
+- `internal/mcp/tools/policy.go` (allow/deny + validation gate)
+
+### Runtime Integration
+
+- `internal/runtime/app.go`
+  - add MCP runtime wiring helpers
+  - expose service handles needed by MCP handlers
+- `internal/runtime/tools.go`
+  - maintain local policy logic reused by MCP handlers
+- `internal/runtime/*_test.go`
+  - ownership classification + hard-fail behavior for MCP wiring issues
+
+### LLM Adapters
+
+- `internal/llm/claudecode/client.go`
+  - add Claude MCP flag wiring (`--mcp-config`, `--strict-mcp-config`)
+  - preserve `--append-system-prompt`
+- `internal/llm/codex/client.go` (new)
+  - resolve effective Codex MCP config path
+  - ensure/validate `mcp_servers.localclaw` entry
+  - run non-interactive `codex exec` with JSON stream parsing
+
+### Config and CLI Helpers
+
+- `internal/config/config.go` + tests
+  - add MCP schema/default/validation
+- `internal/cli/*` (if command helper extraction is used for `mcp` mode)
+
+### TUI and Observability
+
 - `internal/tui/app.go`
-  - render structured tool events and status updates
-- `docs/*`
-  - configuration/runtime/testing/security updates
+  - `/tools` shows `provider_native` and `localclaw_mcp` sections separately
+  - tool activity cards show ownership source labels
 
-## Phased Plan (TDD Default)
+## Implementation Plan (5 Phases, TDD-First)
 
-### Phase 1: Foundation Contracts
+### Phase 1: MCP Runtime Skeleton + Memory Tools
 
-- Add provider-agnostic LLM runtime interfaces with capability flags.
-- Keep current Claude adapter behavior working unchanged via compatibility mode.
+Objective:
+- Stand up a production-safe stdio MCP server path and deliver the first usable `localclaw_mcp` tools (`memory_search`, `memory_get`).
 
-Red tests:
+Primary implementation tasks:
+- Add `mcp` command mode and `serve` subcommand dispatch in `cmd/localclaw/main.go`.
+- Create MCP server lifecycle scaffolding in `internal/mcp/server.go`:
+  - stdio JSON-RPC read/write loop
+  - graceful shutdown on stdin EOF/context cancel
+  - structured error responses for malformed requests
+- Define protocol structs in `internal/mcp/protocol/*.go` for:
+  - initialize/list tools/call tool requests
+  - tool result and error payloads
+- Implement tool policy guard in `internal/mcp/tools/policy.go`:
+  - allow/deny evaluation
+  - duplicate/blank entry hard-fail checks
+  - deny-overrides-allow behavior
+- Implement memory tools in `internal/mcp/tools/memory.go`:
+  - `localclaw_memory_search`
+  - `localclaw_memory_get`
+  - strict argument validation and normalized error payloads
+- Extend runtime wiring (`internal/runtime/app.go`) to provide memory/session/config handles required by MCP handlers.
 
-- runtime compiles and runs with provider-agnostic interfaces
-- fallback mode still injects memory policy and tool schema text
+TDD gates (Red -> Green):
+- Add failing tests for command routing (`mcp serve` recognized; bad subcommand rejected).
+- Add failing tests for policy precedence and tool denial behavior.
+- Add failing handler tests for missing/invalid args and storage errors.
+- Implement minimal code to pass targeted tests, then broaden coverage.
 
-### Phase 2: Policy + Tool Router
+Validation commands:
+- `go test ./internal/mcp -run Test`
+- `go test ./internal/runtime -run Test`
+- `go test ./internal/config -run TestValidate`
 
-- Implement normalized allow/deny and delegated gating logic.
-- Route tool calls through a single runtime executor.
+Phase exit criteria:
+- `localclaw mcp serve` starts a stdio MCP loop.
+- Memory tools are discoverable and callable via MCP protocol tests.
+- Policy gate is enforced for all MCP tool calls.
 
-Red tests:
+### Phase 2: Claude Code MCP Integration
 
-- deny overrides allow
-- unknown tool rejected
-- delegated tool blocked by default
-- per-agent override precedence works
+Objective:
+- Make Claude runs MCP-first by default with strict, run-scoped MCP wiring.
 
-### Phase 3: Structured Tool Loop
+Primary implementation tasks:
+- Add run-scoped MCP config file generation (runtime-owned temp/state path).
+- Update `internal/llm/claudecode/client.go` invocation builder to include:
+  - `--mcp-config <path>`
+  - `--strict-mcp-config` when configured
+  - `--append-system-prompt <guidance>`
+- Ensure startup hard-fails when:
+  - MCP config cannot be written
+  - strict MCP flag is required but unsupported/invalid
+  - configured MCP server binary/args are invalid
+- Preserve stream parsing and stderr-rich error propagation.
+- Keep guidance prompt concise and tool-policy focused.
 
-- Add event-driven run loop for providers that emit tool calls.
-- Feed tool results back to model run when supported.
+TDD gates (Red -> Green):
+- Add failing tests verifying composed Claude args include required MCP flags.
+- Add failing tests for strict-config enabled/disabled behavior.
+- Add failing tests for run-scoped config file generation and cleanup behavior.
+- Add failing tests for hard-fail error messages with provider-specific context.
 
-Red tests:
+Validation commands:
+- `go test ./internal/llm/claudecode -run Test`
+- `go test ./internal/runtime -run TestPromptStream`
 
-- simulated provider tool-call sequence yields final output
-- tool error degrades gracefully and run continues
-- abort/cancellation interrupts running tool and model stream safely
+Phase exit criteria:
+- Claude adapter always emits valid MCP-first invocation for configured runs.
+- Missing/invalid MCP wiring fails fast with actionable errors.
+- Existing stream behavior remains unchanged for successful runs.
 
-### Phase 4: Skills Loader + Snapshot
+### Phase 3: Codex MCP Integration + Config Path Strategy
 
-- Implement workspace skill discovery and snapshot prompt injection.
-- Add basic invocation policy fields.
+Objective:
+- Add a Codex adapter that reliably enables localclaw MCP via config TOML without unsafe global mutation.
 
-Red tests:
+Primary implementation tasks:
+- Introduce `internal/llm/codex/client.go` with non-interactive `codex exec --json` integration.
+- Implement effective config path resolution order:
+  1. `llm.codex.mcp.config_path`
+  2. `$CODEX_HOME/config.toml`
+  3. `~/.codex/config.toml`
+- Implement isolated-home default path strategy when configured:
+  - create/use run/profile-scoped `CODEX_HOME`
+  - write/merge `mcp_servers.localclaw` deterministically
+- Add safe TOML read/merge/write behavior:
+  - preserve unrelated existing settings
+  - normalize localclaw server entry (`command`, `args`)
+  - fail on malformed or non-writable config
+- Wire adapter selection in runtime by `llm.provider=codex`.
 
-- snapshot contains eligible skills only
-- `disable-model-invocation` excludes skill from prompt block
-- session initialization stores/reuses snapshot as expected
+TDD gates (Red -> Green):
+- Add failing tests for each config path precedence branch.
+- Add failing tests proving deterministic merge behavior for existing TOML.
+- Add failing tests for malformed TOML, permission errors, and missing binary.
+- Add failing tests for expected Codex command shape and JSON stream handling.
 
-### Phase 5: TUI + Docs
+Validation commands:
+- `go test ./internal/llm/codex -run Test`
+- `go test ./internal/runtime -run Test`
+- `go test ./internal/config -run TestValidate`
 
-- Surface tool lifecycle events in UI status/log.
-- Update docs/config contracts and testing guide.
+Phase exit criteria:
+- Codex runs with the expected effective config path and MCP server entry.
+- Isolated home strategy works end-to-end and is default-safe.
+- No unintentional mutation of unrelated global user config in default flow.
 
-Red tests:
+### Phase 4: Complete v1 MCP Tool Surface (Workspace/Cron/Orchestration)
 
-- tool events render in TUI message stream
-- status text reflects tool activity transitions
+Objective:
+- Deliver the rest of the v1 `localclaw_mcp` tools with strict safety and validation.
+
+Primary implementation tasks:
+- Implement workspace tools in `internal/mcp/tools/workspace.go`:
+  - `localclaw_workspace_status`
+  - `localclaw_workspace_bootstrap_context`
+- Implement cron tools in `internal/mcp/tools/cron.go`:
+  - `localclaw_cron_list`
+  - `localclaw_cron_add`
+  - `localclaw_cron_remove`
+  - `localclaw_cron_run`
+- Implement orchestration/session tools in `internal/mcp/tools/orchestration.go`:
+  - `localclaw_sessions_list`
+  - `localclaw_sessions_history`
+  - `localclaw_sessions_send`
+  - `localclaw_session_status`
+- Reuse existing runtime/service modules; do not duplicate business logic.
+- Apply strict guards:
+  - path traversal and workspace boundary checks
+  - cron schedule sanity checks
+  - session ownership/existence checks
+  - bounded payload sizes and pagination defaults
+
+TDD gates (Red -> Green):
+- Add failing tests per tool for valid call, validation failure, policy denial, and backend error mapping.
+- Add failing tests for path/schedule/session security constraints.
+- Add integration-style MCP tests for tool discovery and call dispatch by name.
+
+Validation commands:
+- `go test ./internal/mcp -run Test`
+- `go test ./internal/workspace -run Test`
+- `go test ./internal/session -run Test`
+- `go test ./internal/cron -run Test`
+
+Phase exit criteria:
+- All v1 tool names are exposed and callable through MCP.
+- Every tool enforces policy and schema validation consistently.
+- Security guardrails are covered by dedicated tests.
+
+### Phase 5: TUI/Telemetry Split + Hard Cutover Finalization
+
+Objective:
+- Make ownership boundaries visible in UX/telemetry and complete the MCP-first hard cutover.
+
+Primary implementation tasks:
+- Update `internal/tui/app.go` `/tools` view to render separate sections:
+  - `provider_native`
+  - `localclaw_mcp`
+- Ensure tool activity/status UI includes ownership source labels.
+- Update runtime/tool-event telemetry schema to carry ownership class on every event.
+- Remove/retire legacy fallback paths for Claude/Codex runtime execution.
+- Align docs and operator guidance:
+  - `README.md`
+  - `docs/TUI.md`
+  - `docs/CONFIGURATION.md`
+  - `docs/RUNTIME.md`
+  - any superseded spec references
+
+TDD gates (Red -> Green):
+- Add failing TUI tests for `/tools` rendering split and ownership labels.
+- Add failing runtime tests that assert no legacy fallback path is invoked.
+- Add failing tests for telemetry event payload ownership fields.
+
+Validation commands:
+- `go test ./internal/tui -run TestHandleSlash`
+- `go test ./internal/runtime -run Test`
+- `go test ./...`
+- `go fmt ./...`
+
+Phase exit criteria:
+- Ownership split is explicit and test-covered in TUI and telemetry.
+- Claude/Codex runtime path is MCP-first only (no fallback retained).
+- Full suite passes and documentation reflects final behavior.
 
 ## Test Plan
 
-Unit/integration test targets to add/update:
+Unit and focused commands:
 
-- `internal/config/config_test.go`
-  - tool policy/delegated config validation
-- `internal/runtime/tools_test.go`
-  - router behavior, policy gating, structured loop fallbacks
-- `internal/runtime/*_test.go` (new)
-  - provider capability branching + tool loop lifecycle
-- `internal/skills/*_test.go` (new)
-  - skill parsing/loading/snapshot prompt behavior
-- `internal/tui/app_test.go`
-  - tool-event rendering/state transitions
-
-Focused Red/Green commands:
-
+- `go test ./internal/mcp -run Test`
+- `go test ./internal/llm/claudecode -run Test`
+- `go test ./internal/llm/codex -run Test`
+- `go test ./internal/runtime -run TestPromptStream`
+- `go test ./internal/tui -run TestHandleSlash`
 - `go test ./internal/config -run TestValidate`
-- `go test ./internal/runtime -run TestTool`
-- `go test ./internal/skills -run Test`
-- `go test ./internal/tui -run Test`
 
 Full validation:
 
 - `go test ./...`
-- `go fmt ./...` (when Go files change)
+- `go fmt ./...`
+
+Manual smoke:
+
+- `go run ./cmd/localclaw mcp serve`
+- Claude non-interactive run with `--mcp-config --strict-mcp-config --append-system-prompt`
+- Codex non-interactive run using effective MCP config path
 
 ## Acceptance Criteria
 
-- [ ] Local tools remain authoritative and execute through one runtime router.
-- [ ] Delegated tools are disabled by default and require explicit policy enablement.
-- [ ] Provider adapters can advertise structured tool-call capability; fallback mode remains supported.
-- [ ] Memory tool behavior remains backward compatible in fallback mode.
-- [ ] Skills loader is functional (workspace scope), with snapshot prompt injection and invocation flags.
-- [ ] Tool execution/policy outcomes are visible in transcript/TUI status surfaces.
-- [ ] No local-only boundary regressions (no listeners/gateway/server paths added).
+- [ ] `localclaw mcp serve` provides stdio MCP serving for v1 tool set.
+- [ ] Claude MCP wiring uses explicit MCP flags and append-system guidance.
+- [ ] Codex MCP wiring resolves and uses the correct config path contract.
+- [ ] Ownership split (`provider_native` vs `localclaw_mcp`) is explicit in runtime and TUI.
+- [ ] localclaw policy enforcement applies to all `localclaw_mcp` tools.
+- [ ] No listener/gateway/server transport is introduced.
+- [ ] No fallback or legacy execution path exists for Claude/Codex runtime execution.
 
-## Rollback / Risk Notes
-
-Rollback approach:
-
-- keep compatibility mode behind capability checks and default to fallback path
-- feature-flag delegated tool handling in config (`tools.delegated.enabled`)
-- if regressions occur, disable structured tool loop and keep current prompt-injection behavior
+## Risks / Mitigations
 
 Primary risks:
 
-- provider event format drift for structured tool calls
-- policy misconfiguration causing accidental tool denial/allow
-- context inflation from skill prompt blocks
+- provider CLI MCP flag/config drift
+- accidental mutation of user-global Codex config
+- ownership misclassification in tool event handling
+- over-broad tool exposure
 
 Mitigations:
 
-- strict adapter tests with fixture streams
-- deterministic policy unit tests
-- bounded skill prompt rendering (size limits + truncation rules in implementation)
+- capability probes in `check` mode
+- isolated/run-scoped config generation by default
+- strict ownership-source assertions in tests
+- default-deny policy for high-risk orchestration operations
 
+## Relationship to Other Specs
+
+- `docs/specs/openai-codex-model-support.md`: provider selection and Codex adapter baseline.
+- `docs/specs/structured-tool-calls-safe-migration.md`: superseded by this MCP-first hard-cutover architecture for Claude/Codex extension mode.
