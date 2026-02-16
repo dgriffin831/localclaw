@@ -21,6 +21,8 @@
 - `session`
 - `memory`
 - `workspace`
+- `tools`
+- `skills`
 - `cron`
 - `heartbeat`
 
@@ -56,6 +58,12 @@
   "agents": {
     "defaults": {
       "workspace": ".",
+      "tools": {
+        "delegated": {
+          "enabled": false
+        }
+      },
+      "skills": {},
       "memorySearch": {
         "enabled": false,
         "sources": ["memory"],
@@ -133,6 +141,12 @@
   "workspace": {
     "root": "."
   },
+  "tools": {
+    "delegated": {
+      "enabled": false
+    }
+  },
+  "skills": {},
   "cron": {
     "enabled": true
   },
@@ -173,6 +187,11 @@ General:
 - `channels.enabled` allowlist: `slack`, `signal`.
 - duplicate channel names are rejected.
 - `state.root`, `agents.defaults.workspace`, and `session.store` are required.
+- tool/skill policy name lists reject blank and duplicate entries:
+  - `tools.allow`, `tools.deny`
+  - `tools.delegated.allow`, `tools.delegated.deny`
+  - `skills.enabled`, `skills.disabled`
+  - same validations also apply under `agents.defaults.*` and `agents.list[].*` overrides
 - each `agents.list[].id` is required and unique.
 - `agents.list[].workspace` cannot be blank-whitespace.
 - memory flush numeric fields must be non-negative:
@@ -204,6 +223,40 @@ Provider values:
 - Config accepts provider/fallback strings without strict validation.
 - Memory manager currently supports local-only embedding modes: `none` and `local`.
 - Unsupported provider values fail when memory manager resolves embedding provider.
+
+## Tool policy configuration notes
+
+`tools` can be configured globally, under `agents.defaults.tools`, and per agent under `agents.list[].tools`.
+
+- Policy precedence: global -> agent defaults -> specific agent.
+- Evaluation order:
+  - normalize tool name
+  - deny match blocks
+  - allowlist applies when non-empty
+- Delegated tools (`class=delegated`) are disabled by default.
+- Delegated tools must pass both:
+  - `tools.delegated.enabled=true`
+  - delegated allowlist match (`tools.delegated.allow`)
+
+Supported list semantics:
+
+- exact tool name matches (`memory_search`)
+- wildcard match (`*`)
+
+## Skills configuration notes
+
+`skills` can be configured globally, under `agents.defaults.skills`, and per agent under `agents.list[].skills`.
+
+- Workspace skills are discovered from `skills/<name>/SKILL.md`.
+- Frontmatter fields currently parsed:
+  - `name`
+  - `description`
+  - `user-invocable` (default `true`)
+  - `disable-model-invocation` (default `false`)
+- Eligibility filters:
+  - `skills.disabled` always excludes a skill
+  - when `skills.enabled` is non-empty, only those names are eligible
+- Skills with `disable-model-invocation=true` are excluded from the model-facing skills prompt block.
 
 ## Optional TUI waiting text
 

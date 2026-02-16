@@ -3,30 +3,25 @@ package claudecode
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+
+	"github.com/dgriffin831/localclaw/internal/llm"
 )
 
-// Client defines local Claude Code CLI invocation behavior.
-type Client interface {
-	Prompt(ctx context.Context, input string) (string, error)
-	PromptStream(ctx context.Context, input string) (<-chan StreamEvent, <-chan error)
-}
-
-type StreamEventType string
+// Backward-compatible aliases for legacy package references.
+type StreamEventType = llm.StreamEventType
+type StreamEvent = llm.StreamEvent
 
 const (
-	StreamEventDelta StreamEventType = "delta"
-	StreamEventFinal StreamEventType = "final"
+	StreamEventDelta = llm.StreamEventDelta
+	StreamEventFinal = llm.StreamEventFinal
 )
-
-type StreamEvent struct {
-	Type StreamEventType
-	Text string
-}
 
 type Settings struct {
 	BinaryPath    string
@@ -44,6 +39,13 @@ func NewClient(settings Settings) *LocalClient {
 	return &LocalClient{settings: settings}
 }
 
+func (c *LocalClient) Capabilities() llm.Capabilities {
+	return llm.Capabilities{
+		SupportsRequestOptions: true,
+		StructuredToolCalls:    false,
+	}
+}
+
 func (c *LocalClient) Prompt(ctx context.Context, input string) (string, error) {
 	events, errs := c.PromptStream(ctx, input)
 	var streamed strings.Builder
@@ -56,11 +58,11 @@ func (c *LocalClient) Prompt(ctx context.Context, input string) (string, error) 
 				events = nil
 				continue
 			}
-			if evt.Type == StreamEventDelta {
+			if evt.Type == llm.StreamEventDelta {
 				streamed.WriteString(evt.Text)
 				continue
 			}
-			if evt.Type == StreamEventFinal {
+			if evt.Type == llm.StreamEventFinal {
 				final = strings.TrimSpace(evt.Text)
 			}
 		case err, ok := <-errs:
@@ -80,9 +82,17 @@ func (c *LocalClient) Prompt(ctx context.Context, input string) (string, error) 
 	return strings.TrimSpace(streamed.String()), nil
 }
 
-func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan StreamEvent, <-chan error) {
+func (c *LocalClient) PromptRequest(ctx context.Context, req llm.Request) (string, error) {
+	return c.Prompt(ctx, llm.ComposePromptFallback(req))
+}
+
+func (c *LocalClient) PromptStreamRequest(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+	return c.PromptStream(ctx, llm.ComposePromptFallback(req))
+}
+
+func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
 	if strings.TrimSpace(input) == "" {
-		events := make(chan StreamEvent)
+		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		defer close(events)
 		defer close(errs)
@@ -90,12 +100,12 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan St
 		return events, errs
 	}
 
-	cmd := exec.CommandContext(ctx, c.settings.BinaryPath, "-p", input)
+	cmd := exec.CommandContext(ctx, c.settings.BinaryPath, c.buildCommandArgs(input)...)
 	cmd.Env = append(os.Environ(), c.buildEnv()...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		events := make(chan StreamEvent)
+		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		defer close(events)
 		defer close(errs)
@@ -104,7 +114,7 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan St
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		events := make(chan StreamEvent)
+		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		defer close(events)
 		defer close(errs)
@@ -112,7 +122,7 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan St
 		return events, errs
 	}
 	if err := cmd.Start(); err != nil {
-		events := make(chan StreamEvent)
+		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		defer close(events)
 		defer close(errs)
@@ -120,7 +130,7 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan St
 		return events, errs
 	}
 
-	events := make(chan StreamEvent, 32)
+	events := make(chan llm.StreamEvent, 32)
 	errs := make(chan error, 1)
 
 	go func() {
@@ -133,29 +143,54 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan St
 			stderrTextCh <- strings.TrimSpace(string(data))
 		}()
 
-		reader := bufio.NewReader(stdout)
-		buf := make([]byte, 1024)
-		var full strings.Builder
-		for {
-			n, readErr := reader.Read(buf)
-			if n > 0 {
-				chunk := string(buf[:n])
-				full.WriteString(chunk)
-				if !emitEvent(ctx, events, StreamEvent{Type: StreamEventDelta, Text: chunk}) {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+
+		toolNames := map[string]string{}
+		var deltaText strings.Builder
+		finalSeen := false
+		resultErr := ""
+
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+
+			parsedEvents, parseResultErr, parseErr := parseStreamJSONLine(line, toolNames)
+			if parseErr != nil {
+				// Compatibility fallback: if parsing fails, treat stdout as raw text delta.
+				delta := line + "\n"
+				deltaText.WriteString(delta)
+				if !emitEvent(ctx, events, llm.StreamEvent{Type: llm.StreamEventDelta, Text: delta}) {
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					return
+				}
+				continue
+			}
+			if parseResultErr != "" {
+				resultErr = parseResultErr
+			}
+			for _, evt := range parsedEvents {
+				if evt.Type == llm.StreamEventDelta {
+					deltaText.WriteString(evt.Text)
+				}
+				if evt.Type == llm.StreamEventFinal {
+					finalSeen = true
+				}
+				if !emitEvent(ctx, events, evt) {
 					_ = cmd.Process.Kill()
 					_ = cmd.Wait()
 					return
 				}
 			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				_ = cmd.Process.Kill()
-				_ = cmd.Wait()
-				emitError(ctx, errs, fmt.Errorf("read claude code output: %w", readErr))
-				return
-			}
+		}
+		if scanErr := scanner.Err(); scanErr != nil && scanErr != io.EOF {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			emitError(ctx, errs, fmt.Errorf("read claude code output: %w", scanErr))
+			return
 		}
 
 		waitErr := cmd.Wait()
@@ -168,15 +203,266 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan St
 			emitError(ctx, errs, fmt.Errorf("claude code cli execution failed: %w", waitErr))
 			return
 		}
+		if resultErr != "" {
+			emitError(ctx, errs, fmt.Errorf("claude code cli result error: %s", resultErr))
+			return
+		}
 
-		finalText := strings.TrimSpace(full.String())
-		emitEvent(ctx, events, StreamEvent{Type: StreamEventFinal, Text: finalText})
+		if !finalSeen {
+			finalText := strings.TrimSpace(deltaText.String())
+			if finalText != "" {
+				emitEvent(ctx, events, llm.StreamEvent{Type: llm.StreamEventFinal, Text: finalText})
+			}
+		}
 	}()
 
 	return events, errs
 }
 
-func emitEvent(ctx context.Context, events chan<- StreamEvent, evt StreamEvent) bool {
+func (c *LocalClient) buildCommandArgs(input string) []string {
+	return []string{
+		"-p", input,
+		"--output-format", "stream-json",
+		"--verbose",
+	}
+}
+
+type claudeStreamEnvelope struct {
+	Type          string                 `json:"type"`
+	Subtype       string                 `json:"subtype,omitempty"`
+	IsError       bool                   `json:"is_error,omitempty"`
+	Result        string                 `json:"result,omitempty"`
+	Model         string                 `json:"model,omitempty"`
+	Tools         []string               `json:"tools,omitempty"`
+	Message       claudeStreamMessage    `json:"message,omitempty"`
+	ToolUseResult map[string]interface{} `json:"tool_use_result,omitempty"`
+}
+
+type claudeStreamMessage struct {
+	Role    string                `json:"role,omitempty"`
+	Content []claudeStreamContent `json:"content,omitempty"`
+}
+
+type claudeStreamContent struct {
+	Type      string                 `json:"type"`
+	Text      string                 `json:"text,omitempty"`
+	ID        string                 `json:"id,omitempty"`
+	Name      string                 `json:"name,omitempty"`
+	Input     map[string]interface{} `json:"input,omitempty"`
+	ToolUseID string                 `json:"tool_use_id,omitempty"`
+	Content   interface{}            `json:"content,omitempty"`
+	IsError   bool                   `json:"is_error,omitempty"`
+}
+
+func parseStreamJSONLine(line string, toolNames map[string]string) ([]llm.StreamEvent, string, error) {
+	var env claudeStreamEnvelope
+	if err := json.Unmarshal([]byte(line), &env); err != nil {
+		return nil, "", err
+	}
+
+	switch strings.ToLower(strings.TrimSpace(env.Type)) {
+	case "system":
+		return parseSystemEvents(env), "", nil
+	case "assistant":
+		return parseAssistantMessageEvents(env.Message, toolNames), "", nil
+	case "user":
+		return parseUserMessageToolResultEvents(env, toolNames), "", nil
+	case "result":
+		events := []llm.StreamEvent{}
+		result := strings.TrimSpace(env.Result)
+		if result != "" {
+			events = append(events, llm.StreamEvent{
+				Type: llm.StreamEventFinal,
+				Text: result,
+			})
+		}
+		if env.IsError {
+			if result != "" {
+				return events, result, nil
+			}
+			subtype := strings.TrimSpace(env.Subtype)
+			if subtype == "" {
+				subtype = "unknown"
+			}
+			return events, "result event reported error (" + subtype + ")", nil
+		}
+		return events, "", nil
+	default:
+		return nil, "", nil
+	}
+}
+
+func parseSystemEvents(env claudeStreamEnvelope) []llm.StreamEvent {
+	if strings.ToLower(strings.TrimSpace(env.Subtype)) != "init" {
+		return nil
+	}
+
+	tools := normalizeProviderToolNames(env.Tools)
+	if strings.TrimSpace(env.Model) == "" && len(tools) == 0 {
+		return nil
+	}
+	return []llm.StreamEvent{
+		{
+			Type: llm.StreamEventProviderMetadata,
+			ProviderMetadata: &llm.ProviderMetadata{
+				Provider: "claudecode",
+				Model:    strings.TrimSpace(env.Model),
+				Tools:    tools,
+			},
+		},
+	}
+}
+
+func parseAssistantMessageEvents(msg claudeStreamMessage, toolNames map[string]string) []llm.StreamEvent {
+	if len(msg.Content) == 0 {
+		return nil
+	}
+	events := make([]llm.StreamEvent, 0, len(msg.Content))
+	for _, item := range msg.Content {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "text":
+			text := item.Text
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			events = append(events, llm.StreamEvent{
+				Type: llm.StreamEventDelta,
+				Text: text,
+			})
+		case "tool_use":
+			callID := strings.TrimSpace(item.ID)
+			toolName := strings.TrimSpace(item.Name)
+			if callID != "" && toolName != "" && toolNames != nil {
+				toolNames[callID] = toolName
+			}
+			args := map[string]interface{}{}
+			for key, value := range item.Input {
+				args[key] = value
+			}
+			events = append(events, llm.StreamEvent{
+				Type: llm.StreamEventToolCall,
+				ToolCall: &llm.ToolCall{
+					ID:    callID,
+					Name:  toolName,
+					Args:  args,
+					Class: llm.ToolClassDelegated,
+				},
+			})
+		}
+	}
+	return events
+}
+
+func parseUserMessageToolResultEvents(env claudeStreamEnvelope, toolNames map[string]string) []llm.StreamEvent {
+	content := env.Message.Content
+	if len(content) == 0 {
+		return nil
+	}
+	events := make([]llm.StreamEvent, 0, len(content))
+	for _, item := range content {
+		if strings.ToLower(strings.TrimSpace(item.Type)) != "tool_result" {
+			continue
+		}
+		callID := strings.TrimSpace(item.ToolUseID)
+		toolName := ""
+		if toolNames != nil && callID != "" {
+			toolName = strings.TrimSpace(toolNames[callID])
+		}
+		if toolName == "" {
+			toolName = "tool"
+		}
+
+		result := llm.ToolResult{
+			CallID: callID,
+			Tool:   toolName,
+			OK:     !item.IsError,
+		}
+		if item.IsError {
+			result.Status = "error"
+			result.Error = renderToolResultText(item.Content)
+			if strings.TrimSpace(result.Error) == "" {
+				result.Error = "tool returned error"
+			}
+		} else {
+			result.Status = "completed"
+			result.Data = map[string]interface{}{}
+			if text := renderToolResultText(item.Content); text != "" {
+				result.Data["content"] = text
+			}
+			if len(env.ToolUseResult) > 0 {
+				result.Data["provider_result"] = env.ToolUseResult
+			}
+			if len(result.Data) == 0 {
+				result.Data = nil
+			}
+		}
+
+		events = append(events, llm.StreamEvent{
+			Type:       llm.StreamEventToolResult,
+			ToolResult: &result,
+		})
+	}
+	return events
+}
+
+func renderToolResultText(raw interface{}) string {
+	switch v := raw.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	case []interface{}:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			text := renderToolResultText(item)
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	case map[string]interface{}:
+		if text, ok := v["text"].(string); ok && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+		if content, ok := v["content"]; ok {
+			return renderToolResultText(content)
+		}
+		buf, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(buf))
+	case bool:
+		return strconv.FormatBool(v)
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	default:
+		return strings.TrimSpace(fmt.Sprint(v))
+	}
+}
+
+func normalizeProviderToolNames(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(raw))
+	for _, name := range raw {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func emitEvent(ctx context.Context, events chan<- llm.StreamEvent, evt llm.StreamEvent) bool {
 	select {
 	case events <- evt:
 		return true

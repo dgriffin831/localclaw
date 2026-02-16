@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/dgriffin831/localclaw/internal/config"
+	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/skills"
@@ -26,14 +27,24 @@ type ToolExecutionRequest struct {
 	AgentID   string
 	SessionID string
 	Name      string
+	Class     llm.ToolClass
 	Args      map[string]interface{}
 }
 
 type ToolExecutionResult struct {
 	Tool  string                 `json:"tool"`
+	Class llm.ToolClass          `json:"class,omitempty"`
 	OK    bool                   `json:"ok"`
 	Data  map[string]interface{} `json:"data,omitempty"`
 	Error string                 `json:"error,omitempty"`
+}
+
+type DelegatedToolExecutor interface {
+	ExecuteDelegatedTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult
+}
+
+func (a *App) SetDelegatedToolExecutor(executor DelegatedToolExecutor) {
+	a.delegated = executor
 }
 
 // ToolDefinitions returns runtime tools available for the current agent policy.
@@ -41,21 +52,64 @@ func (a *App) ToolDefinitions(agentID string) []skills.ToolDefinition {
 	if !a.toolsEnabled(agentID) || a.tools == nil {
 		return nil
 	}
-	return a.tools.List()
+	defs := a.tools.List()
+	filtered := make([]skills.ToolDefinition, 0, len(defs))
+	for _, tool := range defs {
+		if allowed, _ := a.evaluateToolPolicy(agentID, tool.Name, llm.ToolClassLocal); !allowed {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
 }
 
 // ExecuteTool invokes one registered runtime tool and degrades gracefully on failures.
 func (a *App) ExecuteTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult {
-	toolName := strings.TrimSpace(req.Name)
+	toolName := normalizeToolName(req.Name)
+	toolClass := req.Class
 	result := ToolExecutionResult{
-		Tool: toolName,
-		OK:   false,
+		Tool:  toolName,
+		Class: toolClass,
+		OK:    false,
 	}
 
 	if toolName == "" {
 		result.Error = "tool name is required"
 		return result
 	}
+
+	if toolClass == llm.ToolClassUnspecified {
+		if a.tools != nil {
+			if _, ok := a.tools.Get(toolName); ok {
+				toolClass = llm.ToolClassLocal
+			}
+		}
+		if toolClass == llm.ToolClassUnspecified {
+			toolClass = llm.ToolClassLocal
+		}
+		result.Class = toolClass
+	}
+
+	if toolClass == llm.ToolClassDelegated {
+		allowed, reason := a.evaluateToolPolicy(req.AgentID, toolName, llm.ToolClassDelegated)
+		if !allowed {
+			result.Error = fmt.Sprintf("tool policy blocked: %s", reason)
+			return result
+		}
+		if a.delegated == nil {
+			result.Error = "delegated tool execution is not configured"
+			return result
+		}
+		delegatedResult := a.delegated.ExecuteDelegatedTool(ctx, req)
+		if delegatedResult.Tool == "" {
+			delegatedResult.Tool = toolName
+		}
+		if delegatedResult.Class == llm.ToolClassUnspecified {
+			delegatedResult.Class = llm.ToolClassDelegated
+		}
+		return delegatedResult
+	}
+
 	if !a.toolsEnabled(req.AgentID) {
 		result.Error = "runtime tools are disabled"
 		return result
@@ -68,12 +122,21 @@ func (a *App) ExecuteTool(ctx context.Context, req ToolExecutionRequest) ToolExe
 		result.Error = fmt.Sprintf("unknown tool %q", toolName)
 		return result
 	}
+	allowed, reason := a.evaluateToolPolicy(req.AgentID, toolName, llm.ToolClassLocal)
+	if !allowed {
+		result.Error = fmt.Sprintf("tool policy blocked: %s", reason)
+		return result
+	}
 
 	switch toolName {
 	case skills.ToolMemorySearch:
-		return a.executeMemorySearchTool(ctx, req)
+		out := a.executeMemorySearchTool(ctx, req)
+		out.Class = llm.ToolClassLocal
+		return out
 	case skills.ToolMemoryGet:
-		return a.executeMemoryGetTool(ctx, req)
+		out := a.executeMemoryGetTool(ctx, req)
+		out.Class = llm.ToolClassLocal
+		return out
 	default:
 		result.Error = fmt.Sprintf("unsupported tool %q", toolName)
 		return result
@@ -81,53 +144,71 @@ func (a *App) ExecuteTool(ctx context.Context, req ToolExecutionRequest) ToolExe
 }
 
 func (a *App) buildPromptInput(ctx context.Context, agentID, sessionID, input string) string {
-	trimmedInput := strings.TrimSpace(input)
 	resolution := ResolveSession(agentID, sessionID)
+	req := a.buildPromptRequest(ctx, resolution, input)
+	return llm.ComposePromptFallback(req)
+}
+
+func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResolution, input string) llm.Request {
+	trimmedInput := strings.TrimSpace(input)
 	bootstrapSection := a.buildBootstrapPromptSection(ctx, resolution)
-	if !a.toolsEnabled(agentID) && bootstrapSection == "" {
-		return trimmedInput
-	}
+	skillsSection := a.buildSkillsPromptSection(ctx, resolution)
 
 	toolLines := make([]string, 0, 8)
-	if a.toolsEnabled(agentID) {
-		for _, tool := range a.ToolDefinitions(agentID) {
+	toolDefs := make([]llm.ToolDefinition, 0, 8)
+	if a.toolsEnabled(resolution.AgentID) {
+		for _, tool := range a.ToolDefinitions(resolution.AgentID) {
 			paramParts := make([]string, 0, len(tool.Parameters))
+			params := make([]llm.ToolParameter, 0, len(tool.Parameters))
 			for _, param := range tool.Parameters {
 				suffix := " optional"
 				if param.Required {
 					suffix = " required"
 				}
 				paramParts = append(paramParts, fmt.Sprintf("%s:%s (%s)", param.Name, param.Type, suffix))
+				params = append(params, llm.ToolParameter{
+					Name:        param.Name,
+					Type:        param.Type,
+					Required:    param.Required,
+					Description: param.Description,
+				})
 			}
 			toolLines = append(toolLines, fmt.Sprintf("- %s: %s | args: %s", tool.Name, tool.Description, strings.Join(paramParts, ", ")))
+			toolDefs = append(toolDefs, llm.ToolDefinition{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Class:       llm.ToolClassLocal,
+				Parameters:  params,
+			})
 		}
 	}
 
-	if bootstrapSection == "" && len(toolLines) == 0 {
-		return trimmedInput
-	}
-
-	var b strings.Builder
+	var system strings.Builder
 	if bootstrapSection != "" {
-		b.WriteString(bootstrapSection)
+		system.WriteString(bootstrapSection)
 	}
 	if len(toolLines) > 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
+		if system.Len() > 0 {
+			system.WriteString("\n\n")
 		}
-		b.WriteString(memoryRecallPolicyPrompt)
-		b.WriteString("\n\nAvailable tools:\n")
-		b.WriteString(strings.Join(toolLines, "\n"))
-		b.WriteString("\n\nCurrent session_key: ")
-		b.WriteString(resolution.SessionKey)
-		b.WriteString("\n")
+		system.WriteString(memoryRecallPolicyPrompt)
+		system.WriteString("\n\nAvailable tools:\n")
+		system.WriteString(strings.Join(toolLines, "\n"))
+		system.WriteString("\n\nCurrent session_key: ")
+		system.WriteString(resolution.SessionKey)
 	}
-	if b.Len() > 0 {
-		b.WriteString("\n")
+
+	return llm.Request{
+		Input:           trimmedInput,
+		SystemContext:   strings.TrimSpace(system.String()),
+		SkillPrompt:     strings.TrimSpace(skillsSection),
+		ToolDefinitions: toolDefs,
+		Session: llm.SessionMetadata{
+			AgentID:    resolution.AgentID,
+			SessionID:  resolution.SessionID,
+			SessionKey: resolution.SessionKey,
+		},
 	}
-	b.WriteString("User input:\n")
-	b.WriteString(trimmedInput)
-	return b.String()
 }
 
 func (a *App) buildBootstrapPromptSection(ctx context.Context, resolution SessionResolution) string {
@@ -206,6 +287,65 @@ func renderBootstrapPromptSection(files []workspace.BootstrapFile) string {
 		return ""
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func (a *App) buildSkillsPromptSection(ctx context.Context, resolution SessionResolution) string {
+	if a.skills == nil {
+		return ""
+	}
+
+	compactionCount := 0
+	if a.sessions != nil {
+		entry, exists, err := a.sessions.Get(ctx, resolution.AgentID, resolution.SessionID)
+		if err == nil && exists {
+			compactionCount = entry.CompactionCount
+		}
+	}
+
+	a.snapshotMu.Lock()
+	cached, ok := a.skillPromptSnapshot[resolution.SessionKey]
+	a.snapshotMu.Unlock()
+	if ok && cached.CompactionCount == compactionCount {
+		return cached.Prompt
+	}
+
+	workspacePath, err := a.ResolveWorkspacePath(resolution.AgentID)
+	if err != nil {
+		return ""
+	}
+	skillsCfg := a.resolveSkillsConfig(resolution.AgentID)
+	snapshot, err := a.skills.Snapshot(ctx, skills.SnapshotRequest{
+		WorkspacePath: workspacePath,
+		Enabled:       skillsCfg.Enabled,
+		Disabled:      skillsCfg.Disabled,
+	})
+	if err != nil {
+		return ""
+	}
+
+	prompt := skills.RenderSnapshotPrompt(snapshot)
+	a.snapshotMu.Lock()
+	if strings.TrimSpace(prompt) == "" {
+		delete(a.skillPromptSnapshot, resolution.SessionKey)
+	} else {
+		a.skillPromptSnapshot[resolution.SessionKey] = skillsSessionSnapshot{
+			CompactionCount: compactionCount,
+			Prompt:          prompt,
+		}
+	}
+	a.snapshotMu.Unlock()
+
+	return prompt
+}
+
+func (a *App) clearSkillPromptSnapshot(sessionKey string) {
+	key := strings.TrimSpace(sessionKey)
+	if key == "" {
+		return
+	}
+	a.snapshotMu.Lock()
+	delete(a.skillPromptSnapshot, key)
+	a.snapshotMu.Unlock()
 }
 
 func (a *App) executeMemorySearchTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult {
@@ -392,6 +532,113 @@ func (a *App) resolveMemorySearchConfig(agentID string) config.MemorySearchConfi
 		break
 	}
 	return resolved
+}
+
+func (a *App) resolveToolsConfig(agentID string) config.ToolsConfig {
+	resolved := a.cfg.Tools
+	if hasToolsOverride(a.cfg.Agents.Defaults.Tools) {
+		resolved = mergeToolsConfig(resolved, a.cfg.Agents.Defaults.Tools)
+	}
+
+	normalizedAgentID := ResolveAgentID(agentID)
+	for _, agent := range a.cfg.Agents.List {
+		if ResolveAgentID(agent.ID) != normalizedAgentID {
+			continue
+		}
+		if hasToolsOverride(agent.Tools) {
+			resolved = mergeToolsConfig(resolved, agent.Tools)
+		}
+		break
+	}
+	return resolved
+}
+
+func hasToolsOverride(cfg config.ToolsConfig) bool {
+	return len(cfg.Allow) > 0 ||
+		len(cfg.Deny) > 0 ||
+		cfg.Delegated.Enabled ||
+		len(cfg.Delegated.Allow) > 0 ||
+		len(cfg.Delegated.Deny) > 0
+}
+
+func mergeToolsConfig(base, override config.ToolsConfig) config.ToolsConfig {
+	merged := base
+	if len(override.Allow) > 0 || len(override.Deny) > 0 {
+		merged.Allow = append([]string{}, override.Allow...)
+		merged.Deny = append([]string{}, override.Deny...)
+	}
+	if override.Delegated.Enabled {
+		merged.Delegated.Enabled = true
+	}
+	if len(override.Delegated.Allow) > 0 || len(override.Delegated.Deny) > 0 {
+		merged.Delegated.Allow = append([]string{}, override.Delegated.Allow...)
+		merged.Delegated.Deny = append([]string{}, override.Delegated.Deny...)
+	}
+	return merged
+}
+
+func (a *App) resolveSkillsConfig(agentID string) config.SkillsConfig {
+	resolved := a.cfg.Skills
+	if hasSkillsOverride(a.cfg.Agents.Defaults.Skills) {
+		resolved = mergeSkillsConfig(resolved, a.cfg.Agents.Defaults.Skills)
+	}
+
+	normalizedAgentID := ResolveAgentID(agentID)
+	for _, agent := range a.cfg.Agents.List {
+		if ResolveAgentID(agent.ID) != normalizedAgentID {
+			continue
+		}
+		if hasSkillsOverride(agent.Skills) {
+			resolved = mergeSkillsConfig(resolved, agent.Skills)
+		}
+		break
+	}
+	return resolved
+}
+
+func hasSkillsOverride(cfg config.SkillsConfig) bool {
+	return len(cfg.Enabled) > 0 || len(cfg.Disabled) > 0
+}
+
+func mergeSkillsConfig(base, override config.SkillsConfig) config.SkillsConfig {
+	merged := base
+	if len(override.Enabled) > 0 || len(override.Disabled) > 0 {
+		merged.Enabled = append([]string{}, override.Enabled...)
+		merged.Disabled = append([]string{}, override.Disabled...)
+	}
+	return merged
+}
+
+func (a *App) evaluateToolPolicy(agentID string, toolName string, class llm.ToolClass) (bool, string) {
+	name := normalizeToolName(toolName)
+	if name == "" {
+		return false, "tool name is required"
+	}
+
+	policy := a.resolveToolsConfig(agentID)
+	if class == llm.ToolClassDelegated {
+		if !policy.Delegated.Enabled {
+			return false, "delegated tools are disabled"
+		}
+		if matchToolList(policy.Delegated.Deny, name) {
+			return false, fmt.Sprintf("delegated tool %q denied by policy", name)
+		}
+		if len(policy.Delegated.Allow) == 0 {
+			return false, fmt.Sprintf("delegated tool %q is not allowlisted", name)
+		}
+		if !matchToolList(policy.Delegated.Allow, name) {
+			return false, fmt.Sprintf("delegated tool %q is not allowlisted", name)
+		}
+		return true, ""
+	}
+
+	if matchToolList(policy.Deny, name) {
+		return false, fmt.Sprintf("tool %q denied by policy", name)
+	}
+	if len(policy.Allow) > 0 && !matchToolList(policy.Allow, name) {
+		return false, fmt.Sprintf("tool %q is not allowlisted", name)
+	}
+	return true, ""
 }
 
 func hasMemorySearchOverride(cfg config.MemorySearchConfig) bool {
@@ -619,6 +866,27 @@ func normalizeSources(values []string) map[string]bool {
 		out[source] = true
 	}
 	return out
+}
+
+func matchToolList(values []string, toolName string) bool {
+	normalizedTool := normalizeToolName(toolName)
+	if normalizedTool == "" {
+		return false
+	}
+	for _, raw := range values {
+		pattern := normalizeToolName(raw)
+		if pattern == "" {
+			continue
+		}
+		if pattern == "*" || pattern == normalizedTool {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeToolName(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func resolveStorePath(stateRoot string, storePattern string, agentID string) (string, error) {

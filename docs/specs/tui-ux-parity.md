@@ -106,7 +106,7 @@ On completion:
 Multi-line editor requirements:
 
 - `Enter`: send message
-- `Alt+Enter`: newline insertion
+- `Ctrl+J`: newline insertion
 - `Ctrl+C`: clear compose buffer; second press within 1s exits
 - `Ctrl+D`: exit when compose buffer is empty
 - `Up/Down`: input history navigation (submitted prompts)
@@ -129,6 +129,9 @@ Initial command set (local-first adaptation):
 - `/verbose <on|off>`
 - `/model <name>` (if runtime supports model override)
 - `/status`
+
+Verbose-mode expectation:
+- `/verbose on` should surface additional system diagnostics for prompt/session context, stream lifecycle, transcript writes, and tool metadata; `/verbose off` returns to minimal transcript output.
 
 Keyboard toggles:
 
@@ -249,7 +252,7 @@ Acceptance:
 
 ### Phase 4: Advanced composer and controls
 
-- Multi-line editing (`Alt+Enter` newline), history, keybindings.
+- Multi-line editing (`Ctrl+J` newline), history, keybindings.
 - Slash command parser + autocomplete + toggles.
 - Tool card expand/collapse behaviors.
 

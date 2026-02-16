@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dgriffin831/localclaw/internal/channels/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/dgriffin831/localclaw/internal/cron"
 	"github.com/dgriffin831/localclaw/internal/heartbeat"
 	"github.com/dgriffin831/localclaw/internal/hooks"
+	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/session"
@@ -32,13 +34,22 @@ type App struct {
 	sessions   *session.Store
 	workspace  workspace.Manager
 	skills     skills.Registry
+	delegated  DelegatedToolExecutor
 	cron       cron.Scheduler
 	heartbeat  heartbeat.Monitor
 	slack      slack.Client
 	signal     signal.Client
-	llm        claudecode.Client
+	llm        llm.Client
 	transcript *session.TranscriptWriter
 	now        func() time.Time
+
+	snapshotMu          sync.Mutex
+	skillPromptSnapshot map[string]skillsSessionSnapshot
+}
+
+type skillsSessionSnapshot struct {
+	CompactionCount int
+	Prompt          string
 }
 
 const (
@@ -97,6 +108,12 @@ func New(cfg config.Config) (*App, error) {
 		agentIDs = append(agentIDs, agent.ID)
 	}
 
+	workspaceManager := workspace.NewLocalManager(workspace.Settings{
+		StateRoot:        cfg.State.Root,
+		DefaultWorkspace: cfg.Agents.Defaults.Workspace,
+		AgentWorkspaces:  agentWorkspaces,
+	})
+
 	return &App{
 		cfg:    cfg,
 		memory: memory.NewLocalStore(cfg.Memory.Path),
@@ -106,12 +123,13 @@ func New(cfg config.Config) (*App, error) {
 			StorePath:     cfg.Session.Store,
 			KnownAgentIDs: agentIDs,
 		}),
-		workspace: workspace.NewLocalManager(workspace.Settings{
-			StateRoot:        cfg.State.Root,
-			DefaultWorkspace: cfg.Agents.Defaults.Workspace,
-			AgentWorkspaces:  agentWorkspaces,
+		workspace: workspaceManager,
+		skills: skills.NewLocalRegistry(skills.LocalRegistrySettings{
+			AgentIDs: agentIDs,
+			ResolveWorkspace: func(agentID string) (string, error) {
+				return workspaceManager.ResolveWorkspace(agentID)
+			},
 		}),
-		skills:    skills.NewLocalRegistry(),
 		cron:      cron.NewInProcessScheduler(cfg.Cron.Enabled),
 		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
 		slack:     slack.NewLocalAdapter(),
@@ -123,8 +141,9 @@ func New(cfg config.Config) (*App, error) {
 			BedrockRegion: cfg.LLM.ClaudeCode.BedrockRegion,
 			AuthMode:      cfg.LLM.ClaudeCode.AuthMode,
 		}),
-		transcript: session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
-		now:        time.Now,
+		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
+		now:                 time.Now,
+		skillPromptSnapshot: map[string]skillsSessionSnapshot{},
 	}, nil
 }
 
@@ -205,18 +224,54 @@ func (a *App) Prompt(ctx context.Context, input string) (string, error) {
 }
 
 // PromptStream sends input to the local LLM client and yields incremental output events.
-func (a *App) PromptStream(ctx context.Context, input string) (<-chan claudecode.StreamEvent, <-chan error) {
+func (a *App) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
 	return a.PromptStreamForSession(ctx, DefaultAgentID, DefaultSessionID, input)
 }
 
 // PromptForSession sends a single input with the resolved agent/session context.
 func (a *App) PromptForSession(ctx context.Context, agentID, sessionID, input string) (string, error) {
-	return a.llm.Prompt(ctx, a.buildPromptInput(ctx, agentID, sessionID, input))
+	events, errs := a.PromptStreamForSession(ctx, agentID, sessionID, input)
+	var streamed strings.Builder
+	final := ""
+	for events != nil || errs != nil {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			switch evt.Type {
+			case llm.StreamEventDelta:
+				streamed.WriteString(evt.Text)
+			case llm.StreamEventFinal:
+				final = strings.TrimSpace(evt.Text)
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if final != "" {
+		return final, nil
+	}
+	return strings.TrimSpace(streamed.String()), nil
 }
 
 // PromptStreamForSession streams output with the resolved agent/session context.
-func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, input string) (<-chan claudecode.StreamEvent, <-chan error) {
-	return a.llm.PromptStream(ctx, a.buildPromptInput(ctx, agentID, sessionID, input))
+func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, input string) (<-chan llm.StreamEvent, <-chan error) {
+	resolution := ResolveSession(agentID, sessionID)
+	req := a.buildPromptRequest(ctx, resolution, input)
+
+	streamEvents, streamErrs := a.promptStreamFromClient(ctx, req)
+	if !a.llm.Capabilities().StructuredToolCalls {
+		return streamEvents, streamErrs
+	}
+	return a.runStructuredToolLoop(ctx, resolution, streamEvents, streamErrs)
 }
 
 func (a *App) AddSessionTokens(ctx context.Context, agentID, sessionID string, delta int) error {
@@ -309,8 +364,10 @@ func (a *App) ResetSession(ctx context.Context, req ResetSessionRequest) Session
 	}
 
 	if !req.StartNew {
+		a.clearSkillPromptSnapshot(current.SessionKey)
 		return current
 	}
+	a.clearSkillPromptSnapshot(current.SessionKey)
 	nextID := a.nextSessionID(ctx, current.AgentID, current.SessionID)
 	return ResolveSession(current.AgentID, nextID)
 }

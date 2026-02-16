@@ -52,7 +52,7 @@ This scaffold file is not auto-loaded unless you pass `-config`.
 ## TUI controls
 
 - `Enter` send message
-- `Alt+Enter` insert newline
+- `Ctrl+J` insert newline
 - `Tab` autocomplete selected slash command while typing `/...`
 - `Shift+Tab` move slash-command selection backward
 - `Up/Down` navigate slash-command suggestions when slash menu is open
@@ -68,6 +68,7 @@ TUI slash commands:
 
 - `/help`
 - `/status`
+- `/tools`
 - `/clear`
 - `/reset`
 - `/new`
@@ -76,6 +77,13 @@ TUI slash commands:
 - `/model <name>` (currently a placeholder; override is not implemented)
 - `/exit`
 - `/quit`
+
+`/verbose on` adds `[verbose]` system diagnostics to the transcript, including:
+- prompt/session summary at run start
+- runtime context (workspace/tool availability)
+- stream lifecycle details (first delta/final counters/errors)
+- transcript write summaries for user/assistant messages
+- detailed tool call/result metadata
 
 On TUI startup and on `/new`, `localclaw` renders workspace `WELCOME.md` (if present) as a system message.
 

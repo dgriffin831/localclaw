@@ -267,6 +267,48 @@ func TestValidateRejectsBlankThinkingMessages(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigDisablesDelegatedToolsByDefault(t *testing.T) {
+	cfg := Default()
+	if cfg.Tools.Delegated.Enabled {
+		fatalf(t, "expected tools.delegated.enabled default false")
+	}
+	if len(cfg.Tools.Allow) != 0 {
+		fatalf(t, "expected tools.allow default empty, got %v", cfg.Tools.Allow)
+	}
+	if len(cfg.Tools.Deny) != 0 {
+		fatalf(t, "expected tools.deny default empty, got %v", cfg.Tools.Deny)
+	}
+}
+
+func TestValidateRejectsBlankToolPolicyEntries(t *testing.T) {
+	cfg := Default()
+	cfg.Tools.Allow = []string{"memory_search", "   "}
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected tools.allow validation error")
+	}
+
+	cfg = Default()
+	cfg.Agents.Defaults.Tools.Deny = []string{"memory_get", ""}
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected agents.defaults.tools.deny validation error")
+	}
+
+	cfg = Default()
+	cfg.Agents.List = []AgentConfig{
+		{
+			ID: "writer",
+			Tools: ToolsConfig{
+				Delegated: DelegatedToolsConfig{
+					Allow: []string{"remote_search", "  "},
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected agents.list[].tools.delegated.allow validation error")
+	}
+}
+
 func fatalf(t *testing.T, format string, args ...interface{}) {
 	t.Helper()
 	t.Fatalf(format, args...)

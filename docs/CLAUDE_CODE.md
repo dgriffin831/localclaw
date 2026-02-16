@@ -8,9 +8,15 @@ Implementation location:
 
 ## Execution model
 
-- `PromptStream` executes `claude -p <input>` using `exec.CommandContext`.
-- stdout is streamed as `StreamEventDelta` chunks.
-- on successful completion, a `StreamEventFinal` event is emitted with full trimmed output.
+- `PromptStream` executes:
+  - `claude -p <input> --output-format stream-json --verbose`
+  - via `exec.CommandContext`.
+- stdout JSONL stream is parsed into provider-agnostic events:
+  - assistant text blocks -> `StreamEventDelta`
+  - assistant tool-use blocks -> `StreamEventToolCall`
+  - user tool-result blocks -> `StreamEventToolResult`
+  - result event `result` field -> `StreamEventFinal`
+- if a line is not valid JSON, adapter falls back to treating it as raw delta text.
 - stderr is captured and included in surfaced execution errors.
 
 `Prompt` is a synchronous wrapper over `PromptStream`:
@@ -47,3 +53,4 @@ Client appends environment values when configured:
 - stdout/stderr pipe setup errors are returned immediately.
 - command start failures include context (`start claude code cli: ...`).
 - non-zero exits return wrapped errors and include stderr text when available.
+- `result` events with `is_error=true` are surfaced as adapter errors (even when process exits successfully).

@@ -42,7 +42,7 @@ Behavior notes:
 Composer behavior:
 
 - `Enter`: submit input
-- `Alt+Enter`: insert newline
+- `Ctrl+J`: insert newline
 - `Tab`: autocomplete selected slash command when typing `/...`
 - `Shift+Tab`: move slash menu selection backward
 - `Up/Down`: slash-menu navigation when visible
@@ -69,6 +69,7 @@ Implemented command set:
 
 - `/help`
 - `/status`
+- `/tools`
 - `/clear`
 - `/reset`
 - `/new`
@@ -81,6 +82,9 @@ Implemented command set:
 Command behavior details:
 
 - `/status` prints one system line containing status, provider, agent, session, workspace, thinking, and verbose flags.
+- `/tools` prints provider plus provider-native tools (when discovered from stream metadata) and localclaw runtime tools for the active agent.
+- `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
+- `/verbose off` suppresses the additional `[verbose]` diagnostics.
 - `/clear` clears transcript messages without adding a confirmation line.
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
@@ -141,7 +145,7 @@ Completion behavior:
 Current tests in `internal/tui/app_test.go` cover:
 
 - slash parsing and autocomplete behavior
-- `/help`, `/new`, `/reset` command effects
+- `/help`, `/tools`, `/new`, `/reset` command effects
 - welcome message startup/new rendering
 - status/thinking message behavior
 - history navigation keybindings

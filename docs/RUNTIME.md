@@ -38,7 +38,7 @@ go run ./cmd/localclaw memory search "incident summary"
 - runtime tool registry (`internal/skills` + `internal/runtime/tools.go`)
 - cron scheduler and heartbeat monitor
 - channel adapters (`slack`, `signal`)
-- Claude Code CLI client (`internal/llm/claudecode`)
+- provider-agnostic LLM client contract (`internal/llm`) with Claude Code CLI adapter (`internal/llm/claudecode`)
 
 ## Startup lifecycle
 
@@ -59,17 +59,30 @@ Any step failure aborts startup with wrapped context.
 Runtime exposes session-default and session-explicit prompt paths:
 
 - `Prompt(ctx, input) (string, error)`
-- `PromptStream(ctx, input) (<-chan claudecode.StreamEvent, <-chan error)`
+- `PromptStream(ctx, input) (<-chan llm.StreamEvent, <-chan error)`
 - `PromptForSession(ctx, agentID, sessionID, input)`
 - `PromptStreamForSession(ctx, agentID, sessionID, input)`
 
-Prompt assembly (`buildPromptInput`) behavior:
+Prompt assembly (`buildPromptRequest` -> compatibility fallback prompt) behavior:
 
 - Resolves `agentID/sessionID` into stable `session_key`.
 - Injects workspace bootstrap context on first prompt in a session.
 - Re-injects bootstrap context after compaction count increases.
 - Injects memory recall policy + tool schema when memory tools are enabled.
-- Appends the original user input under `User input:`.
+- Injects a localclaw-authored skills block from workspace skill snapshots.
+- Appends original user input under `User input:` in fallback mode.
+
+Provider compatibility:
+
+- If provider supports request options (`llm.RequestClient`), runtime passes structured request fields (`system_context`, tool defs, skills block, session metadata).
+- If provider does not support request options, runtime composes one fallback prompt string and calls `Prompt` / `PromptStream`.
+
+Structured tool loop:
+
+- If provider advertises `StructuredToolCalls=true`, runtime intercepts `tool_call` events.
+- Runtime executes policy checks + local/delegated routing, then emits `tool_result` events.
+- Tool results are sent back to provider callbacks when present.
+- Tool failures are non-fatal; stream continues unless run context is cancelled.
 
 ## Runtime tools
 
@@ -87,6 +100,19 @@ Tool enablement:
 
 - Controlled by resolved `memorySearch.enabled` for the agent.
 - Disabled tools return graceful error payloads instead of panics.
+
+Tool policy:
+
+- Policy resolution precedence: global -> `agents.defaults.tools` -> `agents.list[].tools`.
+- Deny list overrides allow list.
+- Unknown tools are rejected with structured errors.
+- Delegated tools are blocked unless delegated policy is enabled and allowlisted.
+
+Skills snapshot behavior:
+
+- Runtime loads workspace skills from `skills/<name>/SKILL.md`.
+- Snapshot prompt blocks are cached per session key.
+- Snapshot cache refreshes when session compaction count increases or session resets.
 
 Tool manager construction:
 

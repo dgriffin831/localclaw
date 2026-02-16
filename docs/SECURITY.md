@@ -8,6 +8,7 @@
 - Any config enabling gateway/server/listener behavior fails startup.
 - Channels are restricted to `slack` and `signal` identifiers.
 - LLM provider is constrained to local Claude Code CLI subprocess invocation.
+- Runtime tool execution is policy-mediated (deny/allow + delegated gating).
 
 ## Enforced guardrails
 
@@ -40,6 +41,15 @@ Guardrail violations fail startup before runtime initialization.
 - Claude Code integration is local subprocess only (`exec.CommandContext`).
 - No direct model HTTP client is implemented in `localclaw`.
 - AWS/GovCloud values are passed as environment variables to the subprocess.
+- Structured tool-call orchestration, when available, is still mediated by local runtime policy.
+
+## Tool boundary and delegated controls
+
+- Local tools are authoritative and executed only inside localclaw runtime.
+- Delegated tools are disabled by default.
+- Delegated tools require explicit policy enablement + allowlist match.
+- Unknown or policy-blocked tool calls return structured error results; no silent bypass.
+- Delegated tool execution never bypasses local policy checks.
 
 ## Explicitly out of scope
 

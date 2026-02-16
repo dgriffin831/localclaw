@@ -23,6 +23,8 @@ type Config struct {
 	Session   SessionConfig   `json:"session"`
 	Memory    MemoryConfig    `json:"memory"`
 	Workspace WorkspaceConfig `json:"workspace"`
+	Tools     ToolsConfig     `json:"tools"`
+	Skills    SkillsConfig    `json:"skills"`
 	Cron      CronConfig      `json:"cron"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 }
@@ -69,6 +71,8 @@ type AgentDefaultsConfig struct {
 	Workspace    string             `json:"workspace"`
 	MemorySearch MemorySearchConfig `json:"memorySearch"`
 	Compaction   CompactionConfig   `json:"compaction"`
+	Tools        ToolsConfig        `json:"tools"`
+	Skills       SkillsConfig       `json:"skills"`
 }
 
 type AgentConfig struct {
@@ -76,6 +80,8 @@ type AgentConfig struct {
 	Workspace    string             `json:"workspace,omitempty"`
 	MemorySearch MemorySearchConfig `json:"memorySearch,omitempty"`
 	Compaction   CompactionConfig   `json:"compaction,omitempty"`
+	Tools        ToolsConfig        `json:"tools,omitempty"`
+	Skills       SkillsConfig       `json:"skills,omitempty"`
 }
 
 type CompactionConfig struct {
@@ -100,6 +106,23 @@ type MemoryConfig struct {
 
 type WorkspaceConfig struct {
 	Root string `json:"root"`
+}
+
+type ToolsConfig struct {
+	Allow     []string             `json:"allow,omitempty"`
+	Deny      []string             `json:"deny,omitempty"`
+	Delegated DelegatedToolsConfig `json:"delegated"`
+}
+
+type DelegatedToolsConfig struct {
+	Enabled bool     `json:"enabled"`
+	Allow   []string `json:"allow,omitempty"`
+	Deny    []string `json:"deny,omitempty"`
+}
+
+type SkillsConfig struct {
+	Enabled  []string `json:"enabled,omitempty"`
+	Disabled []string `json:"disabled,omitempty"`
 }
 
 type MemorySearchConfig struct {
@@ -215,6 +238,12 @@ func Default() Config {
 		Agents: AgentsConfig{
 			Defaults: AgentDefaultsConfig{
 				Workspace: ".",
+				Tools: ToolsConfig{
+					Delegated: DelegatedToolsConfig{
+						Enabled: false,
+					},
+				},
+				Skills: SkillsConfig{},
 				Compaction: CompactionConfig{
 					MemoryFlush: MemoryFlushConfig{
 						Enabled:             true,
@@ -287,6 +316,12 @@ func Default() Config {
 		Workspace: WorkspaceConfig{
 			Root: ".",
 		},
+		Tools: ToolsConfig{
+			Delegated: DelegatedToolsConfig{
+				Enabled: false,
+			},
+		},
+		Skills:    SkillsConfig{},
 		Cron:      CronConfig{Enabled: true},
 		Heartbeat: HeartbeatConfig{Enabled: true, IntervalSeconds: 30},
 	}
@@ -340,6 +375,18 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Agents.Defaults.Workspace) == "" {
 		return errors.New("agents.defaults.workspace is required")
 	}
+	if err := validateToolsConfig(c.Tools, "tools"); err != nil {
+		return err
+	}
+	if err := validateSkillsConfig(c.Skills, "skills"); err != nil {
+		return err
+	}
+	if err := validateToolsConfig(c.Agents.Defaults.Tools, "agents.defaults.tools"); err != nil {
+		return err
+	}
+	if err := validateSkillsConfig(c.Agents.Defaults.Skills, "agents.defaults.skills"); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Session.Store) == "" {
 		return errors.New("session.store is required")
 	}
@@ -366,6 +413,12 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate agent id %q", agentID)
 		}
 		seenAgentIDs[agentID] = struct{}{}
+		if err := validateToolsConfig(agent.Tools, "agents.list[].tools"); err != nil {
+			return err
+		}
+		if err := validateSkillsConfig(agent.Skills, "agents.list[].skills"); err != nil {
+			return err
+		}
 		if err := validateMemoryFlushConfig(agent.Compaction.MemoryFlush, "agents.list[].compaction.memoryFlush"); err != nil {
 			return err
 		}
@@ -429,6 +482,47 @@ func validateMemoryFlushConfig(cfg MemoryFlushConfig, fieldPrefix string) error 
 	}
 	if cfg.TimeoutSeconds < 0 {
 		return fmt.Errorf("%s.timeoutSeconds must be >= 0", fieldPrefix)
+	}
+	return nil
+}
+
+func validateToolsConfig(cfg ToolsConfig, fieldPrefix string) error {
+	if err := validatePolicyNameList(cfg.Allow, fieldPrefix+".allow"); err != nil {
+		return err
+	}
+	if err := validatePolicyNameList(cfg.Deny, fieldPrefix+".deny"); err != nil {
+		return err
+	}
+	if err := validatePolicyNameList(cfg.Delegated.Allow, fieldPrefix+".delegated.allow"); err != nil {
+		return err
+	}
+	if err := validatePolicyNameList(cfg.Delegated.Deny, fieldPrefix+".delegated.deny"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSkillsConfig(cfg SkillsConfig, fieldPrefix string) error {
+	if err := validatePolicyNameList(cfg.Enabled, fieldPrefix+".enabled"); err != nil {
+		return err
+	}
+	if err := validatePolicyNameList(cfg.Disabled, fieldPrefix+".disabled"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePolicyNameList(values []string, field string) error {
+	seen := map[string]struct{}{}
+	for idx, raw := range values {
+		normalized := strings.ToLower(strings.TrimSpace(raw))
+		if normalized == "" {
+			return fmt.Errorf("%s[%d] cannot be blank", field, idx)
+		}
+		if _, ok := seen[normalized]; ok {
+			return fmt.Errorf("duplicate %s entry %q", field, normalized)
+		}
+		seen[normalized] = struct{}{}
 	}
 	return nil
 }

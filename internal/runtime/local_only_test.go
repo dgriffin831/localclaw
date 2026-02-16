@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/dgriffin831/localclaw/internal/config"
-	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
+	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/workspace"
 )
 
@@ -27,12 +27,16 @@ func (f fakeLLMClient) Prompt(ctx context.Context, input string) (string, error)
 	return f.promptResponse, nil
 }
 
-func (f fakeLLMClient) PromptStream(ctx context.Context, input string) (<-chan claudecode.StreamEvent, <-chan error) {
-	events := make(chan claudecode.StreamEvent)
+func (f fakeLLMClient) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
+	events := make(chan llm.StreamEvent)
 	errs := make(chan error)
 	close(events)
 	close(errs)
 	return events, errs
+}
+
+func (f fakeLLMClient) Capabilities() llm.Capabilities {
+	return llm.Capabilities{}
 }
 
 type failingWorkspaceManager struct{}

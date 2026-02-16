@@ -15,6 +15,8 @@ This document describes test coverage, commands, and Red/Green workflow for `loc
 | --- | --- | --- |
 | Config and policy | `internal/config/config_test.go` | defaults, compatibility mappings, validation allowlists, local-only guardrails |
 | Runtime lifecycle and hooks | `internal/runtime/local_only_test.go`, `internal/runtime/tools_test.go` | startup boundaries, prompt assembly, tool execution, reset/session behavior |
+| LLM contract/adapter compatibility | `internal/runtime/tools_test.go` | fallback prompt path, structured tool-call loop behavior, graceful tool-error continuation |
+| Skills loader/snapshot prompts | `internal/skills/registry_test.go`, `internal/runtime/tools_test.go` | workspace skill discovery, eligibility filtering, prompt-block injection/cache refresh |
 | TUI behavior | `internal/tui/app_test.go` | slash commands, autocomplete, waiting/status UX, welcome rendering, history/keybindings |
 | Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, bootstrap loading/filtering, subagent allowlist |
 | Session store/transcripts | `internal/session/store_test.go` | path resolution, lock behavior, metadata preservation, write safety |
@@ -35,6 +37,7 @@ go test ./...
 ```bash
 go test ./internal/config
 go test ./internal/runtime
+go test ./internal/skills
 go test ./internal/tui
 go test ./internal/workspace
 go test ./internal/session
@@ -48,6 +51,8 @@ go test ./internal/memory
 ```bash
 go test ./internal/config -run TestValidate -v
 go test ./internal/runtime -run TestPromptIncludesBootstrapContextOnFirstMessageOnly -v
+go test ./internal/runtime -run TestPromptStreamStructuredToolLoopExecutesLocalTools -v
+go test ./internal/skills -run TestSnapshotContainsEligibleSkillsOnly -v
 go test ./internal/tui -run TestParseSlash -v
 go test ./internal/workspace -run TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles -v
 go test ./internal/memory -run TestSQLiteIndexManagerSyncForceBuildsIndexAndStatus -v
