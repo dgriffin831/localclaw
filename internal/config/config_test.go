@@ -229,6 +229,21 @@ func TestValidateRequiresGovCloudRegion(t *testing.T) {
 	}
 }
 
+func TestValidateSupportsCodexProviderAndRequiresBinaryPath(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.Provider = "codex"
+	if err := cfg.Validate(); err != nil {
+		fatalf(t, "expected codex provider config to validate, got %v", err)
+	}
+
+	cfg = Default()
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.BinaryPath = "   "
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected codex binary path validation error")
+	}
+}
+
 func TestValidateRejectsWhitespaceAgentWorkspaceOverride(t *testing.T) {
 	cfg := Default()
 	cfg.Agents.List = []AgentConfig{

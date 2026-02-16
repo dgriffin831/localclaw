@@ -20,6 +20,7 @@ import (
 	"github.com/dgriffin831/localclaw/internal/hooks"
 	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/llm/claudecode"
+	"github.com/dgriffin831/localclaw/internal/llm/codex"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/skills"
@@ -100,6 +101,10 @@ func New(cfg config.Config) (*App, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	resolvedStateRoot, err := resolveAbsolutePath(cfg.State.Root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve state root: %w", err)
+	}
 
 	agentWorkspaces := make(map[string]string, len(cfg.Agents.List))
 	agentIDs := make([]string, 0, len(cfg.Agents.List))
@@ -113,19 +118,49 @@ func New(cfg config.Config) (*App, error) {
 		DefaultWorkspace: cfg.Agents.Defaults.Workspace,
 		AgentWorkspaces:  agentWorkspaces,
 	})
-	claudeClient := claudecode.NewClient(claudecode.Settings{
-		BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
-		Profile:             cfg.LLM.ClaudeCode.Profile,
-		UseGovCloud:         cfg.LLM.ClaudeCode.UseGovCloud,
-		BedrockRegion:       cfg.LLM.ClaudeCode.BedrockRegion,
-		AuthMode:            cfg.LLM.ClaudeCode.AuthMode,
-		StrictMCPConfig:     true,
-		MCPConfigDir:        filepath.Join(cfg.State.Root, "runtime", "mcp"),
-		MCPServerBinaryPath: "localclaw",
-		MCPServerArgs:       []string{"mcp", "serve"},
-	})
-	if err := claudeClient.ValidateMCPWiring(); err != nil {
-		return nil, fmt.Errorf("invalid claude mcp wiring: %w", err)
+	var llmClient llm.Client
+	switch strings.TrimSpace(cfg.LLM.Provider) {
+	case "claudecode":
+		claudeClient := claudecode.NewClient(claudecode.Settings{
+			BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
+			Profile:             cfg.LLM.ClaudeCode.Profile,
+			UseGovCloud:         cfg.LLM.ClaudeCode.UseGovCloud,
+			BedrockRegion:       cfg.LLM.ClaudeCode.BedrockRegion,
+			AuthMode:            cfg.LLM.ClaudeCode.AuthMode,
+			StrictMCPConfig:     true,
+			MCPConfigDir:        filepath.Join(resolvedStateRoot, "runtime", "mcp"),
+			MCPServerBinaryPath: "localclaw",
+			MCPServerArgs:       []string{"mcp", "serve"},
+		})
+		if err := claudeClient.ValidateMCPWiring(); err != nil {
+			return nil, fmt.Errorf("invalid claude mcp wiring: %w", err)
+		}
+		llmClient = claudeClient
+	case "codex":
+		codexHomePath := strings.TrimSpace(cfg.LLM.Codex.MCP.HomePath)
+		if cfg.LLM.Codex.MCP.UseIsolatedHome && codexHomePath == "" {
+			codexHomePath = filepath.Join(resolvedStateRoot, "runtime", "codex", "home")
+		}
+		codexClient := codex.NewClient(codex.Settings{
+			BinaryPath:       cfg.LLM.Codex.BinaryPath,
+			Profile:          cfg.LLM.Codex.Profile,
+			Model:            cfg.LLM.Codex.Model,
+			WorkingDirectory: cfg.Agents.Defaults.Workspace,
+			MCP: codex.MCPSettings{
+				ConfigPath:       cfg.LLM.Codex.MCP.ConfigPath,
+				UseIsolatedHome:  cfg.LLM.Codex.MCP.UseIsolatedHome,
+				HomePath:         codexHomePath,
+				ServerName:       cfg.LLM.Codex.MCP.ServerName,
+				ServerBinaryPath: "localclaw",
+				ServerArgs:       []string{"mcp", "serve"},
+			},
+		})
+		if err := codexClient.ValidateMCPWiring(); err != nil {
+			return nil, fmt.Errorf("invalid codex mcp wiring: %w", err)
+		}
+		llmClient = codexClient
+	default:
+		return nil, fmt.Errorf("unsupported llm provider %q", cfg.LLM.Provider)
 	}
 
 	return &App{
@@ -148,11 +183,33 @@ func New(cfg config.Config) (*App, error) {
 		heartbeat:           heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
 		slack:               slack.NewLocalAdapter(),
 		signal:              signal.NewLocalAdapter(),
-		llm:                 claudeClient,
+		llm:                 llmClient,
 		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
 		now:                 time.Now,
 		skillPromptSnapshot: map[string]skillsSessionSnapshot{},
 	}, nil
+}
+
+func resolveAbsolutePath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("path is required")
+	}
+	if strings.HasPrefix(trimmed, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home dir: %w", err)
+		}
+		trimmed = filepath.Join(home, strings.TrimPrefix(trimmed, "~"))
+	}
+	if filepath.IsAbs(trimmed) {
+		return filepath.Clean(trimmed), nil
+	}
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path: %w", err)
+	}
+	return filepath.Clean(absPath), nil
 }
 
 func (a *App) ResolveWorkspacePath(agentID string) (string, error) {

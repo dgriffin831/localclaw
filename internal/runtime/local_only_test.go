@@ -288,6 +288,64 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	}
 }
 
+func TestNewConfiguresCodexMCPHomeUnderStateRoot(t *testing.T) {
+	stateRoot := t.TempDir()
+	tmpDir := t.TempDir()
+	argsPath := filepath.Join(tmpDir, "codex-args.txt")
+	envPath := filepath.Join(tmpDir, "codex-env.txt")
+	codexScriptPath := filepath.Join(tmpDir, "codex")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+env | grep '^CODEX_HOME=' > %q || true
+printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'
+`, argsPath, envPath)
+	if err := os.WriteFile(codexScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex script: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.State.Root = stateRoot
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.BinaryPath = codexScriptPath
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	requestClient, ok := app.llm.(llm.RequestClient)
+	if !ok {
+		t.Fatalf("expected request-capable llm client")
+	}
+	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("prompt stream request error: %v", err)
+			}
+		}
+	}
+
+	envPayload, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read captured env: %v", err)
+	}
+	expectedHome := filepath.Join(stateRoot, "runtime", "codex", "home")
+	if !strings.Contains(string(envPayload), "CODEX_HOME="+expectedHome) {
+		t.Fatalf("expected CODEX_HOME under state root, got %q", strings.TrimSpace(string(envPayload)))
+	}
+}
+
 func TestRunDoesNotImportLegacyMemoryJSON(t *testing.T) {
 	stateRoot := t.TempDir()
 	legacyPath := filepath.Join(t.TempDir(), "legacy-memory.json")

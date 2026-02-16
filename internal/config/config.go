@@ -44,6 +44,7 @@ type SecurityConfig struct {
 type LLMConfig struct {
 	Provider   string           `json:"provider"`
 	ClaudeCode ClaudeCodeConfig `json:"claude_code"`
+	Codex      CodexConfig      `json:"codex"`
 }
 
 type ClaudeCodeConfig struct {
@@ -52,6 +53,20 @@ type ClaudeCodeConfig struct {
 	UseGovCloud   bool   `json:"use_govcloud"`
 	BedrockRegion string `json:"bedrock_region"`
 	AuthMode      string `json:"auth_mode"`
+}
+
+type CodexConfig struct {
+	BinaryPath string         `json:"binary_path"`
+	Profile    string         `json:"profile"`
+	Model      string         `json:"model"`
+	MCP        CodexMCPConfig `json:"mcp"`
+}
+
+type CodexMCPConfig struct {
+	ConfigPath      string `json:"config_path"`
+	UseIsolatedHome bool   `json:"use_isolated_home"`
+	HomePath        string `json:"home_path"`
+	ServerName      string `json:"server_name"`
 }
 
 type ChannelsConfig struct {
@@ -232,6 +247,15 @@ func Default() Config {
 				BedrockRegion: "",
 				AuthMode:      "default",
 			},
+			Codex: CodexConfig{
+				BinaryPath: "codex",
+				MCP: CodexMCPConfig{
+					ConfigPath:      "",
+					UseIsolatedHome: true,
+					HomePath:        "",
+					ServerName:      "localclaw",
+				},
+			},
 		},
 		Channels: ChannelsConfig{Enabled: []string{"slack", "signal"}},
 		State:    StateConfig{Root: "~/.localclaw"},
@@ -354,17 +378,24 @@ func (c Config) Validate() error {
 			return fmt.Errorf("app.thinking_messages[%d] cannot be blank", idx)
 		}
 	}
-	if c.LLM.Provider != "claudecode" {
+	if c.LLM.Provider != "claudecode" && c.LLM.Provider != "codex" {
 		return fmt.Errorf("unsupported llm.provider %q", c.LLM.Provider)
 	}
-	if c.LLM.ClaudeCode.BinaryPath == "" {
-		return errors.New("llm.claude_code.binary_path is required")
+	if c.LLM.Provider == "claudecode" {
+		if strings.TrimSpace(c.LLM.ClaudeCode.BinaryPath) == "" {
+			return errors.New("llm.claude_code.binary_path is required")
+		}
+		if !containsString(allowedClaudeAuthModes, c.LLM.ClaudeCode.AuthMode) {
+			return fmt.Errorf("unsupported llm.claude_code.auth_mode %q", c.LLM.ClaudeCode.AuthMode)
+		}
+		if c.LLM.ClaudeCode.UseGovCloud && strings.TrimSpace(c.LLM.ClaudeCode.BedrockRegion) == "" {
+			return errors.New("llm.claude_code.bedrock_region is required when use_govcloud is true")
+		}
 	}
-	if !containsString(allowedClaudeAuthModes, c.LLM.ClaudeCode.AuthMode) {
-		return fmt.Errorf("unsupported llm.claude_code.auth_mode %q", c.LLM.ClaudeCode.AuthMode)
-	}
-	if c.LLM.ClaudeCode.UseGovCloud && strings.TrimSpace(c.LLM.ClaudeCode.BedrockRegion) == "" {
-		return errors.New("llm.claude_code.bedrock_region is required when use_govcloud is true")
+	if c.LLM.Provider == "codex" {
+		if strings.TrimSpace(c.LLM.Codex.BinaryPath) == "" {
+			return errors.New("llm.codex.binary_path is required")
+		}
 	}
 	if len(c.Channels.Enabled) == 0 {
 		return errors.New("channels.enabled must include at least one channel")
