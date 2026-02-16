@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft v3.0
+Draft v3.1 (phase-5 implementation-spec refinement)
 
 ## Problem / Motivation
 
@@ -371,6 +371,16 @@ For `localclaw_mcp` tools:
 
 ## Implementation Plan (5 Phases, TDD-First)
 
+### Phase Checkpoints (Incremental + Testable)
+
+| Phase | Primary Outcome | Minimum Test Gate |
+| --- | --- | --- |
+| 1 | MCP server skeleton + memory tools | `go test ./internal/mcp -run Test` |
+| 2 | Claude MCP-first wiring | `go test ./internal/llm/claudecode -run Test` |
+| 3 | Codex MCP config-path + adapter wiring | `go test ./internal/llm/codex -run Test` |
+| 4 | Full v1 MCP tool surface | `go test ./internal/mcp -run Test` |
+| 5 | TUI/telemetry ownership split + hard cutover | `go test ./internal/tui -run TestHandleSlash && go test ./...` |
+
 ### Phase 1: MCP Runtime Skeleton + Memory Tools
 
 Objective:
@@ -556,6 +566,22 @@ Phase exit criteria:
 - Ownership split is explicit and test-covered in TUI and telemetry.
 - Claude/Codex runtime path is MCP-first only (no fallback retained).
 - Full suite passes and documentation reflects final behavior.
+
+## Assumptions
+
+1. Provider CLIs support required MCP wiring surfaces described in this spec (Claude flags and Codex TOML MCP server definitions).
+2. `localclaw` binary is resolvable for subprocess invocation in operator environments (PATH or explicit configured binary path).
+3. Existing modules (`memory`, `workspace`, `cron`, `session`) expose stable service boundaries reusable by MCP handlers without redesign.
+4. TUI and telemetry consumers can absorb additive ownership fields without backward-compatibility breakage.
+5. v1 adoption prioritizes a hard cutover over dual-runtime support for Claude/Codex.
+
+## Open Questions
+
+1. Should high-risk mutating orchestration tools default to deny unless explicitly allowed by config?
+2. For Codex, should isolated `CODEX_HOME` be mandatory default for all runs or only recommended/defaulted with opt-out?
+3. What exact telemetry retention/schema migration strategy is required for ownership-field additions in phase 5?
+4. Do we need a dedicated startup capability probe in `check` mode for provider MCP compatibility, or is runtime fail-fast sufficient?
+5. Should `localclaw mcp serve` expose version/capability metadata for future multi-version compatibility?
 
 ## Test Plan
 
