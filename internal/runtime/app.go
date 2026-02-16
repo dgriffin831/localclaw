@@ -30,16 +30,14 @@ import (
 // App composes all localclaw capabilities in a single process.
 type App struct {
 	cfg        config.Config
-	memory     memory.Store
 	tools      *skills.ToolRegistry
 	sessions   *session.Store
 	workspace  workspace.Manager
 	skills     skills.Registry
-	delegated  DelegatedToolExecutor
 	cron       cron.Scheduler
 	heartbeat  heartbeat.Monitor
-	slack      slack.Client
-	signal     signal.Client
+	slack      slack.Client  // TODO: Wire outbound Slack dispatch once channel execution is implemented.
+	signal     signal.Client // TODO: Wire outbound Signal dispatch once channel execution is implemented.
 	llm        llm.Client
 	transcript *session.TranscriptWriter
 	now        func() time.Time
@@ -101,7 +99,7 @@ func New(cfg config.Config) (*App, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
-	resolvedStateRoot, err := resolveAbsolutePath(cfg.State.Root)
+	resolvedStateRoot, err := resolveAbsolutePath(cfg.App.Root)
 	if err != nil {
 		return nil, fmt.Errorf("resolve state root: %w", err)
 	}
@@ -114,7 +112,7 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	workspaceManager := workspace.NewLocalManager(workspace.Settings{
-		StateRoot:        cfg.State.Root,
+		StateRoot:        cfg.App.Root,
 		DefaultWorkspace: cfg.Agents.Defaults.Workspace,
 		AgentWorkspaces:  agentWorkspaces,
 	})
@@ -161,11 +159,10 @@ func New(cfg config.Config) (*App, error) {
 	}
 
 	return &App{
-		cfg:    cfg,
-		memory: memory.NewLocalStore(""),
-		tools:  skills.DefaultToolRegistry(),
+		cfg:   cfg,
+		tools: skills.DefaultToolRegistry(),
 		sessions: session.NewStore(session.Settings{
-			StateRoot:     cfg.State.Root,
+			StateRoot:     cfg.App.Root,
 			StorePath:     cfg.Session.Store,
 			KnownAgentIDs: agentIDs,
 		}),
@@ -176,11 +173,13 @@ func New(cfg config.Config) (*App, error) {
 				return workspaceManager.ResolveWorkspace(agentID)
 			},
 		}),
-		cron:                cron.NewInProcessScheduler(cfg.Cron.Enabled),
-		heartbeat:           heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
-		slack:               slack.NewLocalAdapter(),
-		signal:              signal.NewLocalAdapter(),
-		llm:                 llmClient,
+		cron:      cron.NewInProcessScheduler(cfg.Cron.Enabled),
+		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
+		// TODO: Honor channels.enabled by gating adapter wiring and channel usage per configured allowlist instead of unconditionally wiring both adapters.
+		slack:  slack.NewLocalAdapter(),
+		signal: signal.NewLocalAdapter(),
+		llm:    llmClient,
+		// TODO: Wire transcript appends into memory autosync (StartAutoSync/HandleTranscriptUpdate) via a runtime event bus so session delta indexing is active at startup.
 		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
 		now:                 time.Now,
 		skillPromptSnapshot: map[string]skillsSessionSnapshot{},
@@ -228,9 +227,6 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if err := a.bootstrapDefaultConfigFile(); err != nil {
 		return fmt.Errorf("bootstrap config: %w", err)
-	}
-	if err := a.memory.Init(ctx); err != nil {
-		return fmt.Errorf("memory init: %w", err)
 	}
 	if err := a.sessions.Init(ctx); err != nil {
 		return fmt.Errorf("session init: %w", err)
@@ -471,6 +467,7 @@ func (a *App) resolveMemoryFlushConfig(agentID string) config.MemoryFlushConfig 
 }
 
 func hasMemoryFlushOverride(cfg config.MemoryFlushConfig) bool {
+	// TODO: Replace truthy/positive heuristic detection with explicit optional override fields so agents can intentionally disable inherited defaults (for example enabled=false or threshold=0).
 	return cfg.Enabled ||
 		cfg.ThresholdTokens > 0 ||
 		cfg.TriggerWindowTokens > 0 ||
@@ -480,6 +477,7 @@ func hasMemoryFlushOverride(cfg config.MemoryFlushConfig) bool {
 
 func mergeMemoryFlushConfig(base, override config.MemoryFlushConfig) config.MemoryFlushConfig {
 	merged := base
+	// TODO: Support explicit false/zero overrides from agent config; current merge only applies enabling/positive values and cannot turn inherited settings off.
 	if override.Enabled {
 		merged.Enabled = true
 	}

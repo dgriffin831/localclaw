@@ -5,7 +5,8 @@
 ## Loading rules
 
 - If `-config` is omitted, `config.Default()` is used.
-- If `-config` is provided, file JSON is unmarshaled into defaults (merge-by-field behavior).
+- If `-config` is provided, file JSON is decoded into defaults (merge-by-field behavior).
+- Config decoding is strict: unknown/removed keys fail parsing.
 - Config always passes `Validate()` before runtime startup.
 - On startup, `App.Run` creates `~/.localclaw/localclaw.json` if missing.
   - This scaffold file is not auto-loaded unless passed via `-config`.
@@ -13,14 +14,10 @@
 ## Top-level schema
 
 - `app`
-- `security`
 - `llm`
 - `channels`
-- `state`
 - `agents`
 - `session`
-- `tools`
-- `skills`
 - `cron`
 - `heartbeat`
 
@@ -29,13 +26,8 @@
 ```json
 {
   "app": {
-    "name": "localclaw"
-  },
-  "security": {
-    "enforce_local_only": true,
-    "enable_gateway": false,
-    "enable_http_server": false,
-    "listen_address": ""
+    "name": "localclaw",
+    "root": "~/.localclaw"
   },
   "llm": {
     "provider": "claudecode",
@@ -58,20 +50,16 @@
   "channels": {
     "enabled": ["slack", "signal"]
   },
-  "state": {
-    "root": "~/.localclaw"
-  },
   "agents": {
     "defaults": {
       "workspace": ".",
-      "tools": {
-        "delegated": {
-          "enabled": false
-        }
-      },
-      "skills": {},
-      "memorySearch": {
-        "enabled": false,
+      "memory": {
+        "enabled": true,
+        "tools": {
+          "get": true,
+          "search": true,
+          "grep": true
+        },
         "sources": ["memory"],
         "extraPaths": [],
         "store": {
@@ -108,12 +96,6 @@
   "session": {
     "store": "~/.localclaw/agents/{agentId}/sessions/sessions.json"
   },
-  "tools": {
-    "delegated": {
-      "enabled": false
-    }
-  },
-  "skills": {},
   "cron": {
     "enabled": true
   },
@@ -129,6 +111,7 @@
 General:
 
 - `app.name` is required.
+- `app.root` is required.
 - `app.thinking_messages` entries must be non-blank when provided.
 - `llm.provider` must be `claudecode` or `codex`.
 - `llm.claude_code.binary_path` is required.
@@ -136,12 +119,7 @@ General:
 - `channels.enabled` must contain at least one value.
 - `channels.enabled` allowlist: `slack`, `signal`.
 - duplicate channel names are rejected.
-- `state.root`, `agents.defaults.workspace`, and `session.store` are required.
-- tool/skill policy name lists reject blank and duplicate entries:
-  - `tools.allow`, `tools.deny`
-  - `tools.delegated.allow`, `tools.delegated.deny`
-  - `skills.enabled`, `skills.disabled`
-  - same validations also apply under `agents.defaults.*` and `agents.list[].*` overrides
+- `agents.defaults.workspace` and `session.store` are required.
 - each `agents.list[].id` is required and unique.
 - `agents.list[].workspace` cannot be blank-whitespace.
 - memory flush numeric fields must be non-negative:
@@ -150,64 +128,47 @@ General:
   - `timeoutSeconds`
 - if heartbeat is enabled, `heartbeat.interval_seconds` must be `> 0`.
 
-Local-only hard guardrails (`ValidateLocalOnlyPolicy`):
+Local-only boundary:
 
-- `security.enforce_local_only` must stay `true`.
-- `security.enable_gateway` must stay `false`.
-- `security.enable_http_server` must stay `false`.
-- `security.listen_address` must stay empty.
+- `localclaw` does not expose config flags for gateway/listener behavior.
+- Removed/deprecated config keys are rejected instead of silently accepted.
+- Runtime remains single-process and local-only by architecture.
 
-## Memory-search configuration notes
+## Memory configuration notes
 
-`memorySearch` is defined on `agents.defaults` with optional per-agent values under `agents.list[].memorySearch`.
+`memory` is defined on `agents.defaults` with optional per-agent overrides under `agents.list[].memory`.
 
 Implementation details to be aware of:
 
-- Runtime tooling (`internal/runtime/tools.go`) resolves per-agent overrides with additive merge semantics.
+- Runtime memory tool availability is controlled by `agents.defaults.memory` with optional per-agent overrides under `agents.list[].memory`.
+  - `memory.enabled` gates all runtime/MCP memory tools.
+  - `memory.tools.get`, `memory.tools.search`, and `memory.tools.grep` gate each memory tool individually.
+  - All memory flags default to enabled.
+  - Per-agent memory flags support explicit true/false overrides.
+- Runtime memory indexing/search settings (`internal/runtime/tools.go`) are also read from `memory`:
+  - `memory.sources`
+  - `memory.extraPaths`
+  - `memory.store.path`
+  - `memory.chunking.{tokens,overlap}`
+  - `memory.query.{maxResults,minScore}`
+  - `memory.sync.onSearch`
+  - `memory.sync.sessions.{deltaBytes,deltaMessages}`
+- Runtime memory config resolution uses additive merge semantics for per-agent overrides.
   - Practical effect: override fields are applied when they are non-empty/non-zero/true.
   - Fields are not currently "explicitly unset" per-agent (for example, setting a bool to false does not force-disable a true default).
-- Memory CLI (`internal/cli/memory.go`) currently uses `agents.defaults.memorySearch` settings for index/search behavior.
+- Memory CLI (`internal/cli/memory.go`) currently uses `agents.defaults.memory` settings for index/search behavior.
 
-Compatibility behavior (v2):
+Compatibility behavior:
 
-- Legacy `memorySearch` keys from embedding/vector versions are ignored when loading JSON config files.
-- Ignored keys do not cause startup validation failure.
-- Supported v2 keys continue to merge normally.
-- Legacy memory DB embedding/vector artifacts are normalized by schema install; see `docs/MEMORY_RETRIEVAL.md`.
-
-## Tool policy configuration notes
-
-`tools` can be configured globally, under `agents.defaults.tools`, and per agent under `agents.list[].tools`.
-
-- Policy precedence: global -> agent defaults -> specific agent.
-- Evaluation order:
-  - normalize tool name
-  - deny match blocks
-  - allowlist applies when non-empty
-- Delegated tools (`class=delegated`) are disabled by default.
-- Delegated tools must pass both:
-  - `tools.delegated.enabled=true`
-  - delegated allowlist match (`tools.delegated.allow`)
-
-Supported list semantics:
-
-- exact tool name matches (`memory_search`)
-- wildcard match (`*`)
-
-## Skills configuration notes
-
-`skills` can be configured globally, under `agents.defaults.skills`, and per agent under `agents.list[].skills`.
-
-- Workspace skills are discovered from `skills/<name>/SKILL.md`.
-- Frontmatter fields currently parsed:
-  - `name`
-  - `description`
-  - `user-invocable` (default `true`)
-  - `disable-model-invocation` (default `false`)
-- Eligibility filters:
-  - `skills.disabled` always excludes a skill
-  - when `skills.enabled` is non-empty, only those names are eligible
-- Skills with `disable-model-invocation=true` are excluded from the model-facing skills prompt block.
+- Removed/deprecated config keys are not supported.
+- Removed runtime tool-policy keys:
+  - top-level `tools`
+  - top-level `skills`
+  - `agents.defaults.tools`
+  - `agents.defaults.skills`
+  - `agents.list[].tools`
+  - `agents.list[].skills`
+- Update config files to the current schema before startup.
 
 ## Optional TUI waiting text
 

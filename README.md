@@ -7,16 +7,16 @@
 - Local-first operation with no network listeners.
 - Single-process Go runtime (no gateway/server mode).
 - Local Claude Code CLI subprocess integration for LLM execution.
-- Enterprise-safe boundaries: explicit local-only policy validation.
+- Enterprise-safe boundaries: hard local-only runtime constraints.
 - In-process capabilities for workspace, sessions, memory, skills, cron, and heartbeat.
 
 ## Current implementation snapshot
 
 - Command modes: `check` (default), `tui`, `memory`, `mcp`.
 - Agent-aware workspace resolution and bootstrap templates.
-- Per-agent session metadata + transcript files under the configured state root.
+- Per-agent session metadata + transcript files under the configured `app.root`.
 - SQLite-backed memory indexing/search/grep with CLI tooling (`memory status/index/search/grep`).
-- Runtime memory tools (`memory_search`, `memory_grep`, `memory_get`) injected when memory tools are enabled.
+- Runtime memory tools (`memory_search`, `memory_grep`, `memory_get`) injected when `agents.*.memory` enables them.
 - Session lifecycle hooks for `/reset` and `/new` snapshot behavior.
 
 ## Quick start
@@ -112,7 +112,7 @@ Optional waiting-text customization:
 - `docs/ARCHITECTURE.md` - implementation-detail architecture map.
 - `docs/RUNTIME.md` - startup flow and command mode behavior.
 - `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
-- `docs/MEMORY_RETRIEVAL.md` - memory retrieval v2 model (`memory_search` + `memory_grep`) and legacy migration notes.
+- `docs/MEMORY.md` - memory retrieval v2 model (`memory_search` + `memory_grep`) and implementation notes.
 - `docs/TUI.md` - terminal UX behavior and controls.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
 - `docs/TESTING.md` - package coverage and Red/Green command loops.

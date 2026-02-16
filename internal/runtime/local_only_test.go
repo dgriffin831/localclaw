@@ -54,15 +54,6 @@ func (f failingWorkspaceManager) LoadBootstrapFiles(ctx context.Context, agentID
 }
 func (f failingWorkspaceManager) Root() string { return "" }
 
-func TestNewFailsWhenNetworkServerEnabled(t *testing.T) {
-	cfg := config.Default()
-	cfg.Security.EnableHTTPServer = true
-
-	if _, err := New(cfg); err == nil {
-		t.Fatalf("expected startup failure when HTTP server is enabled")
-	}
-}
-
 func TestNewFailsWhenClaudeMCPWiringInvalid(t *testing.T) {
 	stateRootFile := filepath.Join(t.TempDir(), "state-root-file")
 	if err := os.WriteFile(stateRootFile, []byte("not a directory"), 0o600); err != nil {
@@ -70,7 +61,7 @@ func TestNewFailsWhenClaudeMCPWiringInvalid(t *testing.T) {
 	}
 
 	cfg := config.Default()
-	cfg.State.Root = stateRootFile
+	cfg.App.Root = stateRootFile
 
 	if _, err := New(cfg); err == nil {
 		t.Fatalf("expected startup failure when claude mcp wiring is invalid")
@@ -95,7 +86,7 @@ func TestResolveSessionDefaults(t *testing.T) {
 func TestAppResolvesWorkspaceAndSessionPaths(t *testing.T) {
 	stateRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.State.Root = stateRoot
+	cfg.App.Root = stateRoot
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
@@ -224,7 +215,7 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	}
 
 	cfg := config.Default()
-	cfg.State.Root = stateRoot
+	cfg.App.Root = stateRoot
 	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
 
 	app, err := New(cfg)
@@ -302,7 +293,7 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	}
 
 	cfg := config.Default()
-	cfg.State.Root = stateRoot
+	cfg.App.Root = stateRoot
 	cfg.LLM.Provider = "codex"
 	cfg.LLM.Codex.BinaryPath = codexScriptPath
 
@@ -343,7 +334,7 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	}
 }
 
-func TestPromptForSessionIncludesAllowedMCPMemoryToolsForClaude(t *testing.T) {
+func TestPromptForSessionDoesNotSetAllowedToolsForClaude(t *testing.T) {
 	stateRoot := t.TempDir()
 	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
 	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
@@ -357,10 +348,13 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	}
 
 	cfg := config.Default()
-	cfg.State.Root = stateRoot
+	cfg.App.Root = stateRoot
 	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
-	cfg.Agents.Defaults.MemorySearch.Enabled = true
-	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
+	cfg.Agents.Defaults.Memory.Enabled = true
+	cfg.Agents.Defaults.Memory.Tools.Get = true
+	cfg.Agents.Defaults.Memory.Tools.Search = true
+	cfg.Agents.Defaults.Memory.Tools.Grep = true
+	cfg.Agents.Defaults.Memory.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
 
 	app, err := New(cfg)
 	if err != nil {
@@ -393,19 +387,8 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 			break
 		}
 	}
-	if allowedTools == "" {
-		t.Fatalf("expected --allowed-tools flag in args: %v", args)
-	}
-	wantTools := []string{
-		"mcp__localclaw__memory_search",
-		"mcp__localclaw__localclaw_memory_search",
-		"mcp__localclaw__memory_get",
-		"mcp__localclaw__localclaw_memory_get",
-	}
-	for _, tool := range wantTools {
-		if !strings.Contains(allowedTools, tool) {
-			t.Fatalf("expected allowed tools to include %q, got %q", tool, allowedTools)
-		}
+	if allowedTools != "" {
+		t.Fatalf("did not expect --allowed-tools flag in args: %v", args)
 	}
 }
 
@@ -490,7 +473,7 @@ func TestResetSessionCreatesSessionMemorySnapshot(t *testing.T) {
 	ctx := context.Background()
 	stateRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.State.Root = stateRoot
+	cfg.App.Root = stateRoot
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
@@ -552,7 +535,7 @@ func TestResetSessionCreatesSessionMemorySnapshot(t *testing.T) {
 func TestResetSessionHookFailureIsNonFatal(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
@@ -584,7 +567,7 @@ func TestResetSessionHookFailureIsNonFatal(t *testing.T) {
 func TestResetSessionStartNewAvoidsCurrentSessionIDCollision(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
@@ -617,7 +600,7 @@ func TestResetSessionStartNewAvoidsCurrentSessionIDCollision(t *testing.T) {
 func TestResetSessionStartNewAvoidsExistingTranscriptCollision(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 

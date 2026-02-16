@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,32 +10,38 @@ import (
 func TestDefaultConfigIsValid(t *testing.T) {
 	cfg := Default()
 	if err := cfg.Validate(); err != nil {
-		fatalf(t, "expected default config to validate, got error: %v", err)
+		t.Fatalf("expected default config to validate, got error: %v", err)
 	}
 }
 
-func TestDefaultConfigIncludesStateAndAgentScaffolding(t *testing.T) {
+func TestDefaultConfigIncludesAppRootAndAgentScaffolding(t *testing.T) {
 	cfg := Default()
-	if strings.TrimSpace(cfg.State.Root) == "" {
-		fatalf(t, "expected state.root default")
+	if strings.TrimSpace(cfg.App.Root) == "" {
+		t.Fatalf("expected app.root default")
 	}
 	if strings.TrimSpace(cfg.Agents.Defaults.Workspace) == "" {
-		fatalf(t, "expected agents.defaults.workspace default")
+		t.Fatalf("expected agents.defaults.workspace default")
 	}
 	if strings.TrimSpace(cfg.Session.Store) == "" {
-		fatalf(t, "expected session.store default")
+		t.Fatalf("expected session.store default")
 	}
 	if !strings.Contains(cfg.Session.Store, "{agentId}") {
-		fatalf(t, "expected session.store to support {agentId} placeholder, got %q", cfg.Session.Store)
+		t.Fatalf("expected session.store to support {agentId} placeholder, got %q", cfg.Session.Store)
 	}
-	if cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens <= 0 {
-		fatalf(t, "expected agents.defaults.compaction.memoryFlush.thresholdTokens default")
+	if strings.TrimSpace(cfg.Agents.Defaults.Memory.Store.Path) == "" {
+		t.Fatalf("expected agents.defaults.memory.store.path default")
 	}
-	if !cfg.Agents.Defaults.Compaction.MemoryFlush.Enabled {
-		fatalf(t, "expected agents.defaults.compaction.memoryFlush.enabled default")
+	if !cfg.Agents.Defaults.Memory.Enabled {
+		t.Fatalf("expected agents.defaults.memory.enabled default true")
 	}
-	if len(cfg.App.ThinkingMessages) != 0 {
-		fatalf(t, "expected app.thinking_messages to default empty, got %v", cfg.App.ThinkingMessages)
+	if !cfg.Agents.Defaults.Memory.Tools.Get {
+		t.Fatalf("expected agents.defaults.memory.tools.get default true")
+	}
+	if !cfg.Agents.Defaults.Memory.Tools.Search {
+		t.Fatalf("expected agents.defaults.memory.tools.search default true")
+	}
+	if !cfg.Agents.Defaults.Memory.Tools.Grep {
+		t.Fatalf("expected agents.defaults.memory.tools.grep default true")
 	}
 }
 
@@ -49,39 +54,19 @@ func TestLoadSupportsThinkingMessages(t *testing.T) {
 		}
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		fatalf(t, "write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 
 	cfg, err := Load(path)
 	if err != nil {
-		fatalf(t, "load config: %v", err)
+		t.Fatalf("load config: %v", err)
 	}
 
 	if len(cfg.App.ThinkingMessages) != 3 {
-		fatalf(t, "expected 3 app.thinking_messages, got %d", len(cfg.App.ThinkingMessages))
+		t.Fatalf("expected 3 app.thinking_messages, got %d", len(cfg.App.ThinkingMessages))
 	}
 	if cfg.App.ThinkingMessages[0] != "thinking" {
-		fatalf(t, "unexpected first thinking message %q", cfg.App.ThinkingMessages[0])
-	}
-}
-
-func TestLoadIgnoresLegacyWorkspaceAndMemoryFields(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "config.json")
-	payload := `{
-		"workspace": {"root": "/tmp/legacy-workspace"},
-		"memory": {"path": "/tmp/legacy-memory.json"}
-	}`
-	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		fatalf(t, "write config: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		fatalf(t, "load config: %v", err)
-	}
-	if cfg.Agents.Defaults.Workspace != Default().Agents.Defaults.Workspace {
-		fatalf(t, "expected legacy workspace to be ignored, got %q", cfg.Agents.Defaults.Workspace)
+		t.Fatalf("unexpected first thinking message %q", cfg.App.ThinkingMessages[0])
 	}
 }
 
@@ -89,7 +74,6 @@ func TestLoadUsesExplicitAgentDefaultsWorkspace(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
-		"workspace": {"root": "/tmp/legacy-workspace"},
 		"agents": {
 			"defaults": {
 				"workspace": "/tmp/new-workspace"
@@ -97,47 +81,197 @@ func TestLoadUsesExplicitAgentDefaultsWorkspace(t *testing.T) {
 		}
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		fatalf(t, "write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 
 	cfg, err := Load(path)
 	if err != nil {
-		fatalf(t, "load config: %v", err)
+		t.Fatalf("load config: %v", err)
 	}
 	if cfg.Agents.Defaults.Workspace != "/tmp/new-workspace" {
-		fatalf(t, "expected explicit agents.defaults.workspace to be preserved, got %q", cfg.Agents.Defaults.Workspace)
+		t.Fatalf("expected explicit agents.defaults.workspace to be preserved, got %q", cfg.Agents.Defaults.Workspace)
 	}
 }
 
-func TestLoadDoesNotRebaseDerivedDefaultsWhenStateRootChanges(t *testing.T) {
+func TestLoadDoesNotRebaseDerivedDefaultsWhenAppRootChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
-		"state": {"root": "/var/lib/localclaw"}
+		"app": {"root": "/var/lib/localclaw"}
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		fatalf(t, "write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 
 	cfg, err := Load(path)
 	if err != nil {
-		fatalf(t, "load config: %v", err)
+		t.Fatalf("load config: %v", err)
 	}
 	defaults := Default()
 	if cfg.Session.Store != defaults.Session.Store {
-		fatalf(t, "expected session.store default without rebasing, got %q", cfg.Session.Store)
+		t.Fatalf("expected session.store default without rebasing, got %q", cfg.Session.Store)
 	}
-	if cfg.Agents.Defaults.MemorySearch.Store.Path != defaults.Agents.Defaults.MemorySearch.Store.Path {
-		fatalf(t, "expected memorySearch.store.path default without rebasing, got %q", cfg.Agents.Defaults.MemorySearch.Store.Path)
+	if cfg.Agents.Defaults.Memory.Store.Path != defaults.Agents.Defaults.Memory.Store.Path {
+		t.Fatalf("expected memory.store.path default without rebasing, got %q", cfg.Agents.Defaults.Memory.Store.Path)
 	}
 }
 
-func TestLoadPreservesExplicitPathsWhenStateRootChanges(t *testing.T) {
+func TestLoadPreservesExplicitPathsWhenAppRootChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
-		"state": {"root": "/var/lib/localclaw"},
+		"app": {"root": "/var/lib/localclaw"},
 		"session": {"store": "/custom/sessions/{agentId}.json"},
+		"agents": {
+			"defaults": {
+				"memory": {
+					"store": {
+						"path": "/custom/memory/{agentId}.sqlite"
+					}
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Session.Store != "/custom/sessions/{agentId}.json" {
+		t.Fatalf("expected explicit session.store to be preserved, got %q", cfg.Session.Store)
+	}
+	if cfg.Agents.Defaults.Memory.Store.Path != "/custom/memory/{agentId}.sqlite" {
+		t.Fatalf("expected explicit memory.store.path to be preserved, got %q", cfg.Agents.Defaults.Memory.Store.Path)
+	}
+}
+
+func TestLoadSupportsMemoryFeatureFlags(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"defaults": {
+				"memory": {
+					"enabled": false,
+					"tools": {
+						"get": false,
+						"search": false,
+						"grep": true
+					}
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Agents.Defaults.Memory.Enabled {
+		t.Fatalf("expected agents.defaults.memory.enabled=false from config")
+	}
+	if cfg.Agents.Defaults.Memory.Tools.Get {
+		t.Fatalf("expected agents.defaults.memory.tools.get=false from config")
+	}
+	if cfg.Agents.Defaults.Memory.Tools.Search {
+		t.Fatalf("expected agents.defaults.memory.tools.search=false from config")
+	}
+	if !cfg.Agents.Defaults.Memory.Tools.Grep {
+		t.Fatalf("expected agents.defaults.memory.tools.grep=true from config")
+	}
+}
+
+func TestLoadSupportsMemorySearchSettingsUnderMemorySection(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"defaults": {
+				"memory": {
+					"sources": ["memory"],
+					"extraPaths": ["memory/incidents.md"],
+					"store": {
+						"path": "/custom/memory/{agentId}.sqlite"
+					},
+					"chunking": {
+						"tokens": 420,
+						"overlap": 42
+					},
+					"query": {
+						"maxResults": 6,
+						"minScore": 0.5
+					},
+					"sync": {
+						"onSearch": true,
+						"sessions": {
+							"deltaBytes": 2048,
+							"deltaMessages": 5
+						}
+					}
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected memory search settings under agents.defaults.memory to load, got: %v", err)
+	}
+	if cfg.Agents.Defaults.Memory.Store.Path != "/custom/memory/{agentId}.sqlite" {
+		t.Fatalf("expected memory.store.path override, got %q", cfg.Agents.Defaults.Memory.Store.Path)
+	}
+	if cfg.Agents.Defaults.Memory.Query.MaxResults != 6 {
+		t.Fatalf("expected memory.query.maxResults=6, got %d", cfg.Agents.Defaults.Memory.Query.MaxResults)
+	}
+	if !cfg.Agents.Defaults.Memory.Sync.OnSearch {
+		t.Fatalf("expected memory.sync.onSearch=true")
+	}
+}
+
+func TestLoadSupportsMemorySearchExtraPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"defaults": {
+				"memory": {
+					"extraPaths": [
+						"memory",
+						"memory/incidents.md"
+					]
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Agents.Defaults.Memory.ExtraPaths) != 2 {
+		t.Fatalf("expected memory.extraPaths length 2, got %d", len(cfg.Agents.Defaults.Memory.ExtraPaths))
+	}
+	if cfg.Agents.Defaults.Memory.ExtraPaths[0] != "memory" {
+		t.Fatalf("expected first memory.extraPaths entry to be memory, got %q", cfg.Agents.Defaults.Memory.ExtraPaths[0])
+	}
+}
+
+func TestLoadRejectsLegacyMemorySearchSection(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
 		"agents": {
 			"defaults": {
 				"memorySearch": {
@@ -149,144 +283,82 @@ func TestLoadPreservesExplicitPathsWhenStateRootChanges(t *testing.T) {
 		}
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		fatalf(t, "write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := Load(path)
-	if err != nil {
-		fatalf(t, "load config: %v", err)
-	}
-	if cfg.Session.Store != "/custom/sessions/{agentId}.json" {
-		fatalf(t, "expected explicit session.store to be preserved, got %q", cfg.Session.Store)
-	}
-	if cfg.Agents.Defaults.MemorySearch.Store.Path != "/custom/memory/{agentId}.sqlite" {
-		fatalf(t, "expected explicit memorySearch.store.path to be preserved, got %q", cfg.Agents.Defaults.MemorySearch.Store.Path)
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected legacy agents.defaults.memorySearch to be rejected")
 	}
 }
 
-func TestDefaultMemorySearchConfigOmitsLegacyEmbeddingFieldsInJSON(t *testing.T) {
-	cfg := Default()
-	payload, err := json.Marshal(cfg.Agents.Defaults.MemorySearch)
-	if err != nil {
-		fatalf(t, "marshal memorySearch: %v", err)
-	}
-	encoded := string(payload)
-
-	disallowed := []string{
-		`"provider"`,
-		`"fallback"`,
-		`"model"`,
-		`"vector"`,
-		`"hybrid"`,
-		`"cache"`,
-		`"local"`,
-	}
-	for _, key := range disallowed {
-		if strings.Contains(encoded, key) {
-			fatalf(t, "expected v2 memorySearch JSON to omit %s, got %s", key, encoded)
-		}
-	}
-}
-
-func TestLoadIgnoresLegacyMemorySearchKeysInDefaults(t *testing.T) {
+func TestLoadRejectsRemovedToolsAndSkillsConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
-		"agents": {
-			"defaults": {
-				"memorySearch": {
-					"provider": "local",
-					"fallback": "none",
-					"model": "legacy-model",
-					"store": {
-						"path": "/tmp/memory.sqlite",
-						"vector": {"enabled": true}
-					},
-					"query": {
-						"maxResults": 6,
-						"hybrid": {
-							"enabled": true,
-							"vectorWeight": 0.8,
-							"keywordWeight": 0.2,
-							"candidateMultiplier": 4
-						}
-					},
-					"cache": {"enabled": true, "maxEntries": 999},
-					"local": {
-						"runtimePath": "/bin/legacy",
-						"modelPath": "/tmp/model",
-						"modelCacheDir": "/tmp/cache",
-						"queryTimeoutSeconds": 5,
-						"batchTimeoutSeconds": 5
-					}
-				}
-			}
-		}
+		"tools": {"delegated": {"enabled": true}},
+		"skills": {"enabled": ["writer"]}
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		fatalf(t, "write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := Load(path)
-	if err != nil {
-		fatalf(t, "load config: %v", err)
-	}
-	if cfg.Agents.Defaults.MemorySearch.Store.Path != "/tmp/memory.sqlite" {
-		fatalf(t, "expected supported memorySearch fields to still apply")
-	}
-	if cfg.Agents.Defaults.MemorySearch.Query.MaxResults != 6 {
-		fatalf(t, "expected supported query.maxResults to apply")
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected removed tools/skills config keys to be rejected")
 	}
 }
 
-func TestLoadIgnoresLegacyMemorySearchKeysInAgentOverride(t *testing.T) {
+func TestLoadRejectsLegacyWorkspaceAndMemoryFields(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
-		"agents": {
-			"list": [
-				{
-					"id": "agent-a",
-					"memorySearch": {
-						"provider": "local",
-						"fallback": "none",
-						"model": "legacy-model",
-						"cache": {"enabled": true}
-					}
-				}
-			]
+		"workspace": {"root": "/tmp/legacy-workspace"},
+		"memory": {"path": "/tmp/legacy-memory.json"}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected legacy workspace/memory fields to be rejected")
+	}
+}
+
+func TestLoadRejectsLegacyStateRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"state": {"root": "/var/lib/legacy-localclaw"}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected legacy state.root to be rejected")
+	}
+}
+
+func TestLoadRejectsLegacySecurityFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"security": {
+			"enforce_local_only": false,
+			"enable_gateway": true,
+			"enable_http_server": true,
+			"listen_address": "127.0.0.1:8080"
 		}
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		fatalf(t, "write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := Load(path)
-	if err != nil {
-		fatalf(t, "load config: %v", err)
-	}
-	if len(cfg.Agents.List) != 1 || cfg.Agents.List[0].ID != "agent-a" {
-		fatalf(t, "expected agent override to load")
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected legacy security fields to be rejected")
 	}
 }
 
-func TestValidateRejectsUnsupportedChannel(t *testing.T) {
-	cfg := Default()
-	cfg.Channels.Enabled = []string{"slack", "teams"}
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected unsupported channel error")
-	}
-}
-
-func TestValidateRejectsNetworkServerFlags(t *testing.T) {
-	cfg := Default()
-	cfg.Security.EnableHTTPServer = true
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected local-only policy rejection")
-	}
-}
-
-func TestLoadIgnoresLegacyGovCloudFields(t *testing.T) {
+func TestLoadRejectsLegacyGovCloudFields(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
@@ -301,15 +373,19 @@ func TestLoadIgnoresLegacyGovCloudFields(t *testing.T) {
 		}
 	}`
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
-		fatalf(t, "write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 
-	cfg, err := Load(path)
-	if err != nil {
-		fatalf(t, "expected legacy govcloud fields to be ignored, got error: %v", err)
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected legacy govcloud fields to be rejected")
 	}
-	if cfg.LLM.Provider != "claudecode" {
-		fatalf(t, "expected provider claudecode, got %q", cfg.LLM.Provider)
+}
+
+func TestValidateRejectsUnsupportedChannel(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{"slack", "teams"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected unsupported channel error")
 	}
 }
 
@@ -317,24 +393,22 @@ func TestValidateSupportsCodexProviderAndRequiresBinaryPath(t *testing.T) {
 	cfg := Default()
 	cfg.LLM.Provider = "codex"
 	if err := cfg.Validate(); err != nil {
-		fatalf(t, "expected codex provider config to validate, got %v", err)
+		t.Fatalf("expected codex provider config to validate, got %v", err)
 	}
 
 	cfg = Default()
 	cfg.LLM.Provider = "codex"
 	cfg.LLM.Codex.BinaryPath = "   "
 	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected codex binary path validation error")
+		t.Fatalf("expected codex binary path validation error")
 	}
 }
 
 func TestValidateRejectsWhitespaceAgentWorkspaceOverride(t *testing.T) {
 	cfg := Default()
-	cfg.Agents.List = []AgentConfig{
-		{ID: "agent-a", Workspace: "   "},
-	}
+	cfg.Agents.List = []AgentConfig{{ID: "agent-a", Workspace: "   "}}
 	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected invalid agents.list[].workspace error")
+		t.Fatalf("expected invalid agents.list[].workspace error")
 	}
 }
 
@@ -342,19 +416,19 @@ func TestValidateRejectsNegativeMemoryFlushValues(t *testing.T) {
 	cfg := Default()
 	cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens = -1
 	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected negative thresholdTokens error")
+		t.Fatalf("expected negative thresholdTokens error")
 	}
 
 	cfg = Default()
 	cfg.Agents.Defaults.Compaction.MemoryFlush.TriggerWindowTokens = -1
 	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected negative triggerWindowTokens error")
+		t.Fatalf("expected negative triggerWindowTokens error")
 	}
 
 	cfg = Default()
 	cfg.Agents.Defaults.Compaction.MemoryFlush.TimeoutSeconds = -1
 	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected negative timeoutSeconds error")
+		t.Fatalf("expected negative timeoutSeconds error")
 	}
 }
 
@@ -362,53 +436,6 @@ func TestValidateRejectsBlankThinkingMessages(t *testing.T) {
 	cfg := Default()
 	cfg.App.ThinkingMessages = []string{"thinking", "   "}
 	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected blank thinking message error")
+		t.Fatalf("expected blank thinking message error")
 	}
-}
-
-func TestDefaultConfigDisablesDelegatedToolsByDefault(t *testing.T) {
-	cfg := Default()
-	if cfg.Tools.Delegated.Enabled {
-		fatalf(t, "expected tools.delegated.enabled default false")
-	}
-	if len(cfg.Tools.Allow) != 0 {
-		fatalf(t, "expected tools.allow default empty, got %v", cfg.Tools.Allow)
-	}
-	if len(cfg.Tools.Deny) != 0 {
-		fatalf(t, "expected tools.deny default empty, got %v", cfg.Tools.Deny)
-	}
-}
-
-func TestValidateRejectsBlankToolPolicyEntries(t *testing.T) {
-	cfg := Default()
-	cfg.Tools.Allow = []string{"memory_search", "   "}
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected tools.allow validation error")
-	}
-
-	cfg = Default()
-	cfg.Agents.Defaults.Tools.Deny = []string{"memory_get", ""}
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected agents.defaults.tools.deny validation error")
-	}
-
-	cfg = Default()
-	cfg.Agents.List = []AgentConfig{
-		{
-			ID: "writer",
-			Tools: ToolsConfig{
-				Delegated: DelegatedToolsConfig{
-					Allow: []string{"remote_search", "  "},
-				},
-			},
-		},
-	}
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected agents.list[].tools.delegated.allow validation error")
-	}
-}
-
-func fatalf(t *testing.T, format string, args ...interface{}) {
-	t.Helper()
-	t.Fatalf(format, args...)
 }

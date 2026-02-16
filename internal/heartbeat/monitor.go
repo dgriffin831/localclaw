@@ -17,5 +17,6 @@ func NewLocalMonitor(enabled bool, interval int) *LocalMonitor {
 }
 
 func (m *LocalMonitor) Ping(ctx context.Context, message string) error {
+	// TODO: Emit real heartbeat signals and honor interval when enabled; current monitor is a stub and ignores both message content and interval cadence.
 	return nil
 }

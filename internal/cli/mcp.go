@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/mcp"
@@ -54,6 +55,14 @@ func RunMCPCommand(ctx context.Context, cfg config.Config, app *runtime.App, arg
 }
 
 func newMCPServer(app *runtime.App) (*mcp.Server, error) {
+	policy, err := mcpTools.NewPolicy(nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build mcp tool policy: %w", err)
+	}
+	return newMCPServerWithPolicy(app, policy)
+}
+
+func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Server, error) {
 	memoryBackend := mcpTools.RuntimeMemoryBackend{App: app}
 	searchTool := mcpTools.NewMemorySearchTool(memoryBackend)
 	getTool := mcpTools.NewMemoryGetTool(memoryBackend)
@@ -75,99 +84,94 @@ func newMCPServer(app *runtime.App) (*mcp.Server, error) {
 	sessionsSendTool := mcpTools.NewSessionsSendTool(orchestrationBackend)
 	sessionStatusTool := mcpTools.NewSessionStatusTool(orchestrationBackend)
 
-	tools := []mcp.ToolRegistration{
+	registrations := []mcp.ToolRegistration{
 		{
 			Definition: mcpTools.MemorySearchDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemorySearch, searchTool.Call),
-		},
-		{
-			Definition: mcpTools.MemorySearchAliasDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemorySearch, searchTool.Call),
+			Handler:    searchTool.Call,
 		},
 		{
 			Definition: mcpTools.MemoryGetDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGet, getTool.Call),
-		},
-		{
-			Definition: mcpTools.MemoryGetAliasDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGet, getTool.Call),
+			Handler:    getTool.Call,
 		},
 		{
 			Definition: mcpTools.MemoryGrepDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGrep, grepTool.Call),
-		},
-		{
-			Definition: mcpTools.MemoryGrepAliasDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGrep, grepTool.Call),
+			Handler:    grepTool.Call,
 		},
 		{
 			Definition: mcpTools.WorkspaceStatusDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolWorkspaceStatus, workspaceStatusTool.Call),
+			Handler:    workspaceStatusTool.Call,
 		},
 		{
 			Definition: mcpTools.WorkspaceBootstrapContextDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolWorkspaceBootstrapContext, workspaceBootstrapContextTool.Call),
+			Handler:    workspaceBootstrapContextTool.Call,
 		},
 		{
 			Definition: mcpTools.CronListDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolCronList, cronListTool.Call),
+			Handler:    cronListTool.Call,
 		},
 		{
 			Definition: mcpTools.CronAddDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolCronAdd, cronAddTool.Call),
+			Handler:    cronAddTool.Call,
 		},
 		{
 			Definition: mcpTools.CronRemoveDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolCronRemove, cronRemoveTool.Call),
+			Handler:    cronRemoveTool.Call,
 		},
 		{
 			Definition: mcpTools.CronRunDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolCronRun, cronRunTool.Call),
+			Handler:    cronRunTool.Call,
 		},
 		{
 			Definition: mcpTools.SessionsListDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolSessionsList, sessionsListTool.Call),
+			Handler:    sessionsListTool.Call,
 		},
 		{
 			Definition: mcpTools.SessionsHistoryDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolSessionsHistory, sessionsHistoryTool.Call),
+			Handler:    sessionsHistoryTool.Call,
 		},
 		{
 			Definition: mcpTools.SessionsSendDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolSessionsSend, sessionsSendTool.Call),
+			Handler:    sessionsSendTool.Call,
 		},
 		{
 			Definition: mcpTools.SessionStatusDefinition(),
-			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolSessionStatus, sessionStatusTool.Call),
+			Handler:    sessionStatusTool.Call,
 		},
 	}
+	tools := applyMCPToolPolicy(registrations, policy)
 	return mcp.NewServer(mcp.Settings{ServerName: "localclaw", ServerVersion: "phase4", Tools: tools}), nil
 }
 
-func withRuntimePolicy(app *runtime.App, runtimeToolName string, next func(context.Context, map[string]interface{}) protocol.CallToolResult) mcp.ToolHandler {
-	return func(ctx context.Context, args map[string]interface{}) protocol.CallToolResult {
-		agentID := runtime.ResolveAgentID(stringArg(args, "agent_id"))
-		policy := app.MCPToolsConfig(agentID)
-		gate, err := mcpTools.NewPolicy(policy.Allow, policy.Deny)
-		if err != nil {
-			return protocol.CallToolResult{IsError: true, StructuredContent: map[string]interface{}{"ok": false, "error": err.Error()}}
+func applyMCPToolPolicy(registrations []mcp.ToolRegistration, policy mcpTools.Policy) []mcp.ToolRegistration {
+	filtered := make([]mcp.ToolRegistration, 0, len(registrations))
+	for _, registration := range registrations {
+		name := strings.TrimSpace(registration.Definition.Name)
+		if name == "" || registration.Handler == nil {
+			continue
 		}
-		allowed, reason := gate.Allowed(runtimeToolName)
-		if !allowed {
-			return protocol.CallToolResult{IsError: true, StructuredContent: map[string]interface{}{"ok": false, "error": reason}}
+		registration.Definition.Name = name
+		if allowed, reason := policy.Allowed(name); !allowed {
+			registration.Handler = deniedToolHandler(reason)
 		}
-		return next(ctx, args)
+		filtered = append(filtered, registration)
 	}
+	return filtered
 }
 
-func stringArg(args map[string]interface{}, key string) string {
-	raw, ok := args[key]
-	if !ok {
-		return ""
+func deniedToolHandler(reason string) mcp.ToolHandler {
+	trimmedReason := strings.TrimSpace(reason)
+	if trimmedReason == "" {
+		trimmedReason = "tool denied by policy"
 	}
-	text, ok := raw.(string)
-	if !ok {
-		return ""
+	return func(ctx context.Context, args map[string]interface{}) protocol.CallToolResult {
+		_ = ctx
+		_ = args
+		return protocol.CallToolResult{
+			IsError: true,
+			StructuredContent: map[string]interface{}{
+				"ok":    false,
+				"error": trimmedReason,
+			},
+		}
 	}
-	return text
 }

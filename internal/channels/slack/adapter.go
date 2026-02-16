@@ -14,5 +14,6 @@ func NewLocalAdapter() *LocalAdapter {
 }
 
 func (a *LocalAdapter) Send(ctx context.Context, text string) error {
+	// TODO: Implement real Slack delivery when runtime channel dispatch is wired.
 	return nil
 }

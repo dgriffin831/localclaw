@@ -15,11 +15,6 @@ const (
 	ToolLocalclawSessionsHistory = "localclaw_sessions_history"
 	ToolLocalclawSessionsSend    = "localclaw_sessions_send"
 	ToolLocalclawSessionStatus   = "localclaw_session_status"
-
-	RuntimeToolSessionsList    = "sessions_list"
-	RuntimeToolSessionsHistory = "sessions_history"
-	RuntimeToolSessionsSend    = "sessions_send"
-	RuntimeToolSessionStatus   = "session_status"
 )
 
 var ErrSessionNotFound = errors.New("session not found")

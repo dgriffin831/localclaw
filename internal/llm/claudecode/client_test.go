@@ -51,7 +51,7 @@ func TestBuildCommandArgsForRequestIncludesMCPFlagsAndSystemPrompt(t *testing.T)
 		"--verbose",
 		"--mcp-config", "/tmp/mcp.json",
 		"--strict-mcp-config",
-		"--allowed-tools", "mcp__localclaw__memory_search,mcp__localclaw__localclaw_memory_search,mcp__localclaw__memory_get,mcp__localclaw__localclaw_memory_get",
+		"--allowed-tools", "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get",
 		"--append-system-prompt", "system guidance\n\nskill guidance",
 	}
 	if len(args) != len(want) {
@@ -311,29 +311,14 @@ func TestParseStreamJSONLineToolResultError(t *testing.T) {
 	toolNames := map[string]string{}
 	line := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_404","content":"permission denied","is_error":true}]}}`
 	events, resultErr, err := parseStreamJSONLine(line, toolNames)
-	if err != nil {
-		t.Fatalf("parse line: %v", err)
+	if err == nil {
+		t.Fatalf("expected parse error when tool mapping is missing")
 	}
 	if resultErr != "" {
 		t.Fatalf("unexpected result error: %q", resultErr)
 	}
-	if len(events) != 1 {
-		t.Fatalf("expected one tool_result event, got %d", len(events))
-	}
-	if events[0].ToolResult == nil {
-		t.Fatalf("expected tool result payload")
-	}
-	if events[0].ToolResult.OK {
-		t.Fatalf("expected failing tool result")
-	}
-	if events[0].ToolResult.Tool != "tool" {
-		t.Fatalf("expected fallback tool name tool, got %q", events[0].ToolResult.Tool)
-	}
-	if events[0].ToolResult.Error != "permission denied" {
-		t.Fatalf("expected tool error text, got %q", events[0].ToolResult.Error)
-	}
-	if events[0].ToolResult.Class != llm.ToolClassDelegated {
-		t.Fatalf("expected delegated tool class on result, got %q", events[0].ToolResult.Class)
+	if len(events) != 0 {
+		t.Fatalf("expected no events on parse error, got %d", len(events))
 	}
 }
 

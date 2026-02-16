@@ -213,10 +213,10 @@ func newTestApp(t *testing.T, sources []string) (config.Config, *runtime.App, st
 	t.Helper()
 
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Agents.Defaults.MemorySearch.Sources = sources
-	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
+	cfg.Agents.Defaults.Memory.Sources = sources
+	cfg.Agents.Defaults.Memory.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
 	cfg.Heartbeat.Enabled = false
 	cfg.Cron.Enabled = false
 

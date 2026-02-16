@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/dgriffin831/localclaw/internal/config"
@@ -17,46 +16,15 @@ import (
 	"github.com/dgriffin831/localclaw/internal/workspace"
 )
 
-const memoryRecallPolicyPrompt = `System policy:
-- Memory recall is mandatory before finalizing an answer when tools are available.
-- First call memory_search with the user's intent and review the top matches.
-- Use memory_grep for exact token or regex follow-up when precision is needed.
-- If details are incomplete, call memory_get for exact lines from relevant files.
-- If a tool fails or returns no relevant data, continue with best effort and explicitly note that memory recall was unavailable or empty.`
-
-type ToolExecutionRequest struct {
-	AgentID   string
-	SessionID string
-	Name      string
-	Class     llm.ToolClass
-	Args      map[string]interface{}
-}
-
-type ToolExecutionResult struct {
-	Tool  string                 `json:"tool"`
-	Class llm.ToolClass          `json:"class,omitempty"`
-	OK    bool                   `json:"ok"`
-	Data  map[string]interface{} `json:"data,omitempty"`
-	Error string                 `json:"error,omitempty"`
-}
-
-type DelegatedToolExecutor interface {
-	ExecuteDelegatedTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult
-}
-
-func (a *App) SetDelegatedToolExecutor(executor DelegatedToolExecutor) {
-	a.delegated = executor
-}
-
 // ToolDefinitions returns runtime tools available for the current agent policy.
 func (a *App) ToolDefinitions(agentID string) []skills.ToolDefinition {
-	if !a.toolsEnabled(agentID) || a.tools == nil {
+	if a.tools == nil {
 		return nil
 	}
 	defs := a.tools.List()
 	filtered := make([]skills.ToolDefinition, 0, len(defs))
 	for _, tool := range defs {
-		if allowed, _ := a.evaluateToolPolicy(agentID, tool.Name, llm.ToolClassLocal); !allowed {
+		if enabled, _ := a.memoryToolEnabled(agentID, tool.Name); !enabled {
 			continue
 		}
 		filtered = append(filtered, tool)
@@ -64,150 +32,20 @@ func (a *App) ToolDefinitions(agentID string) []skills.ToolDefinition {
 	return filtered
 }
 
-// ExecuteTool invokes one registered runtime tool and degrades gracefully on failures.
-func (a *App) ExecuteTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult {
-	toolName := normalizeToolName(req.Name)
-	toolClass := req.Class
-	result := ToolExecutionResult{
-		Tool:  toolName,
-		Class: toolClass,
-		OK:    false,
-	}
-
-	if toolName == "" {
-		result.Error = "tool name is required"
-		return result
-	}
-
-	if toolClass == llm.ToolClassUnspecified {
-		if a.tools != nil {
-			if _, ok := a.tools.Get(toolName); ok {
-				toolClass = llm.ToolClassLocal
-			}
-		}
-		if toolClass == llm.ToolClassUnspecified {
-			toolClass = llm.ToolClassLocal
-		}
-		result.Class = toolClass
-	}
-
-	if toolClass == llm.ToolClassDelegated {
-		allowed, reason := a.evaluateToolPolicy(req.AgentID, toolName, llm.ToolClassDelegated)
-		if !allowed {
-			result.Error = fmt.Sprintf("tool policy blocked: %s", reason)
-			return result
-		}
-		if a.delegated == nil {
-			result.Error = "delegated tool execution is not configured"
-			return result
-		}
-		delegatedResult := a.delegated.ExecuteDelegatedTool(ctx, req)
-		if delegatedResult.Tool == "" {
-			delegatedResult.Tool = toolName
-		}
-		if delegatedResult.Class == llm.ToolClassUnspecified {
-			delegatedResult.Class = llm.ToolClassDelegated
-		}
-		return delegatedResult
-	}
-
-	if !a.toolsEnabled(req.AgentID) {
-		result.Error = "runtime tools are disabled"
-		return result
-	}
-	if a.tools == nil {
-		result.Error = "tool registry unavailable"
-		return result
-	}
-	if _, ok := a.tools.Get(toolName); !ok {
-		result.Error = fmt.Sprintf("unknown tool %q", toolName)
-		return result
-	}
-	allowed, reason := a.evaluateToolPolicy(req.AgentID, toolName, llm.ToolClassLocal)
-	if !allowed {
-		result.Error = fmt.Sprintf("tool policy blocked: %s", reason)
-		return result
-	}
-
-	switch toolName {
-	case skills.ToolMemorySearch:
-		out := a.executeMemorySearchTool(ctx, req)
-		out.Class = llm.ToolClassLocal
-		return out
-	case skills.ToolMemoryGet:
-		out := a.executeMemoryGetTool(ctx, req)
-		out.Class = llm.ToolClassLocal
-		return out
-	case skills.ToolMemoryGrep:
-		out := a.executeMemoryGrepTool(ctx, req)
-		out.Class = llm.ToolClassLocal
-		return out
-	default:
-		result.Error = fmt.Sprintf("unsupported tool %q", toolName)
-		return result
-	}
-}
-
-func (a *App) buildPromptInput(ctx context.Context, agentID, sessionID, input string) string {
-	resolution := ResolveSession(agentID, sessionID)
-	req := a.buildPromptRequest(ctx, resolution, input)
-	return llm.ComposePromptFallback(req)
-}
-
 func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResolution, input string) llm.Request {
 	trimmedInput := strings.TrimSpace(input)
 	bootstrapSection := a.buildBootstrapPromptSection(ctx, resolution)
 	skillsSection := a.buildSkillsPromptSection(ctx, resolution)
 
-	toolLines := make([]string, 0, 8)
-	toolDefs := make([]llm.ToolDefinition, 0, 8)
-	if a.toolsEnabled(resolution.AgentID) {
-		for _, tool := range a.ToolDefinitions(resolution.AgentID) {
-			paramParts := make([]string, 0, len(tool.Parameters))
-			params := make([]llm.ToolParameter, 0, len(tool.Parameters))
-			for _, param := range tool.Parameters {
-				suffix := " optional"
-				if param.Required {
-					suffix = " required"
-				}
-				paramParts = append(paramParts, fmt.Sprintf("%s:%s (%s)", param.Name, param.Type, suffix))
-				params = append(params, llm.ToolParameter{
-					Name:        param.Name,
-					Type:        param.Type,
-					Required:    param.Required,
-					Description: param.Description,
-				})
-			}
-			toolLines = append(toolLines, fmt.Sprintf("- %s: %s | args: %s", tool.Name, tool.Description, strings.Join(paramParts, ", ")))
-			toolDefs = append(toolDefs, llm.ToolDefinition{
-				Name:        tool.Name,
-				Description: tool.Description,
-				Class:       llm.ToolClassLocal,
-				Parameters:  params,
-			})
-		}
-	}
-
 	var system strings.Builder
 	if bootstrapSection != "" {
 		system.WriteString(bootstrapSection)
 	}
-	if len(toolLines) > 0 {
-		if system.Len() > 0 {
-			system.WriteString("\n\n")
-		}
-		system.WriteString(memoryRecallPolicyPrompt)
-		system.WriteString("\n\nAvailable tools:\n")
-		system.WriteString(strings.Join(toolLines, "\n"))
-		system.WriteString("\n\nCurrent session_key: ")
-		system.WriteString(resolution.SessionKey)
-	}
 
 	return llm.Request{
-		Input:           trimmedInput,
-		SystemContext:   strings.TrimSpace(system.String()),
-		SkillPrompt:     strings.TrimSpace(skillsSection),
-		ToolDefinitions: toolDefs,
+		Input:         trimmedInput,
+		SystemContext: strings.TrimSpace(system.String()),
+		SkillPrompt:   strings.TrimSpace(skillsSection),
 		Session: llm.SessionMetadata{
 			AgentID:    resolution.AgentID,
 			SessionID:  resolution.SessionID,
@@ -318,12 +156,7 @@ func (a *App) buildSkillsPromptSection(ctx context.Context, resolution SessionRe
 	if err != nil {
 		return ""
 	}
-	skillsCfg := a.resolveSkillsConfig(resolution.AgentID)
-	snapshot, err := a.skills.Snapshot(ctx, skills.SnapshotRequest{
-		WorkspacePath: workspacePath,
-		Enabled:       skillsCfg.Enabled,
-		Disabled:      skillsCfg.Disabled,
-	})
+	snapshot, err := a.skills.Snapshot(ctx, skills.SnapshotRequest{WorkspacePath: workspacePath})
 	if err != nil {
 		return ""
 	}
@@ -353,192 +186,7 @@ func (a *App) clearSkillPromptSnapshot(sessionKey string) {
 	a.snapshotMu.Unlock()
 }
 
-func (a *App) executeMemorySearchTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult {
-	result := ToolExecutionResult{Tool: skills.ToolMemorySearch, OK: false}
-
-	query, err := stringArg(req.Args, "query", true)
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	maxResults, err := intArg(req.Args, "max_results")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	minScore, err := floatArg(req.Args, "min_score")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	sessionKey, err := stringArg(req.Args, "session_key", false)
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	if sessionKey == "" {
-		sessionKey = ResolveSession(req.AgentID, req.SessionID).SessionKey
-	}
-
-	searchCfg := a.resolveMemorySearchConfig(req.AgentID)
-	manager, cleanup, toolErr := a.newMemoryToolManager(ctx, req.AgentID, searchCfg)
-	if toolErr != nil {
-		result.Error = toolErr.Error()
-		return result
-	}
-	defer cleanup()
-
-	if searchCfg.Sync.OnSearch {
-		if _, err := manager.Sync(ctx, false); err != nil {
-			result.Error = fmt.Sprintf("memory_search sync failed: %v", err)
-			return result
-		}
-	}
-
-	opts := memory.SearchOptions{
-		MaxResults: maxResults,
-		MinScore:   minScore,
-		SessionKey: sessionKey,
-	}
-	if opts.MaxResults <= 0 {
-		opts.MaxResults = searchCfg.Query.MaxResults
-	}
-	if opts.MaxResults <= 0 {
-		opts.MaxResults = 8
-	}
-	if !argPresent(req.Args, "min_score") {
-		opts.MinScore = searchCfg.Query.MinScore
-	}
-
-	results, err := manager.Search(ctx, query, opts)
-	if err != nil {
-		result.Error = fmt.Sprintf("memory_search failed: %v", err)
-		return result
-	}
-
-	result.OK = true
-	result.Data = map[string]interface{}{
-		"results": results,
-		"count":   len(results),
-	}
-	return result
-}
-
-func (a *App) executeMemoryGetTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult {
-	result := ToolExecutionResult{Tool: skills.ToolMemoryGet, OK: false}
-
-	path, err := stringArg(req.Args, "path", true)
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	fromLine, err := intArg(req.Args, "from_line")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	lines, err := intArg(req.Args, "lines")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-
-	searchCfg := a.resolveMemorySearchConfig(req.AgentID)
-	manager, cleanup, toolErr := a.newMemoryToolManager(ctx, req.AgentID, searchCfg)
-	if toolErr != nil {
-		result.Error = toolErr.Error()
-		return result
-	}
-	defer cleanup()
-
-	out, err := manager.Get(ctx, path, memory.GetOptions{FromLine: fromLine, Lines: lines})
-	if err != nil {
-		result.Error = fmt.Sprintf("memory_get failed: %v", err)
-		return result
-	}
-
-	result.OK = true
-	result.Data = map[string]interface{}{
-		"result": out,
-	}
-	return result
-}
-
-func (a *App) executeMemoryGrepTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult {
-	result := ToolExecutionResult{Tool: skills.ToolMemoryGrep, OK: false}
-
-	query, err := stringArg(req.Args, "query", true)
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	mode, err := stringArg(req.Args, "mode", false)
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	caseSensitive, err := boolArg(req.Args, "case_sensitive")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	word, err := boolArg(req.Args, "word")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	maxMatches, err := intArg(req.Args, "max_matches")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	contextLines, err := intArg(req.Args, "context_lines")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	pathGlob, err := stringSliceArg(req.Args, "path_glob")
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-	source, err := stringArg(req.Args, "source", false)
-	if err != nil {
-		result.Error = err.Error()
-		return result
-	}
-
-	searchCfg := a.resolveMemorySearchConfig(req.AgentID)
-	manager, cleanup, toolErr := a.newMemoryToolManager(ctx, req.AgentID, searchCfg)
-	if toolErr != nil {
-		result.Error = toolErr.Error()
-		return result
-	}
-	defer cleanup()
-
-	out, err := manager.Grep(ctx, query, memory.GrepOptions{
-		Mode:          mode,
-		CaseSensitive: caseSensitive,
-		Word:          word,
-		MaxMatches:    maxMatches,
-		ContextLines:  contextLines,
-		PathGlob:      pathGlob,
-		Source:        source,
-	})
-	if err != nil {
-		result.Error = fmt.Sprintf("memory_grep failed: %v", err)
-		return result
-	}
-
-	result.OK = true
-	result.Data = map[string]interface{}{
-		"count":   out.Count,
-		"matches": out.Matches,
-	}
-	return result
-}
-
-func (a *App) newMemoryToolManager(ctx context.Context, agentID string, searchCfg config.MemorySearchConfig) (*memory.SQLiteIndexManager, func(), error) {
+func (a *App) newMemoryToolManager(ctx context.Context, agentID string, memoryCfg config.MemoryConfig) (*memory.SQLiteIndexManager, func(), error) {
 	resolution := ResolveSession(agentID, "")
 	workspacePath, err := a.ResolveWorkspacePath(resolution.AgentID)
 	if err != nil {
@@ -550,14 +198,14 @@ func (a *App) newMemoryToolManager(ctx context.Context, agentID string, searchCf
 	}
 	sessionsRoot := filepath.Dir(sessionsPath)
 
-	storePath, err := resolveStorePath(a.cfg.State.Root, searchCfg.Store.Path, resolution.AgentID)
+	storePath, err := resolveStorePath(a.cfg.App.Root, memoryCfg.Store.Path, resolution.AgentID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve memory store path: %w", err)
 	}
 
-	sourceSet := normalizeSources(searchCfg.Sources)
+	sourceSet := normalizeSources(memoryCfg.Sources)
 	allowMemorySource := sourceSet["memory"]
-	extraPaths := append([]string{}, searchCfg.ExtraPaths...)
+	extraPaths := append([]string{}, memoryCfg.ExtraPaths...)
 	if !allowMemorySource {
 		extraPaths = nil
 	}
@@ -566,13 +214,13 @@ func (a *App) newMemoryToolManager(ctx context.Context, agentID string, searchCf
 		DBPath:               storePath,
 		WorkspaceRoot:        workspacePath,
 		SessionsRoot:         sessionsRoot,
-		Sources:              searchCfg.Sources,
+		Sources:              memoryCfg.Sources,
 		ExtraPaths:           extraPaths,
-		ChunkTokens:          searchCfg.Chunking.Tokens,
-		ChunkOverlap:         searchCfg.Chunking.Overlap,
+		ChunkTokens:          memoryCfg.Chunking.Tokens,
+		ChunkOverlap:         memoryCfg.Chunking.Overlap,
 		EnableFTS:            true,
-		SessionDeltaBytes:    searchCfg.Sync.Sessions.DeltaBytes,
-		SessionDeltaMessages: searchCfg.Sync.Sessions.DeltaMessages,
+		SessionDeltaBytes:    memoryCfg.Sync.Sessions.DeltaBytes,
+		SessionDeltaMessages: memoryCfg.Sync.Sessions.DeltaMessages,
 	})
 	if err := manager.Open(ctx); err != nil {
 		return nil, nil, fmt.Errorf("open memory index: %w", err)
@@ -581,136 +229,59 @@ func (a *App) newMemoryToolManager(ctx context.Context, agentID string, searchCf
 	return manager, func() { _ = manager.Close() }, nil
 }
 
-func (a *App) toolsEnabled(agentID string) bool {
-	return a.resolveMemorySearchConfig(agentID).Enabled
-}
-
-func (a *App) resolveMemorySearchConfig(agentID string) config.MemorySearchConfig {
-	resolved := a.cfg.Agents.Defaults.MemorySearch
-	normalizedAgentID := ResolveAgentID(agentID)
-	for _, agent := range a.cfg.Agents.List {
-		if ResolveAgentID(agent.ID) != normalizedAgentID {
-			continue
-		}
-		override := agent.MemorySearch
-		if !hasMemorySearchOverride(override) {
-			break
-		}
-		resolved = mergeMemorySearchConfig(resolved, override)
-		break
-	}
-	return resolved
-}
-
-func (a *App) resolveToolsConfig(agentID string) config.ToolsConfig {
-	resolved := a.cfg.Tools
-	if hasToolsOverride(a.cfg.Agents.Defaults.Tools) {
-		resolved = mergeToolsConfig(resolved, a.cfg.Agents.Defaults.Tools)
-	}
-
-	normalizedAgentID := ResolveAgentID(agentID)
-	for _, agent := range a.cfg.Agents.List {
-		if ResolveAgentID(agent.ID) != normalizedAgentID {
-			continue
-		}
-		if hasToolsOverride(agent.Tools) {
-			resolved = mergeToolsConfig(resolved, agent.Tools)
-		}
-		break
-	}
-	return resolved
-}
-
-func hasToolsOverride(cfg config.ToolsConfig) bool {
-	return len(cfg.Allow) > 0 ||
-		len(cfg.Deny) > 0 ||
-		cfg.Delegated.Enabled ||
-		len(cfg.Delegated.Allow) > 0 ||
-		len(cfg.Delegated.Deny) > 0
-}
-
-func mergeToolsConfig(base, override config.ToolsConfig) config.ToolsConfig {
-	merged := base
-	if len(override.Allow) > 0 || len(override.Deny) > 0 {
-		merged.Allow = append([]string{}, override.Allow...)
-		merged.Deny = append([]string{}, override.Deny...)
-	}
-	if override.Delegated.Enabled {
-		merged.Delegated.Enabled = true
-	}
-	if len(override.Delegated.Allow) > 0 || len(override.Delegated.Deny) > 0 {
-		merged.Delegated.Allow = append([]string{}, override.Delegated.Allow...)
-		merged.Delegated.Deny = append([]string{}, override.Delegated.Deny...)
-	}
-	return merged
-}
-
-func (a *App) resolveSkillsConfig(agentID string) config.SkillsConfig {
-	resolved := a.cfg.Skills
-	if hasSkillsOverride(a.cfg.Agents.Defaults.Skills) {
-		resolved = mergeSkillsConfig(resolved, a.cfg.Agents.Defaults.Skills)
-	}
-
-	normalizedAgentID := ResolveAgentID(agentID)
-	for _, agent := range a.cfg.Agents.List {
-		if ResolveAgentID(agent.ID) != normalizedAgentID {
-			continue
-		}
-		if hasSkillsOverride(agent.Skills) {
-			resolved = mergeSkillsConfig(resolved, agent.Skills)
-		}
-		break
-	}
-	return resolved
-}
-
-func hasSkillsOverride(cfg config.SkillsConfig) bool {
-	return len(cfg.Enabled) > 0 || len(cfg.Disabled) > 0
-}
-
-func mergeSkillsConfig(base, override config.SkillsConfig) config.SkillsConfig {
-	merged := base
-	if len(override.Enabled) > 0 || len(override.Disabled) > 0 {
-		merged.Enabled = append([]string{}, override.Enabled...)
-		merged.Disabled = append([]string{}, override.Disabled...)
-	}
-	return merged
-}
-
-func (a *App) evaluateToolPolicy(agentID string, toolName string, class llm.ToolClass) (bool, string) {
+func (a *App) memoryToolEnabled(agentID, toolName string) (bool, string) {
 	name := normalizeToolName(toolName)
 	if name == "" {
 		return false, "tool name is required"
 	}
-
-	policy := a.resolveToolsConfig(agentID)
-	if class == llm.ToolClassDelegated {
-		if !policy.Delegated.Enabled {
-			return false, "delegated tools are disabled"
-		}
-		if matchToolList(policy.Delegated.Deny, name) {
-			return false, fmt.Sprintf("delegated tool %q denied by policy", name)
-		}
-		if len(policy.Delegated.Allow) == 0 {
-			return false, fmt.Sprintf("delegated tool %q is not allowlisted", name)
-		}
-		if !matchToolList(policy.Delegated.Allow, name) {
-			return false, fmt.Sprintf("delegated tool %q is not allowlisted", name)
-		}
+	if name != skills.ToolMemorySearch && name != skills.ToolMemoryGet && name != skills.ToolMemoryGrep {
 		return true, ""
 	}
 
-	if matchToolList(policy.Deny, name) {
-		return false, fmt.Sprintf("tool %q denied by policy", name)
+	resolvedAgentID := ResolveAgentID(agentID)
+	memoryCfg := a.resolveMemoryConfig(resolvedAgentID)
+	if !memoryCfg.Enabled {
+		return false, fmt.Sprintf("memory tools are disabled for agent %q", resolvedAgentID)
 	}
-	if len(policy.Allow) > 0 && !matchToolList(policy.Allow, name) {
-		return false, fmt.Sprintf("tool %q is not allowlisted", name)
+
+	switch name {
+	case skills.ToolMemorySearch:
+		if !memoryCfg.Tools.Search {
+			return false, fmt.Sprintf("memory_search is disabled for agent %q", resolvedAgentID)
+		}
+	case skills.ToolMemoryGet:
+		if !memoryCfg.Tools.Get {
+			return false, fmt.Sprintf("memory_get is disabled for agent %q", resolvedAgentID)
+		}
+	case skills.ToolMemoryGrep:
+		if !memoryCfg.Tools.Grep {
+			return false, fmt.Sprintf("memory_grep is disabled for agent %q", resolvedAgentID)
+		}
 	}
+
 	return true, ""
 }
 
-func hasMemorySearchOverride(cfg config.MemorySearchConfig) bool {
-	return cfg.Enabled ||
+func (a *App) resolveMemoryConfig(agentID string) config.MemoryConfig {
+	resolved := a.cfg.Agents.Defaults.Memory
+	normalizedAgentID := ResolveAgentID(agentID)
+	for _, agent := range a.cfg.Agents.List {
+		if ResolveAgentID(agent.ID) != normalizedAgentID {
+			continue
+		}
+		if hasMemoryOverride(agent.Memory) {
+			resolved = mergeMemoryConfig(resolved, agent.Memory)
+		}
+		break
+	}
+	return resolved
+}
+
+func hasMemoryOverride(cfg config.MemoryOverrideConfig) bool {
+	return cfg.Enabled != nil ||
+		cfg.Tools.Get != nil ||
+		cfg.Tools.Search != nil ||
+		cfg.Tools.Grep != nil ||
 		len(cfg.Sources) > 0 ||
 		len(cfg.ExtraPaths) > 0 ||
 		strings.TrimSpace(cfg.Store.Path) != "" ||
@@ -723,10 +294,19 @@ func hasMemorySearchOverride(cfg config.MemorySearchConfig) bool {
 		cfg.Sync.Sessions.DeltaMessages > 0
 }
 
-func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.MemorySearchConfig {
+func mergeMemoryConfig(base config.MemoryConfig, override config.MemoryOverrideConfig) config.MemoryConfig {
 	merged := base
-	if override.Enabled {
-		merged.Enabled = true
+	if override.Enabled != nil {
+		merged.Enabled = *override.Enabled
+	}
+	if override.Tools.Get != nil {
+		merged.Tools.Get = *override.Tools.Get
+	}
+	if override.Tools.Search != nil {
+		merged.Tools.Search = *override.Tools.Search
+	}
+	if override.Tools.Grep != nil {
+		merged.Tools.Grep = *override.Tools.Grep
 	}
 	if len(override.Sources) > 0 {
 		merged.Sources = append([]string{}, override.Sources...)
@@ -761,171 +341,6 @@ func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.Me
 	return merged
 }
 
-func argPresent(args map[string]interface{}, name string) bool {
-	if args == nil {
-		return false
-	}
-	_, ok := args[name]
-	return ok
-}
-
-func stringArg(args map[string]interface{}, name string, required bool) (string, error) {
-	if args == nil {
-		if required {
-			return "", fmt.Errorf("%s is required", name)
-		}
-		return "", nil
-	}
-	raw, ok := args[name]
-	if !ok || raw == nil {
-		if required {
-			return "", fmt.Errorf("%s is required", name)
-		}
-		return "", nil
-	}
-	out, ok := raw.(string)
-	if !ok {
-		return "", fmt.Errorf("%s must be a string", name)
-	}
-	out = strings.TrimSpace(out)
-	if out == "" && required {
-		return "", fmt.Errorf("%s is required", name)
-	}
-	return out, nil
-}
-
-func intArg(args map[string]interface{}, name string) (int, error) {
-	if args == nil {
-		return 0, nil
-	}
-	raw, ok := args[name]
-	if !ok || raw == nil {
-		return 0, nil
-	}
-	switch v := raw.(type) {
-	case int:
-		return v, nil
-	case int32:
-		return int(v), nil
-	case int64:
-		return int(v), nil
-	case float32:
-		if float32(int(v)) != v {
-			return 0, fmt.Errorf("%s must be an integer", name)
-		}
-		return int(v), nil
-	case float64:
-		if float64(int(v)) != v {
-			return 0, fmt.Errorf("%s must be an integer", name)
-		}
-		return int(v), nil
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return 0, fmt.Errorf("%s must be an integer", name)
-		}
-		return n, nil
-	default:
-		return 0, fmt.Errorf("%s must be an integer", name)
-	}
-}
-
-func boolArg(args map[string]interface{}, name string) (bool, error) {
-	if args == nil {
-		return false, nil
-	}
-	raw, ok := args[name]
-	if !ok || raw == nil {
-		return false, nil
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v, nil
-	case string:
-		trimmed := strings.TrimSpace(strings.ToLower(v))
-		if trimmed == "true" {
-			return true, nil
-		}
-		if trimmed == "false" {
-			return false, nil
-		}
-		return false, fmt.Errorf("%s must be a boolean", name)
-	default:
-		return false, fmt.Errorf("%s must be a boolean", name)
-	}
-}
-
-func stringSliceArg(args map[string]interface{}, name string) ([]string, error) {
-	if args == nil {
-		return nil, nil
-	}
-	raw, ok := args[name]
-	if !ok || raw == nil {
-		return nil, nil
-	}
-
-	appendText := func(out []string, text string) []string {
-		trimmed := strings.TrimSpace(text)
-		if trimmed == "" {
-			return out
-		}
-		return append(out, trimmed)
-	}
-
-	switch v := raw.(type) {
-	case string:
-		return appendText(nil, v), nil
-	case []string:
-		out := make([]string, 0, len(v))
-		for _, entry := range v {
-			out = appendText(out, entry)
-		}
-		return out, nil
-	case []interface{}:
-		out := make([]string, 0, len(v))
-		for _, entry := range v {
-			text, ok := entry.(string)
-			if !ok {
-				return nil, fmt.Errorf("%s must be a string or string array", name)
-			}
-			out = appendText(out, text)
-		}
-		return out, nil
-	default:
-		return nil, fmt.Errorf("%s must be a string or string array", name)
-	}
-}
-
-func floatArg(args map[string]interface{}, name string) (float64, error) {
-	if args == nil {
-		return 0, nil
-	}
-	raw, ok := args[name]
-	if !ok || raw == nil {
-		return 0, nil
-	}
-	switch v := raw.(type) {
-	case int:
-		return float64(v), nil
-	case int32:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case float32:
-		return float64(v), nil
-	case float64:
-		return v, nil
-	case string:
-		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		if err != nil {
-			return 0, fmt.Errorf("%s must be a number", name)
-		}
-		return n, nil
-	default:
-		return 0, fmt.Errorf("%s must be a number", name)
-	}
-}
-
 func normalizeSources(values []string) map[string]bool {
 	out := map[string]bool{}
 	for _, raw := range values {
@@ -938,23 +353,6 @@ func normalizeSources(values []string) map[string]bool {
 	return out
 }
 
-func matchToolList(values []string, toolName string) bool {
-	normalizedTool := normalizeToolName(toolName)
-	if normalizedTool == "" {
-		return false
-	}
-	for _, raw := range values {
-		pattern := normalizeToolName(raw)
-		if pattern == "" {
-			continue
-		}
-		if pattern == "*" || pattern == normalizedTool {
-			return true
-		}
-	}
-	return false
-}
-
 func normalizeToolName(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
@@ -962,7 +360,7 @@ func normalizeToolName(value string) string {
 func resolveStorePath(stateRoot string, storePattern string, agentID string) (string, error) {
 	pattern := strings.TrimSpace(storePattern)
 	if pattern == "" {
-		return "", errors.New("memorySearch.store.path is required")
+		return "", errors.New("memory.store.path is required")
 	}
 
 	pattern = strings.ReplaceAll(pattern, "{agentId}", agentID)

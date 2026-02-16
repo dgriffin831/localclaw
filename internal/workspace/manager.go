@@ -81,9 +81,6 @@ func NewLocalManager(settings Settings) *LocalManager {
 		normalizedID := normalizeAgentID(agentID)
 		normalizedAgentWorkspaces[normalizedID] = workspacePath
 	}
-	if normalizedAgentWorkspaces == nil {
-		normalizedAgentWorkspaces = map[string]string{}
-	}
 	settings.AgentWorkspaces = normalizedAgentWorkspaces
 	return &LocalManager{
 		root:     settings.DefaultWorkspace,

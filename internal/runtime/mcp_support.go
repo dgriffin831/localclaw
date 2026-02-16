@@ -11,10 +11,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/cron"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/session"
+	"github.com/dgriffin831/localclaw/internal/skills"
 	"github.com/dgriffin831/localclaw/internal/workspace"
 )
 
@@ -48,31 +48,27 @@ type MCPSessionsHistory struct {
 	Total int              `json:"total"`
 }
 
-func (a *App) MCPToolsConfig(agentID string) config.ToolsConfig {
-	return a.resolveToolsConfig(agentID)
-}
-
 func (a *App) MCPMemorySearch(ctx context.Context, agentID, sessionID, query string, opts memory.SearchOptions) ([]memory.SearchResult, error) {
 	resolvedAgentID := ResolveAgentID(agentID)
 	resolvedSession := ResolveSession(resolvedAgentID, sessionID)
-	searchCfg := a.resolveMemorySearchConfig(resolvedAgentID)
-	if !searchCfg.Enabled {
-		return nil, fmt.Errorf("memory tools are disabled for agent %q", resolvedAgentID)
+	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, skills.ToolMemorySearch); !enabled {
+		return nil, errors.New(reason)
 	}
+	memoryCfg := a.resolveMemoryConfig(resolvedAgentID)
 	if opts.SessionKey == "" {
 		opts.SessionKey = resolvedSession.SessionKey
 	}
 	if opts.MaxResults <= 0 {
-		opts.MaxResults = searchCfg.Query.MaxResults
+		opts.MaxResults = memoryCfg.Query.MaxResults
 	}
 
-	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, searchCfg)
+	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, memoryCfg)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	if searchCfg.Sync.OnSearch {
+	if memoryCfg.Sync.OnSearch {
 		if _, err := manager.Sync(ctx, false); err != nil {
 			return nil, fmt.Errorf("memory_search sync failed: %w", err)
 		}
@@ -82,12 +78,12 @@ func (a *App) MCPMemorySearch(ctx context.Context, agentID, sessionID, query str
 
 func (a *App) MCPMemoryGet(ctx context.Context, agentID, _ string, path string, opts memory.GetOptions) (memory.GetResult, error) {
 	resolvedAgentID := ResolveAgentID(agentID)
-	searchCfg := a.resolveMemorySearchConfig(resolvedAgentID)
-	if !searchCfg.Enabled {
-		return memory.GetResult{}, fmt.Errorf("memory tools are disabled for agent %q", resolvedAgentID)
+	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, skills.ToolMemoryGet); !enabled {
+		return memory.GetResult{}, errors.New(reason)
 	}
+	memoryCfg := a.resolveMemoryConfig(resolvedAgentID)
 
-	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, searchCfg)
+	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, memoryCfg)
 	if err != nil {
 		return memory.GetResult{}, err
 	}
@@ -99,12 +95,12 @@ func (a *App) MCPMemoryGet(ctx context.Context, agentID, _ string, path string, 
 func (a *App) MCPMemoryGrep(ctx context.Context, agentID, sessionID, query string, opts memory.GrepOptions) (memory.GrepResult, error) {
 	_ = sessionID
 	resolvedAgentID := ResolveAgentID(agentID)
-	searchCfg := a.resolveMemorySearchConfig(resolvedAgentID)
-	if !searchCfg.Enabled {
-		return memory.GrepResult{}, fmt.Errorf("memory tools are disabled for agent %q", resolvedAgentID)
+	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, skills.ToolMemoryGrep); !enabled {
+		return memory.GrepResult{}, errors.New(reason)
 	}
+	memoryCfg := a.resolveMemoryConfig(resolvedAgentID)
 
-	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, searchCfg)
+	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, memoryCfg)
 	if err != nil {
 		return memory.GrepResult{}, err
 	}

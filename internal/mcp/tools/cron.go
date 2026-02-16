@@ -16,11 +16,6 @@ const (
 	ToolLocalclawCronAdd    = "localclaw_cron_add"
 	ToolLocalclawCronRemove = "localclaw_cron_remove"
 	ToolLocalclawCronRun    = "localclaw_cron_run"
-
-	RuntimeToolCronList   = "cron_list"
-	RuntimeToolCronAdd    = "cron_add"
-	RuntimeToolCronRemove = "cron_remove"
-	RuntimeToolCronRun    = "cron_run"
 )
 
 type CronJob struct {

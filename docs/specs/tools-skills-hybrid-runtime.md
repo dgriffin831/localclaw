@@ -87,7 +87,7 @@ Adopt an MCP-first hybrid runtime:
 
 ### Unchanged Behavior
 
-- Local-only enforcement (`security.*`) remains required.
+- Local-only enforcement remains required.
 - Startup order in `App.Run` remains deterministic.
 - Existing non-MCP modes (`check`, `tui`, `memory`) remain available.
 

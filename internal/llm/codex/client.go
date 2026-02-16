@@ -119,6 +119,7 @@ func (c *LocalClient) PromptStream(ctx context.Context, input string) (<-chan ll
 }
 
 func (c *LocalClient) PromptStreamRequest(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+	// NOTE: ComposePromptFallback remains the active request composition path for Codex for now.
 	prompt := strings.TrimSpace(llm.ComposePromptFallback(req))
 	if prompt == "" {
 		events := make(chan llm.StreamEvent)
@@ -332,6 +333,7 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 			}
 			parsedEvents, parseErr := parseStreamJSONLine(line)
 			if parseErr != nil {
+				// NOTE: Compatibility fallback is intentionally retained for now; unparseable provider lines are streamed as raw text deltas.
 				delta := line + "\n"
 				deltaText.WriteString(delta)
 				if !emitEvent(ctx, events, llm.StreamEvent{Type: llm.StreamEventDelta, Text: delta}) {

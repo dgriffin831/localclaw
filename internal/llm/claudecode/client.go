@@ -15,15 +15,6 @@ import (
 	"github.com/dgriffin831/localclaw/internal/llm"
 )
 
-// Backward-compatible aliases for legacy package references.
-type StreamEventType = llm.StreamEventType
-type StreamEvent = llm.StreamEvent
-
-const (
-	StreamEventDelta = llm.StreamEventDelta
-	StreamEventFinal = llm.StreamEventFinal
-)
-
 type Settings struct {
 	BinaryPath           string
 	Profile              string
@@ -240,7 +231,7 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, c
 
 			parsedEvents, parseResultErr, parseErr := parseStreamJSONLine(line, toolNames)
 			if parseErr != nil {
-				// Compatibility fallback: if parsing fails, treat stdout as raw text delta.
+				// NOTE: Compatibility fallback is intentionally retained for now; unparseable provider lines are streamed as raw text deltas.
 				delta := line + "\n"
 				deltaText.WriteString(delta)
 				if !emitEvent(ctx, events, llm.StreamEvent{Type: llm.StreamEventDelta, Text: delta}) {
@@ -348,12 +339,10 @@ func buildAllowedToolsForRequest(req llm.Request) []string {
 		if name == "" {
 			continue
 		}
-		add("mcp__localclaw__" + name)
-		if strings.HasPrefix(name, "localclaw_") {
-			add("mcp__localclaw__" + strings.TrimPrefix(name, "localclaw_"))
-			continue
+		if !strings.HasPrefix(name, "localclaw_") {
+			name = "localclaw_" + name
 		}
-		add("mcp__localclaw__localclaw_" + name)
+		add("mcp__localclaw__" + name)
 	}
 
 	return out
@@ -518,7 +507,11 @@ func parseStreamJSONLine(line string, toolNames map[string]string) ([]llm.Stream
 	case "assistant":
 		return parseAssistantMessageEvents(env.Message, toolNames), "", nil
 	case "user":
-		return parseUserMessageToolResultEvents(env, toolNames), "", nil
+		events, err := parseUserMessageToolResultEvents(env, toolNames)
+		if err != nil {
+			return nil, "", err
+		}
+		return events, "", nil
 	case "result":
 		events := []llm.StreamEvent{}
 		result := strings.TrimSpace(env.Result)
@@ -605,10 +598,10 @@ func parseAssistantMessageEvents(msg claudeStreamMessage, toolNames map[string]s
 	return events
 }
 
-func parseUserMessageToolResultEvents(env claudeStreamEnvelope, toolNames map[string]string) []llm.StreamEvent {
+func parseUserMessageToolResultEvents(env claudeStreamEnvelope, toolNames map[string]string) ([]llm.StreamEvent, error) {
 	content := env.Message.Content
 	if len(content) == 0 {
-		return nil
+		return nil, nil
 	}
 	events := make([]llm.StreamEvent, 0, len(content))
 	for _, item := range content {
@@ -616,12 +609,15 @@ func parseUserMessageToolResultEvents(env claudeStreamEnvelope, toolNames map[st
 			continue
 		}
 		callID := strings.TrimSpace(item.ToolUseID)
-		toolName := ""
-		if toolNames != nil && callID != "" {
-			toolName = strings.TrimSpace(toolNames[callID])
+		if callID == "" {
+			return nil, fmt.Errorf("tool_result missing tool_use_id")
 		}
+		if toolNames == nil {
+			return nil, fmt.Errorf("tool_result missing tool mapping for call %q", callID)
+		}
+		toolName := strings.TrimSpace(toolNames[callID])
 		if toolName == "" {
-			toolName = "tool"
+			return nil, fmt.Errorf("tool_result missing tool mapping for call %q", callID)
 		}
 
 		result := llm.ToolResult{
@@ -655,7 +651,7 @@ func parseUserMessageToolResultEvents(env claudeStreamEnvelope, toolNames map[st
 			ToolResult: &result,
 		})
 	}
-	return events
+	return events, nil
 }
 
 func renderToolResultText(raw interface{}) string {

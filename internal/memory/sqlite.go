@@ -174,6 +174,7 @@ func (m *SQLiteIndexManager) Sync(ctx context.Context, force bool) (SyncResult, 
 
 // StartAutoSync starts background watch/interval sync loops.
 func (m *SQLiteIndexManager) StartAutoSync(ctx context.Context, cfg AutoSyncConfig) error {
+	// TODO: Runtime startup should call StartAutoSync for active agents and keep the lifecycle tied to app startup/shutdown; today this path is available but not wired.
 	if !cfg.Watch && cfg.Interval <= 0 && !m.sourceEnabled("sessions") {
 		return nil
 	}
@@ -253,6 +254,7 @@ func (m *SQLiteIndexManager) LastBackgroundError() error {
 
 // HandleTranscriptUpdate handles session transcript append notifications.
 func (m *SQLiteIndexManager) HandleTranscriptUpdate(ctx context.Context, update session.TranscriptUpdate) error {
+	// TODO: Runtime transcript writes should emit TranscriptUpdate events into this handler so session delta bytes/messages can trigger autosync as designed.
 	_ = ctx
 	if !m.sourceEnabled("sessions") {
 		return nil

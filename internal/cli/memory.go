@@ -542,17 +542,18 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	}
 	sessionsRoot := filepath.Dir(sessionsPath)
 
-	searchCfg := cfg.Agents.Defaults.MemorySearch
-	storePath, err := resolveStorePath(cfg.State.Root, searchCfg.Store.Path, resolvedAgent)
+	// TODO: Resolve per-agent memory config with the same merge logic used by runtime (including agent overrides) instead of always using defaults.
+	memoryCfg := cfg.Agents.Defaults.Memory
+	storePath, err := resolveStorePath(cfg.App.Root, memoryCfg.Store.Path, resolvedAgent)
 	if err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("resolve memory store path: %w", err)
 	}
 
-	sourceSet := normalizeSources(searchCfg.Sources)
+	sourceSet := normalizeSources(memoryCfg.Sources)
 	allowMemorySource := sourceSet["memory"]
 	allowSessionsSource := sourceSet["sessions"]
 
-	extraPaths := append([]string{}, searchCfg.ExtraPaths...)
+	extraPaths := append([]string{}, memoryCfg.ExtraPaths...)
 	if !allowMemorySource {
 		extraPaths = nil
 	}
@@ -561,13 +562,13 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 		DBPath:               storePath,
 		WorkspaceRoot:        workspacePath,
 		SessionsRoot:         sessionsRoot,
-		Sources:              searchCfg.Sources,
+		Sources:              memoryCfg.Sources,
 		ExtraPaths:           extraPaths,
-		ChunkTokens:          searchCfg.Chunking.Tokens,
-		ChunkOverlap:         searchCfg.Chunking.Overlap,
+		ChunkTokens:          memoryCfg.Chunking.Tokens,
+		ChunkOverlap:         memoryCfg.Chunking.Overlap,
 		EnableFTS:            true,
-		SessionDeltaBytes:    searchCfg.Sync.Sessions.DeltaBytes,
-		SessionDeltaMessages: searchCfg.Sync.Sessions.DeltaMessages,
+		SessionDeltaBytes:    memoryCfg.Sync.Sessions.DeltaBytes,
+		SessionDeltaMessages: memoryCfg.Sync.Sessions.DeltaMessages,
 	})
 	if err := manager.Open(ctx); err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("open memory index: %w", err)
@@ -575,7 +576,7 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 
 	scan := sourceScanDetails{}
 	if deep {
-		scan = scanSources(workspacePath, searchCfg.Sources, searchCfg.ExtraPaths)
+		scan = scanSources(workspacePath, memoryCfg.Sources, memoryCfg.ExtraPaths)
 	} else {
 		scan.Issues = []string{}
 	}
@@ -594,8 +595,8 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 		sources:         configuredSources,
 		workspacePath:   workspacePath,
 		storePath:       storePath,
-		queryMaxResults: searchCfg.Query.MaxResults,
-		queryMinScore:   searchCfg.Query.MinScore,
+		queryMaxResults: memoryCfg.Query.MaxResults,
+		queryMinScore:   memoryCfg.Query.MinScore,
 	}
 	if resolution.queryMaxResults <= 0 {
 		resolution.queryMaxResults = 8
@@ -624,6 +625,7 @@ func scanSources(workspacePath string, sources []string, extraPaths []string) so
 	}
 
 	if sourceSet["sessions"] {
+		// TODO: Implement deep session-source discovery/counting under sessionsRoot for memory status --deep and remove this placeholder issue.
 		result.Issues = append(result.Issues, "sessions source scanning is not yet available")
 	}
 
@@ -699,7 +701,7 @@ func normalizeSources(values []string) map[string]bool {
 func resolveStorePath(stateRoot string, storePattern string, agentID string) (string, error) {
 	pattern := strings.TrimSpace(storePattern)
 	if pattern == "" {
-		return "", errors.New("memorySearch.store.path is required")
+		return "", errors.New("memory.store.path is required")
 	}
 
 	pattern = strings.ReplaceAll(pattern, "{agentId}", agentID)

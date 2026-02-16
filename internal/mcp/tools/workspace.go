@@ -15,9 +15,6 @@ import (
 const (
 	ToolLocalclawWorkspaceStatus           = "localclaw_workspace_status"
 	ToolLocalclawWorkspaceBootstrapContext = "localclaw_workspace_bootstrap_context"
-
-	RuntimeToolWorkspaceStatus           = "workspace_status"
-	RuntimeToolWorkspaceBootstrapContext = "workspace_bootstrap_context"
 )
 
 type WorkspaceStatusRequest struct {

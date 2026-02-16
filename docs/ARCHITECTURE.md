@@ -9,7 +9,7 @@ Primary implementation anchors:
 - Entrypoint: `cmd/localclaw/main.go`
 - Runtime composition: `internal/runtime/app.go`
 - Runtime tools + prompt assembly: `internal/runtime/tools.go`
-- Config + compatibility mapping: `internal/config/config.go`
+- Config loading + strict validation: `internal/config/config.go`
 - Workspace lifecycle/bootstrap: `internal/workspace/manager.go`
 - Session store/transcripts: `internal/session/*`
 - Memory index/search/flush: `internal/memory/*`
@@ -25,7 +25,7 @@ Operator (terminal)
       |
       v
 localclaw binary (single process)
-  |- config load + compatibility mapping + validation
+  |- config load + strict decode + validation
   |- runtime wiring
   |   |- workspace manager (resolve + bootstrap templates)
   |   |- session store + transcript writer
@@ -62,12 +62,9 @@ Any failure aborts startup.
 Prompt flow:
 
 - `Prompt` and `PromptStream` call session-aware variants.
-- `buildPromptInput` can inject workspace bootstrap context on first prompt for a session.
+- `buildPromptRequest` injects workspace bootstrap context on first prompt for a session.
 - Bootstrap context re-injects after compaction count increases.
-- When memory tools are enabled (`agents.*.memorySearch.enabled`), prompt assembly appends:
-  - memory recall policy text
-  - runtime tool definitions (`memory_search`, `memory_grep`, `memory_get`)
-  - resolved `session_key`
+- Prompt streaming is request-based only; runtime does not use compatibility fallback prompt composition.
 
 Session lifecycle:
 
@@ -79,7 +76,7 @@ Session lifecycle:
 Memory/runtime tool behavior:
 
 - Memory retrieval is keyword/FTS + grep based (`memory_search` and `memory_grep`).
-- Runtime and memory CLI construct managers on demand using resolved workspace + state paths.
+- Runtime and memory CLI construct managers on demand using resolved workspace + `app.root`-based paths.
 - Legacy `memory.Store` on `App` remains a minimal no-op compatibility surface.
 
 ## 5. Storage model
@@ -103,11 +100,9 @@ Workspace bootstrap templates created when missing:
 
 ## 6. Local-only boundary
 
-Config validation enforces:
+Local-only posture is architecture-level and non-configurable:
 
-- `security.enforce_local_only = true`
-- `security.enable_gateway = false`
-- `security.enable_http_server = false`
-- `security.listen_address = ""`
-
-Any violation fails startup before runtime wiring.
+- single-process CLI runtime only
+- no HTTP/gRPC server mode
+- no gateway/listener config surface
+- model execution via local subprocess adapters only

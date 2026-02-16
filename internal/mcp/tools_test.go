@@ -6,21 +6,21 @@ import (
 	tooldefs "github.com/dgriffin831/localclaw/internal/mcp/tools"
 )
 
-func TestMemoryToolsIncludeGrepAndAlias(t *testing.T) {
+func TestMemoryToolsIncludeLocalclawNames(t *testing.T) {
 	defs := []string{
 		tooldefs.MemorySearchDefinition().Name,
-		tooldefs.MemorySearchAliasDefinition().Name,
 		tooldefs.MemoryGetDefinition().Name,
-		tooldefs.MemoryGetAliasDefinition().Name,
 		tooldefs.MemoryGrepDefinition().Name,
-		tooldefs.MemoryGrepAliasDefinition().Name,
 	}
 	got := map[string]bool{}
 	for _, name := range defs {
 		got[name] = true
 	}
-	if !got["localclaw_memory_grep"] || !got["memory_grep"] {
-		t.Fatalf("expected grep definitions and alias, got %v", defs)
+	if !got["localclaw_memory_search"] || !got["localclaw_memory_get"] || !got["localclaw_memory_grep"] {
+		t.Fatalf("expected localclaw memory tool names, got %v", defs)
+	}
+	if got["memory_search"] || got["memory_get"] || got["memory_grep"] {
+		t.Fatalf("did not expect legacy memory_* aliases, got %v", defs)
 	}
 }
 

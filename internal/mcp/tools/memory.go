@@ -15,10 +15,6 @@ const (
 	ToolLocalclawMemorySearch = "localclaw_memory_search"
 	ToolLocalclawMemoryGet    = "localclaw_memory_get"
 	ToolLocalclawMemoryGrep   = "localclaw_memory_grep"
-
-	RuntimeToolMemorySearch = "memory_search"
-	RuntimeToolMemoryGet    = "memory_get"
-	RuntimeToolMemoryGrep   = "memory_grep"
 )
 
 type MemorySearchRequest struct {
@@ -85,10 +81,6 @@ func MemorySearchDefinition() protocol.Tool {
 	return memorySearchDefinition(ToolLocalclawMemorySearch)
 }
 
-func MemorySearchAliasDefinition() protocol.Tool {
-	return memorySearchDefinition(RuntimeToolMemorySearch)
-}
-
 func memorySearchDefinition(name string) protocol.Tool {
 	return protocol.Tool{
 		Name:        name,
@@ -112,10 +104,6 @@ func MemoryGetDefinition() protocol.Tool {
 	return memoryGetDefinition(ToolLocalclawMemoryGet)
 }
 
-func MemoryGetAliasDefinition() protocol.Tool {
-	return memoryGetDefinition(RuntimeToolMemoryGet)
-}
-
 func memoryGetDefinition(name string) protocol.Tool {
 	return protocol.Tool{
 		Name:        name,
@@ -136,10 +124,6 @@ func memoryGetDefinition(name string) protocol.Tool {
 
 func MemoryGrepDefinition() protocol.Tool {
 	return memoryGrepDefinition(ToolLocalclawMemoryGrep)
-}
-
-func MemoryGrepAliasDefinition() protocol.Tool {
-	return memoryGrepDefinition(RuntimeToolMemoryGrep)
 }
 
 func memoryGrepDefinition(name string) protocol.Tool {

@@ -5,21 +5,17 @@
 `localclaw` is deny-by-default for non-local runtime behavior.
 
 - Local-only enforcement is enabled by default.
-- Any config enabling gateway/server/listener behavior fails startup.
+- Gateway/server/listener behavior is not configurable.
 - Channels are restricted to `slack` and `signal` identifiers.
 - LLM providers are constrained to local CLI subprocess invocation (`claudecode` or `codex`).
-- Runtime tool execution is policy-mediated (deny/allow + delegated gating).
+- Runtime uses MCP-first provider execution; host no longer runs a legacy local tool-call execution loop.
 
 ## Enforced guardrails
 
-Validated at startup (`ValidateLocalOnlyPolicy`):
-
-- `security.enforce_local_only` must be `true`
-- `security.enable_gateway` must be `false`
-- `security.enable_http_server` must be `false`
-- `security.listen_address` must be empty
-
-Guardrail violations fail startup before runtime initialization.
+- Runtime remains single-process CLI only.
+- No HTTP/gRPC server mode exists.
+- No gateway/listener config surface exists.
+- LLM access remains local subprocess execution only.
 
 ## Process and network boundary
 
@@ -42,15 +38,13 @@ Guardrail violations fail startup before runtime initialization.
 - Claude Code and Codex integrations are local subprocess only (`exec.CommandContext`).
 - No direct model HTTP client is implemented in `localclaw`.
 - Claude subprocess environment inherits parent process variables (with optional profile override).
-- Structured tool-call orchestration, when available, is still mediated by local runtime policy.
+- Prompt streaming requires request-capable provider adapters; no compatibility fallback path is used.
 
-## Tool boundary and delegated controls
+## Tool boundary
 
-- Local tools are authoritative and executed only inside localclaw runtime.
-- Delegated tools are disabled by default.
-- Delegated tools require explicit policy enablement + allowlist match.
-- Unknown or policy-blocked tool calls return structured error results; no silent bypass.
-- Delegated tool execution never bypasses local policy checks.
+- Local capabilities are exposed via the MCP server (`localclaw mcp serve`).
+- Provider-native tools remain provider-owned (`provider_native` in UI/event ownership).
+- localclaw does not execute a legacy host-managed structured tool loop in the prompt stream path.
 
 ## Explicitly out of scope
 

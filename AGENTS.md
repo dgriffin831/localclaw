@@ -103,7 +103,7 @@ Behavior changes should follow Red -> Green -> Validate -> Deliver.
 | Layer | Command | When to Use |
 | --- | --- | --- |
 | Config validation | `go test ./internal/config -run TestValidate` | During Red/Green on config/policy changes |
-| Runtime policy/hook behavior | `go test ./internal/runtime -run TestNewFailsWhenNetworkServerEnabled` | During Red/Green on startup boundary changes |
+| Runtime startup boundary behavior | `go test ./internal/runtime -run TestNewFailsWhenClaudeMCPWiringInvalid` | During Red/Green on startup boundary changes |
 | Runtime tool prompt behavior | `go test ./internal/runtime -run TestPromptIncludesMemoryRecallPolicyWhenToolsEnabled` | During Red/Green on tool/prompt assembly changes |
 | TUI slash logic | `go test ./internal/tui -run TestParseSlash` | During Red/Green on slash/UX behavior |
 | Workspace bootstrap behavior | `go test ./internal/workspace -run TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles` | During Red/Green on workspace changes |
@@ -143,7 +143,9 @@ Behavior changes should follow Red -> Green -> Validate -> Deliver.
   - `Config` structs
   - `Default()` values
   - `Validate()` checks when relevant
-- Preserve strict local-only enforcement in `ValidateLocalOnlyPolicy()`.
+- Do not add legacy/fallback compatibility shims unless explicitly requested for a concrete migration.
+- Prefer fail-fast behavior for removed or deprecated config keys.
+- Preserve strict local-only boundaries (no gateway/listener config surface).
 - If channel or auth-mode allowlists change, update:
   - code allowlists
   - tests

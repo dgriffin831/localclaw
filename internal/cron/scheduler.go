@@ -52,6 +52,7 @@ func NewInProcessScheduler(enabled bool) *InProcessScheduler {
 }
 
 func (s *InProcessScheduler) Start(ctx context.Context) error {
+	// TODO: Implement background scheduling loop that parses cron expressions and executes due jobs; Start is currently a lifecycle placeholder.
 	return nil
 }
 

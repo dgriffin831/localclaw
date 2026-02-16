@@ -11,7 +11,6 @@ Implementation location:
 - `PromptStream` executes:
   - `claude -p <input> --output-format stream-json --verbose --mcp-config <run-scoped.json>`
   - with `--strict-mcp-config` when enabled
-  - with `--allowed-tools` for localclaw MCP runtime tools derived from request tool definitions (pre-approves memory MCP tools and avoids per-call permission denials)
   - via `exec.CommandContext`.
 - stdout JSONL stream is parsed into provider-agnostic events:
   - assistant text blocks -> `StreamEventDelta`

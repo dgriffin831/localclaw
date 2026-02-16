@@ -63,6 +63,7 @@ var slashCommandDefs = []slashCommandDef{
 	{Name: "verbose", Args: "<on|off>", Description: "toggle verbose mode"},
 	{Name: "mouse", Args: "<on|off>", Description: "toggle mouse capture (wheel/selection tradeoff)", Shortcut: "Ctrl+Y"},
 	{Name: "shortcuts", Description: "show keyboard shortcuts"},
+	// TODO: Implement /model override plumbing through runtime request options and provider adapters; currently this command is intentionally informational-only.
 	{Name: "model", Args: "<name>", Description: "set model override (not implemented)"},
 	{Name: "exit", Description: "exit the TUI", Shortcut: "Ctrl+D"},
 	{Name: "quit", Description: "alias for /exit", Shortcut: "Ctrl+D"},
@@ -167,17 +168,12 @@ type model struct {
 
 var (
 	colorPrimary        = lipgloss.Color("#fab283")
-	colorSecondary      = lipgloss.Color("#5c9cf5")
-	colorAccent         = lipgloss.Color("#9d7cd8")
 	colorError          = lipgloss.Color("#e06c75")
 	colorWarning        = lipgloss.Color("#f5a742")
-	colorSuccess        = lipgloss.Color("#7fd88f")
-	colorInfo           = lipgloss.Color("#56b6c2")
 	colorText           = lipgloss.Color("#eeeeee")
 	colorTextMuted      = lipgloss.Color("#808080")
 	colorBackground     = lipgloss.Color("#0a0a0a")
 	colorBackgroundPane = lipgloss.Color("#141414")
-	colorBackgroundElem = lipgloss.Color("#1e1e1e")
 	colorBorder         = lipgloss.Color("#484848")
 	colorBorderSubtle   = lipgloss.Color("#3c3c3c")
 
@@ -841,6 +837,7 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 		if strings.TrimSpace(arg) == "" {
 			m.addSystem("usage: /model <name>")
 		} else {
+			// TODO: Persist requested model override in TUI state and propagate it into runtime prompt requests instead of returning this placeholder message.
 			m.addSystem(fmt.Sprintf("model override is not implemented yet (%s)", arg))
 		}
 	default:

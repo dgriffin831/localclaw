@@ -96,7 +96,7 @@ The existing `/model` slash command is also a placeholder and does not apply any
 
 ### Unchanged Behavior
 
-- Local-only policy enforcement (`security.*`) remains unchanged.
+- Local-only policy enforcement remains unchanged.
 - Command modes remain `check`, `tui`, `memory`.
 - Prompt assembly semantics in runtime (`buildPromptInput`) remain unchanged.
 - Claude Code remains default provider in `Default()`.
@@ -280,7 +280,7 @@ Add:
 
 - `localclaw` still does not expose any network listener or model HTTP client.
 - Codex and Claude remain subprocess integrations only.
-- Keep policy guardrails unchanged (`security.enforce_local_only`, no gateway/listener flags).
+- Keep policy guardrails unchanged (no gateway/listener config surface).
 - Ensure adapter construction never shells out via `sh -c`; pass args directly to `exec.CommandContext`.
 
 ## Implementation Plan (TDD-First)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,28 +15,18 @@ var allowedChannels = []string{"slack", "signal"}
 // Config contains all runtime configuration for localclaw.
 type Config struct {
 	App       AppConfig       `json:"app"`
-	Security  SecurityConfig  `json:"security"`
 	LLM       LLMConfig       `json:"llm"`
 	Channels  ChannelsConfig  `json:"channels"`
-	State     StateConfig     `json:"state"`
 	Agents    AgentsConfig    `json:"agents"`
 	Session   SessionConfig   `json:"session"`
-	Tools     ToolsConfig     `json:"tools"`
-	Skills    SkillsConfig    `json:"skills"`
 	Cron      CronConfig      `json:"cron"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
 }
 
 type AppConfig struct {
 	Name             string   `json:"name"`
+	Root             string   `json:"root"`
 	ThinkingMessages []string `json:"thinking_messages,omitempty"`
-}
-
-type SecurityConfig struct {
-	EnforceLocalOnly bool   `json:"enforce_local_only"`
-	EnableGateway    bool   `json:"enable_gateway"`
-	EnableHTTPServer bool   `json:"enable_http_server"`
-	ListenAddress    string `json:"listen_address"`
 }
 
 type LLMConfig struct {
@@ -67,30 +58,22 @@ type ChannelsConfig struct {
 	Enabled []string `json:"enabled"`
 }
 
-type StateConfig struct {
-	Root string `json:"root"`
-}
-
 type AgentsConfig struct {
 	Defaults AgentDefaultsConfig `json:"defaults"`
 	List     []AgentConfig       `json:"list"`
 }
 
 type AgentDefaultsConfig struct {
-	Workspace    string             `json:"workspace"`
-	MemorySearch MemorySearchConfig `json:"memorySearch"`
-	Compaction   CompactionConfig   `json:"compaction"`
-	Tools        ToolsConfig        `json:"tools"`
-	Skills       SkillsConfig       `json:"skills"`
+	Workspace  string           `json:"workspace"`
+	Memory     MemoryConfig     `json:"memory"`
+	Compaction CompactionConfig `json:"compaction"`
 }
 
 type AgentConfig struct {
-	ID           string             `json:"id"`
-	Workspace    string             `json:"workspace,omitempty"`
-	MemorySearch MemorySearchConfig `json:"memorySearch,omitempty"`
-	Compaction   CompactionConfig   `json:"compaction,omitempty"`
-	Tools        ToolsConfig        `json:"tools,omitempty"`
-	Skills       SkillsConfig       `json:"skills,omitempty"`
+	ID         string               `json:"id"`
+	Workspace  string               `json:"workspace,omitempty"`
+	Memory     MemoryOverrideConfig `json:"memory,omitempty"`
+	Compaction CompactionConfig     `json:"compaction,omitempty"`
 }
 
 type CompactionConfig struct {
@@ -109,34 +92,41 @@ type SessionConfig struct {
 	Store string `json:"store"`
 }
 
-type ToolsConfig struct {
-	Allow     []string             `json:"allow,omitempty"`
-	Deny      []string             `json:"deny,omitempty"`
-	Delegated DelegatedToolsConfig `json:"delegated"`
+type MemoryConfig struct {
+	Enabled    bool              `json:"enabled"`
+	Tools      MemoryToolsConfig `json:"tools"`
+	Sources    []string          `json:"sources"`
+	ExtraPaths []string          `json:"extraPaths"`
+	Store      MemoryStoreConfig `json:"store"`
+	Chunking   ChunkingConfig    `json:"chunking"`
+	Query      QueryConfig       `json:"query"`
+	Sync       SyncConfig        `json:"sync"`
 }
 
-type DelegatedToolsConfig struct {
-	Enabled bool     `json:"enabled"`
-	Allow   []string `json:"allow,omitempty"`
-	Deny    []string `json:"deny,omitempty"`
+type MemoryToolsConfig struct {
+	Get    bool `json:"get"`
+	Search bool `json:"search"`
+	Grep   bool `json:"grep"`
 }
 
-type SkillsConfig struct {
-	Enabled  []string `json:"enabled,omitempty"`
-	Disabled []string `json:"disabled,omitempty"`
+type MemoryOverrideConfig struct {
+	Enabled    *bool                     `json:"enabled,omitempty"`
+	Tools      MemoryToolsOverrideConfig `json:"tools,omitempty"`
+	Sources    []string                  `json:"sources,omitempty"`
+	ExtraPaths []string                  `json:"extraPaths,omitempty"`
+	Store      MemoryStoreConfig         `json:"store,omitempty"`
+	Chunking   ChunkingConfig            `json:"chunking,omitempty"`
+	Query      QueryConfig               `json:"query,omitempty"`
+	Sync       SyncConfig                `json:"sync,omitempty"`
 }
 
-type MemorySearchConfig struct {
-	Enabled    bool                    `json:"enabled"`
-	Sources    []string                `json:"sources"`
-	ExtraPaths []string                `json:"extraPaths"`
-	Store      MemorySearchStoreConfig `json:"store"`
-	Chunking   ChunkingConfig          `json:"chunking"`
-	Query      QueryConfig             `json:"query"`
-	Sync       SyncConfig              `json:"sync"`
+type MemoryToolsOverrideConfig struct {
+	Get    *bool `json:"get,omitempty"`
+	Search *bool `json:"search,omitempty"`
+	Grep   *bool `json:"grep,omitempty"`
 }
 
-type MemorySearchStoreConfig struct {
+type MemoryStoreConfig struct {
 	Path string `json:"path"`
 }
 
@@ -171,13 +161,7 @@ type HeartbeatConfig struct {
 
 func Default() Config {
 	return Config{
-		App: AppConfig{Name: "localclaw"},
-		Security: SecurityConfig{
-			EnforceLocalOnly: true,
-			EnableGateway:    false,
-			EnableHTTPServer: false,
-			ListenAddress:    "",
-		},
+		App: AppConfig{Name: "localclaw", Root: "~/.localclaw"},
 		LLM: LLMConfig{
 			Provider: "claudecode",
 			ClaudeCode: ClaudeCodeConfig{
@@ -195,30 +179,19 @@ func Default() Config {
 			},
 		},
 		Channels: ChannelsConfig{Enabled: []string{"slack", "signal"}},
-		State:    StateConfig{Root: "~/.localclaw"},
 		Agents: AgentsConfig{
 			Defaults: AgentDefaultsConfig{
 				Workspace: ".",
-				Tools: ToolsConfig{
-					Delegated: DelegatedToolsConfig{
-						Enabled: false,
+				Memory: MemoryConfig{
+					Enabled: true,
+					Tools: MemoryToolsConfig{
+						Get:    true,
+						Search: true,
+						Grep:   true,
 					},
-				},
-				Skills: SkillsConfig{},
-				Compaction: CompactionConfig{
-					MemoryFlush: MemoryFlushConfig{
-						Enabled:             true,
-						ThresholdTokens:     28000,
-						TriggerWindowTokens: 4000,
-						Prompt:              "",
-						TimeoutSeconds:      20,
-					},
-				},
-				MemorySearch: MemorySearchConfig{
-					Enabled:    false,
 					Sources:    []string{"memory"},
 					ExtraPaths: []string{},
-					Store: MemorySearchStoreConfig{
+					Store: MemoryStoreConfig{
 						Path: "~/.localclaw/memory/{agentId}.sqlite",
 					},
 					Chunking: ChunkingConfig{
@@ -237,18 +210,21 @@ func Default() Config {
 						},
 					},
 				},
+				Compaction: CompactionConfig{
+					MemoryFlush: MemoryFlushConfig{
+						Enabled:             true,
+						ThresholdTokens:     28000,
+						TriggerWindowTokens: 4000,
+						Prompt:              "",
+						TimeoutSeconds:      20,
+					},
+				},
 			},
 			List: []AgentConfig{},
 		},
 		Session: SessionConfig{
 			Store: "~/.localclaw/agents/{agentId}/sessions/sessions.json",
 		},
-		Tools: ToolsConfig{
-			Delegated: DelegatedToolsConfig{
-				Enabled: false,
-			},
-		},
-		Skills:    SkillsConfig{},
 		Cron:      CronConfig{Enabled: true},
 		Heartbeat: HeartbeatConfig{Enabled: true, IntervalSeconds: 30},
 	}
@@ -276,7 +252,9 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
-	if err := json.Unmarshal(buf, &cfg); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(buf))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
 	return cfg, cfg.Validate()
@@ -285,6 +263,9 @@ func Load(path string) (Config, error) {
 func (c Config) Validate() error {
 	if c.App.Name == "" {
 		return errors.New("app.name is required")
+	}
+	if strings.TrimSpace(c.App.Root) == "" {
+		return errors.New("app.root is required")
 	}
 	for idx, message := range c.App.ThinkingMessages {
 		if strings.TrimSpace(message) == "" {
@@ -304,26 +285,12 @@ func (c Config) Validate() error {
 			return errors.New("llm.codex.binary_path is required")
 		}
 	}
+	// TODO: Keep this validation aligned with runtime wiring: channels.enabled is validated here, but runtime must also gate actual adapter wiring/usage by this allowlist.
 	if len(c.Channels.Enabled) == 0 {
 		return errors.New("channels.enabled must include at least one channel")
 	}
-	if strings.TrimSpace(c.State.Root) == "" {
-		return errors.New("state.root is required")
-	}
 	if strings.TrimSpace(c.Agents.Defaults.Workspace) == "" {
 		return errors.New("agents.defaults.workspace is required")
-	}
-	if err := validateToolsConfig(c.Tools, "tools"); err != nil {
-		return err
-	}
-	if err := validateSkillsConfig(c.Skills, "skills"); err != nil {
-		return err
-	}
-	if err := validateToolsConfig(c.Agents.Defaults.Tools, "agents.defaults.tools"); err != nil {
-		return err
-	}
-	if err := validateSkillsConfig(c.Agents.Defaults.Skills, "agents.defaults.skills"); err != nil {
-		return err
 	}
 	if strings.TrimSpace(c.Session.Store) == "" {
 		return errors.New("session.store is required")
@@ -351,12 +318,6 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate agent id %q", agentID)
 		}
 		seenAgentIDs[agentID] = struct{}{}
-		if err := validateToolsConfig(agent.Tools, "agents.list[].tools"); err != nil {
-			return err
-		}
-		if err := validateSkillsConfig(agent.Skills, "agents.list[].skills"); err != nil {
-			return err
-		}
 		if err := validateMemoryFlushConfig(agent.Compaction.MemoryFlush, "agents.list[].compaction.memoryFlush"); err != nil {
 			return err
 		}
@@ -367,7 +328,7 @@ func (c Config) Validate() error {
 	if c.Heartbeat.Enabled && c.Heartbeat.IntervalSeconds <= 0 {
 		return errors.New("heartbeat.interval_seconds must be > 0")
 	}
-	return c.ValidateLocalOnlyPolicy()
+	return nil
 }
 
 func containsString(values []string, target string) bool {
@@ -388,64 +349,6 @@ func validateMemoryFlushConfig(cfg MemoryFlushConfig, fieldPrefix string) error 
 	}
 	if cfg.TimeoutSeconds < 0 {
 		return fmt.Errorf("%s.timeoutSeconds must be >= 0", fieldPrefix)
-	}
-	return nil
-}
-
-func validateToolsConfig(cfg ToolsConfig, fieldPrefix string) error {
-	if err := validatePolicyNameList(cfg.Allow, fieldPrefix+".allow"); err != nil {
-		return err
-	}
-	if err := validatePolicyNameList(cfg.Deny, fieldPrefix+".deny"); err != nil {
-		return err
-	}
-	if err := validatePolicyNameList(cfg.Delegated.Allow, fieldPrefix+".delegated.allow"); err != nil {
-		return err
-	}
-	if err := validatePolicyNameList(cfg.Delegated.Deny, fieldPrefix+".delegated.deny"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateSkillsConfig(cfg SkillsConfig, fieldPrefix string) error {
-	if err := validatePolicyNameList(cfg.Enabled, fieldPrefix+".enabled"); err != nil {
-		return err
-	}
-	if err := validatePolicyNameList(cfg.Disabled, fieldPrefix+".disabled"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validatePolicyNameList(values []string, field string) error {
-	seen := map[string]struct{}{}
-	for idx, raw := range values {
-		normalized := strings.ToLower(strings.TrimSpace(raw))
-		if normalized == "" {
-			return fmt.Errorf("%s[%d] cannot be blank", field, idx)
-		}
-		if _, ok := seen[normalized]; ok {
-			return fmt.Errorf("duplicate %s entry %q", field, normalized)
-		}
-		seen[normalized] = struct{}{}
-	}
-	return nil
-}
-
-// ValidateLocalOnlyPolicy enforces startup guardrails to keep localclaw non-network-exposed.
-func (c Config) ValidateLocalOnlyPolicy() error {
-	if !c.Security.EnforceLocalOnly {
-		return errors.New("security.enforce_local_only must remain true")
-	}
-	if c.Security.EnableGateway {
-		return errors.New("security.enable_gateway is forbidden in local-only mode")
-	}
-	if c.Security.EnableHTTPServer {
-		return errors.New("security.enable_http_server is forbidden in local-only mode")
-	}
-	if c.Security.ListenAddress != "" {
-		return errors.New("security.listen_address must be empty in local-only mode")
 	}
 	return nil
 }

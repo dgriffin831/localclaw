@@ -156,7 +156,7 @@ func TestViewDoesNotOverflowHeight(t *testing.T) {
 
 func TestHeaderUsesResolvedWorkspacePath(t *testing.T) {
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "relative/workspace"
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
@@ -551,12 +551,15 @@ func TestHandleSlashToolsShowsProviderWhenRuntimeUnavailable(t *testing.T) {
 
 func TestHandleSlashToolsShowsLocalclawTools(t *testing.T) {
 	cfg := config.Default()
-	cfg.State.Root = t.TempDir()
+	cfg.App.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
-	cfg.Agents.Defaults.MemorySearch.Enabled = true
-	cfg.Agents.Defaults.MemorySearch.Sources = []string{"memory"}
-	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
+	cfg.Agents.Defaults.Memory.Enabled = true
+	cfg.Agents.Defaults.Memory.Tools.Get = true
+	cfg.Agents.Defaults.Memory.Tools.Search = true
+	cfg.Agents.Defaults.Memory.Tools.Grep = true
+	cfg.Agents.Defaults.Memory.Sources = []string{"memory"}
+	cfg.Agents.Defaults.Memory.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
 	cfg.Heartbeat.Enabled = false
 	cfg.Cron.Enabled = false
 

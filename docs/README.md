@@ -7,7 +7,7 @@ This directory is the implementation-level documentation surface for `localclaw`
 - `ARCHITECTURE.md`: component map and runtime boundaries.
 - `RUNTIME.md`: startup flow, app wiring, and command modes.
 - `CONFIGURATION.md`: JSON config contract, defaults, and validation rules.
-- `MEMORY_RETRIEVAL.md`: retrieval-v2 search/grep model and legacy migration behavior.
+- `MEMORY.md`: retrieval-v2 search/grep model and implementation behavior.
 - `EMBEDDINGS.md`: archived deprecation pointer for pre-v2 embedding docs.
 - `TUI.md`: terminal UX model, keybindings, and slash commands.
 - `CLAUDE_CODE.md`: local Claude Code CLI integration behavior.

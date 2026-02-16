@@ -105,6 +105,7 @@ type RequestClient interface {
 	PromptStreamRequest(ctx context.Context, req Request) (<-chan StreamEvent, <-chan error)
 }
 
+// NOTE: ComposePromptFallback is intentionally retained as the central prompt composition fallback for now.
 func ComposePromptFallback(req Request) string {
 	trimmedInput := strings.TrimSpace(req.Input)
 	system := strings.TrimSpace(req.SystemContext)

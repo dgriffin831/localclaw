@@ -66,19 +66,17 @@ Runtime exposes session-default and session-explicit prompt paths:
 - `PromptForSession(ctx, agentID, sessionID, input)`
 - `PromptStreamForSession(ctx, agentID, sessionID, input)`
 
-Prompt assembly (`buildPromptRequest` -> compatibility fallback prompt) behavior:
+Prompt assembly (`buildPromptRequest`) behavior:
 
 - Resolves `agentID/sessionID` into stable `session_key`.
 - Injects workspace bootstrap context on first prompt in a session.
 - Re-injects bootstrap context after compaction count increases.
-- Injects memory recall policy + tool schema when memory tools are enabled.
 - Injects a localclaw-authored skills block from workspace skill snapshots.
-- Appends original user input under `User input:` in fallback mode.
 
 Provider compatibility:
 
-- If provider supports request options (`llm.RequestClient`), runtime passes structured request fields (`system_context`, tool defs, skills block, session metadata).
-- If provider does not support request options, runtime composes one fallback prompt string and calls `Prompt` / `PromptStream`.
+- Runtime requires provider support for request options (`llm.RequestClient` + `SupportsRequestOptions=true`).
+- If request options are unavailable, runtime returns an error instead of falling back to prompt-string compatibility mode.
 
 MCP-first hard cutover:
 
@@ -88,30 +86,19 @@ MCP-first hard cutover:
 
 ## Runtime tools
 
-Runtime tool execution surface:
-
-- `ToolDefinitions(agentID)`
-- `ExecuteTool(ctx, ToolExecutionRequest)`
-
 Supported tools:
 
 - `memory_search`
 - `memory_grep`
 - `memory_get`
 
-Retrieval model details and migration notes are documented in `docs/MEMORY_RETRIEVAL.md`.
+Retrieval model details and migration notes are documented in `docs/MEMORY.md`.
 
 Tool enablement:
 
-- Controlled by resolved `memorySearch.enabled` for the agent.
+- Controlled by resolved `memory.enabled` and `memory.tools.{search,get,grep}` for the agent.
 - Disabled tools return graceful error payloads instead of panics.
-
-Tool policy:
-
-- Policy resolution precedence: global -> `agents.defaults.tools` -> `agents.list[].tools`.
-- Deny list overrides allow list.
-- Unknown tools are rejected with structured errors.
-- Delegated tools are blocked unless delegated policy is enabled and allowlisted.
+- `ToolDefinitions(agentID)` only reports locally available memory tools for UI/status surfaces.
 
 Skills snapshot behavior:
 
@@ -122,8 +109,8 @@ Skills snapshot behavior:
 Tool manager construction:
 
 - Uses resolved workspace path and session-root path.
-- Resolves SQLite store path from `state.root` + `memorySearch.store.path`.
-- Uses `memory.SQLiteIndexManager` for sync/search/get operations.
+- Resolves SQLite store path from `app.root` + `memory.store.path`.
+- Uses `memory.SQLiteIndexManager` for sync/search/get/grep operations.
 
 ## Session helpers and lifecycle hooks
 
@@ -150,7 +137,7 @@ Memory flush behavior:
 - OS signals (`SIGINT`, `SIGTERM`) cancel root context.
 - TUI `Esc` cancels active run context.
 - Claude CLI invocation uses `exec.CommandContext`, so cancellation terminates subprocesses.
-- Tool failures are returned as structured errors in `ToolExecutionResult`.
+- MCP tool failures are returned from MCP handlers as structured tool errors.
 
 ## Extension rules
 
