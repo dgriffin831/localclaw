@@ -20,6 +20,7 @@ type Settings struct {
 	BinaryPath       string
 	Profile          string
 	Model            string
+	ExtraArgs        []string
 	WorkingDirectory string
 	MCP              MCPSettings
 }
@@ -148,7 +149,7 @@ func (c *LocalClient) PromptStreamRequest(ctx context.Context, req llm.Request) 
 		return events, errs
 	}
 
-	return c.promptStreamWithArgs(ctx, c.buildCommandArgsForRequest(req), extraEnv)
+	return c.promptStreamWithArgs(ctx, c.buildCommandArgsForRequest(req), extraEnv, prompt)
 }
 
 func (c *LocalClient) buildCommandArgsForRequest(req llm.Request) []string {
@@ -156,11 +157,19 @@ func (c *LocalClient) buildCommandArgsForRequest(req llm.Request) []string {
 	if profile := strings.TrimSpace(c.settings.Profile); profile != "" {
 		args = append(args, "-p", profile)
 	}
-	if model := strings.TrimSpace(c.settings.Model); model != "" {
+	if model := c.resolveModelForRequest(req); model != "" {
 		args = append(args, "-m", model)
 	}
-	args = append(args, strings.TrimSpace(llm.ComposePromptFallback(req)))
+	args = append(args, normalizeNonBlankArgs(c.settings.ExtraArgs)...)
+	args = append(args, "-")
 	return args
+}
+
+func (c *LocalClient) resolveModelForRequest(req llm.Request) string {
+	if override := strings.TrimSpace(req.Options.ModelOverride); override != "" {
+		return override
+	}
+	return strings.TrimSpace(c.settings.Model)
 }
 
 func (c *LocalClient) resolveEffectiveMCPConfigPath() (string, map[string]string, error) {
@@ -277,10 +286,19 @@ func (c *LocalClient) ensureMCPServerConfig(configPath string) error {
 	return nil
 }
 
-func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, extraEnv map[string]string) (<-chan llm.StreamEvent, <-chan error) {
+func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, extraEnv map[string]string, prompt string) (<-chan llm.StreamEvent, <-chan error) {
 	cmd := exec.CommandContext(ctx, c.settings.BinaryPath, args...)
 	cmd.Env = append(os.Environ(), buildEnv(extraEnv)...)
 
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		events := make(chan llm.StreamEvent)
+		errs := make(chan error, 1)
+		defer close(events)
+		defer close(errs)
+		errs <- fmt.Errorf("create stdin pipe: %w", err)
+		return events, errs
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		events := make(chan llm.StreamEvent)
@@ -305,6 +323,27 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 		defer close(events)
 		defer close(errs)
 		errs <- fmt.Errorf("start codex cli: %w", err)
+		return events, errs
+	}
+	if _, err := io.WriteString(stdin, prompt); err != nil {
+		_ = stdin.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		events := make(chan llm.StreamEvent)
+		errs := make(chan error, 1)
+		defer close(events)
+		defer close(errs)
+		errs <- fmt.Errorf("write codex stdin prompt: %w", err)
+		return events, errs
+	}
+	if err := stdin.Close(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		events := make(chan llm.StreamEvent)
+		errs := make(chan error, 1)
+		defer close(events)
+		defer close(errs)
+		errs <- fmt.Errorf("close codex stdin prompt: %w", err)
 		return events, errs
 	}
 
@@ -405,6 +444,18 @@ func parseStreamJSONLine(line string) ([]llm.StreamEvent, error) {
 		}
 	}
 
+	if lineType == "item.started" {
+		if evt := parseCommandExecutionStarted(payload); evt != nil {
+			events = append(events, *evt)
+		}
+	}
+
+	if lineType == "item.completed" {
+		if evt := parseCommandExecutionCompleted(payload); evt != nil {
+			events = append(events, *evt)
+		}
+	}
+
 	if lineType == "session.configured" {
 		meta := llm.ProviderMetadata{Provider: "codex"}
 		if model, _ := payload["model"].(string); model != "" {
@@ -443,6 +494,190 @@ func extractAgentMessageText(item map[string]interface{}) string {
 		}
 	}
 	return out.String()
+}
+
+func parseCommandExecutionStarted(payload map[string]interface{}) *llm.StreamEvent {
+	item, _ := payload["item"].(map[string]interface{})
+	if strings.ToLower(strings.TrimSpace(asString(item["type"]))) != "command_execution" {
+		return nil
+	}
+
+	callID := firstNonBlankString(asString(item["id"]), asString(payload["id"]))
+	command := extractCommandText(item)
+	args := map[string]interface{}{}
+	if command != "" {
+		args["command"] = command
+	}
+
+	return &llm.StreamEvent{
+		Type: llm.StreamEventToolCall,
+		ToolCall: &llm.ToolCall{
+			ID:    callID,
+			Name:  "command_execution",
+			Args:  args,
+			Class: llm.ToolClassDelegated,
+		},
+	}
+}
+
+func parseCommandExecutionCompleted(payload map[string]interface{}) *llm.StreamEvent {
+	item, _ := payload["item"].(map[string]interface{})
+	if strings.ToLower(strings.TrimSpace(asString(item["type"]))) != "command_execution" {
+		return nil
+	}
+
+	callID := firstNonBlankString(asString(item["id"]), asString(payload["id"]))
+	command := extractCommandText(item)
+	status := firstNonBlankString(asString(item["status"]), asString(payload["status"]), "completed")
+	exitCode, hasExitCode := firstInt(
+		item["exit_code"],
+		item["exitCode"],
+		lookupMap(item, "result", "exit_code"),
+		lookupMap(item, "result", "exitCode"),
+		payload["exit_code"],
+		payload["exitCode"],
+	)
+	output := firstNonBlankString(
+		asString(item["aggregated_output"]),
+		asString(item["output"]),
+		asString(lookupMap(item, "result", "aggregated_output")),
+		asString(lookupMap(item, "result", "output")),
+		asString(payload["aggregated_output"]),
+		asString(payload["output"]),
+	)
+
+	ok := isSuccessfulCommandStatus(status)
+	if hasExitCode {
+		ok = ok && exitCode == 0
+	}
+
+	errText := firstNonBlankString(
+		asString(item["error"]),
+		asString(lookupMap(item, "result", "error")),
+		asString(payload["error"]),
+	)
+	if !ok && errText == "" {
+		if hasExitCode {
+			errText = fmt.Sprintf("command exited with code %d", exitCode)
+		} else {
+			errText = fmt.Sprintf("command status %s", status)
+		}
+	}
+
+	data := map[string]interface{}{}
+	if command != "" {
+		data["command"] = command
+	}
+	if output != "" {
+		data["aggregated_output"] = output
+	}
+	if hasExitCode {
+		data["exit_code"] = exitCode
+	}
+
+	return &llm.StreamEvent{
+		Type: llm.StreamEventToolResult,
+		ToolResult: &llm.ToolResult{
+			CallID: callID,
+			Tool:   "command_execution",
+			Class:  llm.ToolClassDelegated,
+			OK:     ok,
+			Status: status,
+			Error:  errText,
+			Data:   data,
+		},
+	}
+}
+
+func extractCommandText(item map[string]interface{}) string {
+	return firstNonBlankString(
+		asString(item["command"]),
+		asString(item["command_line"]),
+		asString(lookupMap(item, "input", "command")),
+		asString(lookupMap(item, "args", "command")),
+	)
+}
+
+func lookupMap(value interface{}, keys ...string) interface{} {
+	current := value
+	for _, key := range keys {
+		next, ok := current.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		current, ok = next[key]
+		if !ok {
+			return nil
+		}
+	}
+	return current
+}
+
+func firstInt(values ...interface{}) (int, bool) {
+	for _, value := range values {
+		switch typed := value.(type) {
+		case int:
+			return typed, true
+		case int32:
+			return int(typed), true
+		case int64:
+			return int(typed), true
+		case float64:
+			return int(typed), true
+		case float32:
+			return int(typed), true
+		case json.Number:
+			if parsed, err := typed.Int64(); err == nil {
+				return int(parsed), true
+			}
+		}
+	}
+	return 0, false
+}
+
+func asString(value interface{}) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.Number:
+		return strings.TrimSpace(typed.String())
+	default:
+		return ""
+	}
+}
+
+func firstNonBlankString(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func isSuccessfulCommandStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "success", "succeeded", "ok":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeNonBlankArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(args))
+	for _, raw := range args {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 func buildEnv(env map[string]string) []string {

@@ -41,7 +41,9 @@ go run ./cmd/localclaw mcp serve
 - runtime tool registry (`internal/skills` + `internal/runtime/tools.go`)
 - cron scheduler and heartbeat monitor
 - channel adapters (`slack`, `signal`)
-- provider-agnostic LLM client contract (`internal/llm`) with Claude Code CLI adapter (`internal/llm/claudecode`)
+- provider-agnostic LLM client contract (`internal/llm`) with local CLI adapters:
+  - Claude Code (`internal/llm/claudecode`)
+  - Codex (`internal/llm/codex`)
 
 ## Startup lifecycle
 
@@ -72,6 +74,7 @@ Prompt assembly (`buildPromptRequest`) behavior:
 - Injects workspace bootstrap context on first prompt in a session.
 - Re-injects bootstrap context after compaction count increases.
 - Injects a localclaw-authored skills block from workspace skill snapshots.
+- Carries provider-agnostic prompt options (for example model override) to request-capable adapters.
 
 Provider compatibility:
 

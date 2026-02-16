@@ -79,12 +79,17 @@ type SessionMetadata struct {
 	SessionKey string `json:"session_key,omitempty"`
 }
 
+type PromptOptions struct {
+	ModelOverride string `json:"model_override,omitempty"`
+}
+
 type Request struct {
 	Input           string           `json:"input"`
 	SystemContext   string           `json:"system_context,omitempty"`
 	SkillPrompt     string           `json:"skill_prompt,omitempty"`
 	ToolDefinitions []ToolDefinition `json:"tool_definitions,omitempty"`
 	Session         SessionMetadata  `json:"session,omitempty"`
+	Options         PromptOptions    `json:"options,omitempty"`
 }
 
 type Capabilities struct {

@@ -18,7 +18,7 @@ Streaming output comes from `app.PromptStreamForSession`.
 Header currently shows:
 
 - app label (`# localclaw`)
-- provider/profile tuple (`model:<provider>/<claude_profile>`)
+- provider/effective-model tuple (`provider:<provider>  model:<effective_model>`)
 - resolved workspace path
 
 Status state machine values:
@@ -85,7 +85,7 @@ Implemented command set:
 Command behavior details:
 
 - `/shortcuts` prints all available keyboard shortcuts and their behavior.
-- `/status` prints one system line containing status, provider, agent, session, workspace, thinking, verbose, and mouse-capture flags.
+- `/status` prints one system line containing status, provider, configured model/profile, effective model, model override state, agent, session, workspace, thinking, verbose, and mouse-capture flags.
 - `/tools` prints provider plus explicit ownership sections:
   - `provider_native` for provider-discovered native tools.
   - `localclaw_mcp` for localclaw runtime tools for the active agent.
@@ -96,7 +96,9 @@ Command behavior details:
 - `/clear` clears transcript messages without adding a confirmation line.
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
-- `/model <name>` currently reports "not implemented" and does not change provider/model runtime behavior.
+- `/model <name>` sets a session-local model override for providers that support override flags (currently `codex`).
+- `/model default` or `/model off` clears the active override.
+- unsupported providers (for example `claudecode`) return an explicit notice and continue with configured defaults.
 - `/exit` and `/quit` abort active run and quit.
 
 Slash-menu behavior:
@@ -118,6 +120,7 @@ On `/new`:
 - Aborts active run if needed.
 - Invokes runtime `ResetSession` with `StartNew=true`.
 - Clears transcript and shows `started new session <id>`.
+- Clears any active `/model` override.
 - Re-renders workspace `WELCOME.md` if present.
 
 On `/reset`:
@@ -125,6 +128,7 @@ On `/reset`:
 - Aborts active run if needed.
 - Invokes runtime `ResetSession` with `StartNew=false`.
 - Clears transcript and shows `session reset`.
+- Clears any active `/model` override.
 
 ## Run lifecycle
 

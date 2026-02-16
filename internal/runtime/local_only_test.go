@@ -286,6 +286,7 @@ func TestNewConfiguresCodexMCPHomeUnderStateRoot(t *testing.T) {
 set -euo pipefail
 printf "%%s\n" "$@" > %q
 env | grep '^CODEX_HOME=' > %q || true
+cat >/dev/null
 printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'
 `, argsPath, envPath)
 	if err := os.WriteFile(codexScriptPath, []byte(script), 0o755); err != nil {
