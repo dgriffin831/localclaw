@@ -106,7 +106,7 @@ func (m *SQLiteIndexManager) discoverGrepFiles(source string) ([]grepCandidateFi
 	candidates := make([]grepCandidateFile, 0)
 	added := map[string]struct{}{}
 
-	if source == "all" || source == "memory" {
+	if (source == "all" || source == "memory") && m.sourceEnabled("memory") {
 		files, err := DiscoverMemoryFiles(m.cfg.WorkspaceRoot, m.cfg.ExtraPaths)
 		if err != nil {
 			return nil, err
@@ -125,7 +125,7 @@ func (m *SQLiteIndexManager) discoverGrepFiles(source string) ([]grepCandidateFi
 		}
 	}
 
-	if source == "all" || source == "sessions" {
+	if (source == "all" || source == "sessions") && m.sourceEnabled("sessions") {
 		files, err := DiscoverSessionFiles(m.cfg.SessionsRoot)
 		if err != nil {
 			return nil, err
