@@ -5,6 +5,10 @@
 - Scope finalized: memory retrieval v2 keyword-only stack (FTS/LIKE search + grep), embedding/vector path removal, schema compatibility/migration cleanup.
 
 ## Commits
+- `47344ec` docs(handoff): record final retrieval v2 commit set
+  - Final handoff commit list alignment.
+- `2963a1b` docs(handoff): refresh validation results and follow-ups
+  - Refreshes verification summary and risk notes.
 - `6405153` docs(memory): document retrieval v2 behavior and handoff
   - Updates README/docs to match retrieval-v2 tooling and config shape.
   - Replaces embeddings setup guide with deprecation note and migration direction.
