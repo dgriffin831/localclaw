@@ -112,7 +112,7 @@ Optional waiting-text customization:
 - `docs/ARCHITECTURE.md` - implementation-detail architecture map.
 - `docs/RUNTIME.md` - startup flow and command mode behavior.
 - `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
-- `docs/EMBEDDINGS.md` - deprecated embedding guide and memory retrieval v2 notes.
+- `docs/MEMORY_RETRIEVAL.md` - memory retrieval v2 model (`memory_search` + `memory_grep`) and legacy migration notes.
 - `docs/TUI.md` - terminal UX behavior and controls.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
 - `docs/TESTING.md` - package coverage and Red/Green command loops.

@@ -173,6 +173,7 @@ Compatibility behavior (v2):
 - Legacy `memorySearch` keys from embedding/vector versions are ignored when loading JSON config files.
 - Ignored keys do not cause startup validation failure.
 - Supported v2 keys continue to merge normally.
+- Legacy memory DB embedding/vector artifacts are normalized by schema install; see `docs/MEMORY_RETRIEVAL.md`.
 
 ## Tool policy configuration notes
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft
+Completed (Phase 1-4)
 
 ## Problem / Motivation
 
@@ -331,6 +331,12 @@ Green validation:
 - add migration notes for existing memory DB/config keys
 - run full suite and smoke commands
 
+Completion notes:
+
+- Added retrieval-v2 primary doc (`docs/MEMORY_RETRIEVAL.md`) and updated docs map links.
+- Hardened SQLite schema install to normalize legacy `chunks` embedding/model columns and purge legacy embedding/vector meta keys.
+- Confirmed full validation matrix passes (using `/usr/local/go/bin/go` in this environment).
+
 Validation:
 
 - `go test ./...`
@@ -366,12 +372,12 @@ Regression checks:
 
 ## Acceptance Criteria
 
-- [ ] `memory_search` has no embedding/vector dependency and never initializes embedding providers.
-- [ ] No embedding/vector/cache config fields remain in runtime structs/defaults/docs.
-- [ ] `memory_grep` is available as runtime tool and MCP tool (with alias), with strict local scope limits.
-- [ ] CLI exposes `memory grep` with JSON and human output modes.
-- [ ] `go test ./...` passes with embedding/vector tests removed or replaced.
-- [ ] Docs are updated to describe BM25/FTS + grep retrieval model only.
+- [x] `memory_search` has no embedding/vector dependency and never initializes embedding providers.
+- [x] No embedding/vector/cache config fields remain in runtime structs/defaults/docs.
+- [x] `memory_grep` is available as runtime tool and MCP tool (with alias), with strict local scope limits.
+- [x] CLI exposes `memory grep` with JSON and human output modes.
+- [x] `go test ./...` passes with embedding/vector tests removed or replaced.
+- [x] Docs are updated to describe BM25/FTS + grep retrieval model only.
 
 ## Rollback / Risk Notes
 

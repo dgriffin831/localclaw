@@ -35,6 +35,7 @@ Guardrail violations fail startup before runtime initialization.
 - Session store files are written with hardened permissions where supported (`0600` files, `0700` session dirs).
 - Session writes use lock files plus atomic replace behavior.
 - Memory file reads through `memory_get` are restricted to allowed markdown sources.
+- `memory_grep` scans only discovered in-scope memory/session files and rejects out-of-scope traversal globs.
 
 ## LLM execution boundary
 

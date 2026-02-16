@@ -63,6 +63,10 @@ func installSchema(ctx context.Context, db *sql.DB, cfg IndexManagerConfig) (sch
 		return features, fmt.Errorf("set schema version: %w", err)
 	}
 
+	if err := migrateLegacyChunkSchema(ctx, tx); err != nil {
+		return features, err
+	}
+
 	if cfg.EnableFTS {
 		enabled, err := installOptionalFTS(ctx, tx)
 		if err != nil {
@@ -82,11 +86,89 @@ func installSchema(ctx context.Context, db *sql.DB, cfg IndexManagerConfig) (sch
 	if _, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE key = 'embedding_cache_enabled';`); err != nil {
 		return features, fmt.Errorf("clear legacy embedding_cache meta: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE key LIKE 'embedding_%' OR key LIKE 'vector_%';`); err != nil {
+		return features, fmt.Errorf("clear legacy embedding/vector meta keys: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return features, err
 	}
 	return features, nil
+}
+
+func migrateLegacyChunkSchema(ctx context.Context, tx *sql.Tx) error {
+	legacyEmbeddingSchema, err := chunksTableHasLegacyEmbeddingColumns(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !legacyEmbeddingSchema {
+		return nil
+	}
+
+	resetStatements := []string{
+		`DROP TRIGGER IF EXISTS chunks_ai;`,
+		`DROP TRIGGER IF EXISTS chunks_ad;`,
+		`DROP TRIGGER IF EXISTS chunks_au;`,
+		`DROP TABLE IF EXISTS chunks_fts;`,
+		`ALTER TABLE chunks RENAME TO chunks_legacy;`,
+		`CREATE TABLE chunks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			path TEXT NOT NULL,
+			source TEXT NOT NULL,
+			start_line INTEGER NOT NULL,
+			end_line INTEGER NOT NULL,
+			hash TEXT NOT NULL,
+			text TEXT NOT NULL,
+			updated_at INTEGER NOT NULL,
+			FOREIGN KEY(path) REFERENCES files(path) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`,
+		`CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(hash);`,
+	}
+	for _, stmt := range resetStatements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migrate legacy chunks schema: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO chunks(id, path, source, start_line, end_line, hash, text, updated_at)
+		SELECT id, path, source, start_line, end_line, hash, text, updated_at
+		FROM chunks_legacy;`); err != nil {
+		return fmt.Errorf("copy legacy chunks rows: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS chunks_legacy;`); err != nil {
+		return fmt.Errorf("drop legacy chunks table: %w", err)
+	}
+	return nil
+}
+
+func chunksTableHasLegacyEmbeddingColumns(ctx context.Context, tx *sql.Tx) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(chunks);`)
+	if err != nil {
+		return false, fmt.Errorf("inspect chunks schema: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			columnTyp string
+			notNull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &columnTyp, &notNull, &dfltValue, &pk); err != nil {
+			return false, fmt.Errorf("scan chunks schema: %w", err)
+		}
+		if strings.EqualFold(name, "embedding") || strings.EqualFold(name, "model") {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate chunks schema: %w", err)
+	}
+	return false, nil
 }
 
 func installOptionalFTS(ctx context.Context, tx *sql.Tx) (bool, error) {

@@ -1,10 +1,5 @@
-# Embeddings Guide (Deprecated)
+# Embeddings Guide (Archived)
 
-`localclaw` memory retrieval v2 removed embedding/vector runtime support.
+Embedding/vector retrieval runtime support was removed in memory retrieval v2.
 
-Use:
-
-- `memory_search` for keyword-ranked recall (FTS/LIKE fallback)
-- `memory_grep` for exact literal/regex discovery
-
-Legacy embedding-related config keys are ignored for compatibility and do not affect runtime behavior.
+Current documentation moved to `docs/MEMORY_RETRIEVAL.md`.

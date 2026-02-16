@@ -99,6 +99,8 @@ Supported tools:
 - `memory_grep`
 - `memory_get`
 
+Retrieval model details and migration notes are documented in `docs/MEMORY_RETRIEVAL.md`.
+
 Tool enablement:
 
 - Controlled by resolved `memorySearch.enabled` for the agent.

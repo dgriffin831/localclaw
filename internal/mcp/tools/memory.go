@@ -92,7 +92,7 @@ func MemorySearchAliasDefinition() protocol.Tool {
 func memorySearchDefinition(name string) protocol.Tool {
 	return protocol.Tool{
 		Name:        name,
-		Description: "Search indexed localclaw memory chunks",
+		Description: "Search indexed localclaw memory chunks using keyword ranking (FTS/LIKE fallback)",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{

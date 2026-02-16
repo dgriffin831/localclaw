@@ -102,9 +102,9 @@ func DefaultMemoryTools() []ToolDefinition {
 	return []ToolDefinition{
 		{
 			Name:        ToolMemorySearch,
-			Description: "Search indexed memory snippets relevant to the current request.",
+			Description: "Search indexed memory chunks using keyword ranking (FTS/LIKE fallback).",
 			Parameters: []ToolParameter{
-				{Name: "query", Type: "string", Required: true, Description: "Search query text."},
+				{Name: "query", Type: "string", Required: true, Description: "Keyword query text."},
 				{Name: "max_results", Type: "integer", Required: false, Description: "Optional result cap."},
 				{Name: "min_score", Type: "number", Required: false, Description: "Optional minimum score filter."},
 				{Name: "session_key", Type: "string", Required: false, Description: "Optional session key context."},
