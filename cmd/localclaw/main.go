@@ -69,8 +69,13 @@ func main() {
 			fmt.Fprintf(os.Stderr, "memory error: %v\n", err)
 			os.Exit(1)
 		}
+	case "mcp":
+		if err := cli.RunMCPCommand(ctx, cfg, app, fs.Args()[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "mcp error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (supported: check, tui, memory)\n", mode)
+		fmt.Fprintf(os.Stderr, "unknown command %q (supported: check, tui, memory, mcp)\n", mode)
 		os.Exit(1)
 	}
 }

@@ -11,6 +11,7 @@ Supported command modes:
 - `check` (default): runs startup initialization checks, then verifies resolved workspace and session-store paths.
 - `tui`: runs startup initialization, then starts Bubble Tea UI.
 - `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`).
+- `mcp`: runs startup initialization, then serves stdio JSON-RPC MCP requests (`serve` subcommand).
 
 Examples:
 
@@ -21,6 +22,7 @@ go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
+go run ./cmd/localclaw mcp serve
 ```
 
 ## Runtime construction

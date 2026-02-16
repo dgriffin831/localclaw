@@ -6,7 +6,7 @@
 
 - Entrypoint: `cmd/localclaw/main.go`
 - Core wiring: `internal/runtime/app.go`
-- Command modes: `check`, `tui`, `memory`
+- Command modes: `check`, `tui`, `memory`, `mcp`
 - No HTTP/gateway/server listeners.
 
 ## Startup order (`App.Run`)

@@ -21,6 +21,7 @@ This document describes test coverage, commands, and Red/Green workflow for `loc
 | Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, bootstrap loading/filtering, subagent allowlist |
 | Session store/transcripts | `internal/session/store_test.go` | path resolution, lock behavior, metadata preservation, write safety |
 | Memory CLI | `internal/cli/memory_test.go` | `memory status/index/search` JSON/text output and argument handling |
+| MCP runtime/tools | `internal/mcp/*_test.go`, `internal/cli/mcp_test.go` | stdio JSON-RPC loop, tool discovery/calls, policy enforcement, `mcp serve` routing |
 | Session snapshot hook | `internal/hooks/session_memory_test.go` | snapshot generation, slug/summary fallback, transcript handling |
 | Memory indexing/search/embeddings/flush | `internal/memory/*_test.go` | discovery/chunking, SQLite sync/search/get, autosync, embeddings, flush logic, migration helpers |
 
@@ -44,6 +45,7 @@ go test ./internal/session
 go test ./internal/cli
 go test ./internal/hooks
 go test ./internal/memory
+go test ./internal/mcp
 ```
 
 ### Focused Red/Green examples
@@ -65,6 +67,7 @@ go run ./cmd/localclaw
 go run ./cmd/localclaw check
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
+go run ./cmd/localclaw mcp serve
 ```
 
 ## Red/Green workflow (default)

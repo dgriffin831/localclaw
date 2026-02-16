@@ -12,7 +12,7 @@
 
 ## Current implementation snapshot
 
-- Command modes: `check` (default), `tui`, `memory`.
+- Command modes: `check` (default), `tui`, `memory`, `mcp`.
 - Agent-aware workspace resolution and bootstrap templates.
 - Per-agent session metadata + transcript files under the configured state root.
 - SQLite-backed memory indexing/search with CLI tooling (`memory status/index/search`).
@@ -26,6 +26,7 @@ go test ./...
 go run ./cmd/localclaw
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
+go run ./cmd/localclaw mcp serve
 ```
 
 Run specific command modes:
@@ -36,6 +37,7 @@ go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
+go run ./cmd/localclaw mcp serve
 ```
 
 Run with an explicit config file:
@@ -44,6 +46,7 @@ Run with an explicit config file:
 go run ./cmd/localclaw -config ./localclaw.json check
 go run ./cmd/localclaw -config ./localclaw.json tui
 go run ./cmd/localclaw -config ./localclaw.json memory status
+go run ./cmd/localclaw -config ./localclaw.json mcp serve
 ```
 
 On startup, `localclaw` creates `~/.localclaw/localclaw.json` if it does not exist.
