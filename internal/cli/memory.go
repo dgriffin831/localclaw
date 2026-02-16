@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/memory"
@@ -408,17 +409,23 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	}
 
 	manager := memory.NewSQLiteIndexManager(memory.IndexManagerConfig{
-		DBPath:               storePath,
-		WorkspaceRoot:        workspacePath,
-		SessionsRoot:         sessionsRoot,
-		Sources:              searchCfg.Sources,
-		ExtraPaths:           extraPaths,
-		ChunkTokens:          searchCfg.Chunking.Tokens,
-		ChunkOverlap:         searchCfg.Chunking.Overlap,
-		Provider:             searchCfg.Provider,
-		Model:                searchCfg.Model,
-		Fallback:             searchCfg.Fallback,
-		Local:                memory.LocalEmbeddingConfig{ModelPath: searchCfg.Local.ModelPath, ModelCacheDir: searchCfg.Local.ModelCacheDir},
+		DBPath:        storePath,
+		WorkspaceRoot: workspacePath,
+		SessionsRoot:  sessionsRoot,
+		Sources:       searchCfg.Sources,
+		ExtraPaths:    extraPaths,
+		ChunkTokens:   searchCfg.Chunking.Tokens,
+		ChunkOverlap:  searchCfg.Chunking.Overlap,
+		Provider:      searchCfg.Provider,
+		Model:         searchCfg.Model,
+		Fallback:      searchCfg.Fallback,
+		Local: memory.LocalEmbeddingConfig{
+			RuntimePath:   searchCfg.Local.RuntimePath,
+			ModelPath:     searchCfg.Local.ModelPath,
+			ModelCacheDir: searchCfg.Local.ModelCacheDir,
+			QueryTimeout:  time.Duration(searchCfg.Local.QueryTimeoutSeconds) * time.Second,
+			BatchTimeout:  time.Duration(searchCfg.Local.BatchTimeoutSeconds) * time.Second,
+		},
 		EnableFTS:            true,
 		EnableVector:         searchCfg.Store.Vector.Enabled,
 		EnableEmbeddingCache: searchCfg.Cache.Enabled,

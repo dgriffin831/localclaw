@@ -10,7 +10,6 @@ import (
 )
 
 var allowedChannels = []string{"slack", "signal"}
-var allowedClaudeAuthModes = []string{"default", "aws_profile", "bedrock"}
 
 // Config contains all runtime configuration for localclaw.
 type Config struct {
@@ -21,8 +20,6 @@ type Config struct {
 	State     StateConfig     `json:"state"`
 	Agents    AgentsConfig    `json:"agents"`
 	Session   SessionConfig   `json:"session"`
-	Memory    MemoryConfig    `json:"memory"`
-	Workspace WorkspaceConfig `json:"workspace"`
 	Tools     ToolsConfig     `json:"tools"`
 	Skills    SkillsConfig    `json:"skills"`
 	Cron      CronConfig      `json:"cron"`
@@ -48,11 +45,8 @@ type LLMConfig struct {
 }
 
 type ClaudeCodeConfig struct {
-	BinaryPath    string `json:"binary_path"`
-	Profile       string `json:"profile"`
-	UseGovCloud   bool   `json:"use_govcloud"`
-	BedrockRegion string `json:"bedrock_region"`
-	AuthMode      string `json:"auth_mode"`
+	BinaryPath string `json:"binary_path"`
+	Profile    string `json:"profile"`
 }
 
 type CodexConfig struct {
@@ -115,14 +109,6 @@ type SessionConfig struct {
 	Store string `json:"store"`
 }
 
-type MemoryConfig struct {
-	Path string `json:"path"`
-}
-
-type WorkspaceConfig struct {
-	Root string `json:"root"`
-}
-
 type ToolsConfig struct {
 	Allow     []string             `json:"allow,omitempty"`
 	Deny      []string             `json:"deny,omitempty"`
@@ -141,20 +127,18 @@ type SkillsConfig struct {
 }
 
 type MemorySearchConfig struct {
-	Enabled          bool                    `json:"enabled"`
-	Sources          []string                `json:"sources"`
-	ExtraPaths       []string                `json:"extraPaths"`
-	Provider         string                  `json:"provider"`
-	Fallback         string                  `json:"fallback"`
-	Model            string                  `json:"model"`
-	Store            MemorySearchStoreConfig `json:"store"`
-	Chunking         ChunkingConfig          `json:"chunking"`
-	Query            QueryConfig             `json:"query"`
-	Sync             SyncConfig              `json:"sync"`
-	Cache            CacheConfig             `json:"cache"`
-	Local            LocalConfig             `json:"local"`
-	Remote           RemoteConfig            `json:"remote"`
-	LegacyImportPath string                  `json:"legacyImportPath,omitempty"`
+	Enabled    bool                    `json:"enabled"`
+	Sources    []string                `json:"sources"`
+	ExtraPaths []string                `json:"extraPaths"`
+	Provider   string                  `json:"provider"`
+	Fallback   string                  `json:"fallback"`
+	Model      string                  `json:"model"`
+	Store      MemorySearchStoreConfig `json:"store"`
+	Chunking   ChunkingConfig          `json:"chunking"`
+	Query      QueryConfig             `json:"query"`
+	Sync       SyncConfig              `json:"sync"`
+	Cache      CacheConfig             `json:"cache"`
+	Local      LocalConfig             `json:"local"`
 }
 
 type MemorySearchStoreConfig struct {
@@ -185,12 +169,8 @@ type QueryHybridConfig struct {
 }
 
 type SyncConfig struct {
-	OnSessionStart  bool               `json:"onSessionStart"`
-	OnSearch        bool               `json:"onSearch"`
-	Watch           bool               `json:"watch"`
-	WatchDebounceMs int                `json:"watchDebounceMs"`
-	IntervalMinutes int                `json:"intervalMinutes"`
-	Sessions        SyncSessionsConfig `json:"sessions"`
+	OnSearch bool               `json:"onSearch"`
+	Sessions SyncSessionsConfig `json:"sessions"`
 }
 
 type SyncSessionsConfig struct {
@@ -204,20 +184,11 @@ type CacheConfig struct {
 }
 
 type LocalConfig struct {
-	ModelPath     string `json:"modelPath"`
-	ModelCacheDir string `json:"modelCacheDir"`
-}
-
-type RemoteConfig struct {
-	BaseURL string            `json:"baseURL"`
-	APIKey  string            `json:"apiKey"`
-	Headers map[string]string `json:"headers"`
-	Batch   RemoteBatchConfig `json:"batch"`
-}
-
-type RemoteBatchConfig struct {
-	Enabled bool `json:"enabled"`
-	Size    int  `json:"size"`
+	RuntimePath         string `json:"runtimePath"`
+	ModelPath           string `json:"modelPath"`
+	ModelCacheDir       string `json:"modelCacheDir"`
+	QueryTimeoutSeconds int    `json:"queryTimeoutSeconds"`
+	BatchTimeoutSeconds int    `json:"batchTimeoutSeconds"`
 }
 
 type CronConfig struct {
@@ -241,11 +212,8 @@ func Default() Config {
 		LLM: LLMConfig{
 			Provider: "claudecode",
 			ClaudeCode: ClaudeCodeConfig{
-				BinaryPath:    "claude",
-				Profile:       "default",
-				UseGovCloud:   false,
-				BedrockRegion: "",
-				AuthMode:      "default",
+				BinaryPath: "claude",
+				Profile:    "default",
 			},
 			Codex: CodexConfig{
 				BinaryPath: "codex",
@@ -304,11 +272,7 @@ func Default() Config {
 						},
 					},
 					Sync: SyncConfig{
-						OnSessionStart:  false,
-						OnSearch:        false,
-						Watch:           false,
-						WatchDebounceMs: 500,
-						IntervalMinutes: 0,
+						OnSearch: false,
 						Sessions: SyncSessionsConfig{
 							DeltaBytes:    32768,
 							DeltaMessages: 20,
@@ -319,15 +283,11 @@ func Default() Config {
 						MaxEntries: 1000,
 					},
 					Local: LocalConfig{
-						ModelPath:     "",
-						ModelCacheDir: "",
-					},
-					Remote: RemoteConfig{
-						Headers: map[string]string{},
-						Batch: RemoteBatchConfig{
-							Enabled: false,
-							Size:    16,
-						},
+						RuntimePath:         "",
+						ModelPath:           "",
+						ModelCacheDir:       "",
+						QueryTimeoutSeconds: 0,
+						BatchTimeoutSeconds: 0,
 					},
 				},
 			},
@@ -335,10 +295,6 @@ func Default() Config {
 		},
 		Session: SessionConfig{
 			Store: "~/.localclaw/agents/{agentId}/sessions/sessions.json",
-		},
-		Memory: MemoryConfig{Path: ".localclaw/memory.json"},
-		Workspace: WorkspaceConfig{
-			Root: ".",
 		},
 		Tools: ToolsConfig{
 			Delegated: DelegatedToolsConfig{
@@ -353,19 +309,29 @@ func Default() Config {
 
 func Load(path string) (Config, error) {
 	cfg := Default()
-	if path == "" {
-		cfg.applyCompatibilityMappings()
+	loadPath := strings.TrimSpace(path)
+	if loadPath == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			defaultPath := filepath.Join(home, ".localclaw", "localclaw.json")
+			if _, statErr := os.Stat(defaultPath); statErr == nil {
+				loadPath = defaultPath
+			} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+				return Config{}, fmt.Errorf("stat default config: %w", statErr)
+			}
+		}
+	}
+
+	if loadPath == "" {
 		return cfg, cfg.Validate()
 	}
 
-	buf, err := os.ReadFile(path)
+	buf, err := os.ReadFile(loadPath)
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
 	if err := json.Unmarshal(buf, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config: %w", err)
 	}
-	cfg.applyCompatibilityMappings()
 	return cfg, cfg.Validate()
 }
 
@@ -384,12 +350,6 @@ func (c Config) Validate() error {
 	if c.LLM.Provider == "claudecode" {
 		if strings.TrimSpace(c.LLM.ClaudeCode.BinaryPath) == "" {
 			return errors.New("llm.claude_code.binary_path is required")
-		}
-		if !containsString(allowedClaudeAuthModes, c.LLM.ClaudeCode.AuthMode) {
-			return fmt.Errorf("unsupported llm.claude_code.auth_mode %q", c.LLM.ClaudeCode.AuthMode)
-		}
-		if c.LLM.ClaudeCode.UseGovCloud && strings.TrimSpace(c.LLM.ClaudeCode.BedrockRegion) == "" {
-			return errors.New("llm.claude_code.bedrock_region is required when use_govcloud is true")
 		}
 	}
 	if c.LLM.Provider == "codex" {
@@ -453,46 +413,20 @@ func (c Config) Validate() error {
 		if err := validateMemoryFlushConfig(agent.Compaction.MemoryFlush, "agents.list[].compaction.memoryFlush"); err != nil {
 			return err
 		}
+		if err := validateLocalEmbeddingConfig(agent.MemorySearch.Local, "agents.list[].memorySearch.local"); err != nil {
+			return err
+		}
 	}
 	if err := validateMemoryFlushConfig(c.Agents.Defaults.Compaction.MemoryFlush, "agents.defaults.compaction.memoryFlush"); err != nil {
+		return err
+	}
+	if err := validateLocalEmbeddingConfig(c.Agents.Defaults.MemorySearch.Local, "agents.defaults.memorySearch.local"); err != nil {
 		return err
 	}
 	if c.Heartbeat.Enabled && c.Heartbeat.IntervalSeconds <= 0 {
 		return errors.New("heartbeat.interval_seconds must be > 0")
 	}
 	return c.ValidateLocalOnlyPolicy()
-}
-
-func (c *Config) applyCompatibilityMappings() {
-	defaults := Default()
-
-	legacyWorkspaceRoot := strings.TrimSpace(c.Workspace.Root)
-	defaultWorkspace := strings.TrimSpace(c.Agents.Defaults.Workspace)
-	defaultWorkspaceDefault := strings.TrimSpace(defaults.Agents.Defaults.Workspace)
-	switch {
-	case legacyWorkspaceRoot != "" && (defaultWorkspace == "" || defaultWorkspace == defaultWorkspaceDefault):
-		c.Agents.Defaults.Workspace = legacyWorkspaceRoot
-	case legacyWorkspaceRoot == "" && defaultWorkspace != "":
-		c.Workspace.Root = defaultWorkspace
-	}
-
-	legacyMemoryPath := strings.TrimSpace(c.Memory.Path)
-	if strings.TrimSpace(c.Agents.Defaults.MemorySearch.LegacyImportPath) == "" && legacyMemoryPath != "" {
-		c.Agents.Defaults.MemorySearch.LegacyImportPath = legacyMemoryPath
-	}
-
-	stateRoot := strings.TrimSpace(c.State.Root)
-	if stateRoot == "" {
-		return
-	}
-	defaultSessionStore := strings.TrimSpace(defaults.Session.Store)
-	if strings.TrimSpace(c.Session.Store) == defaultSessionStore {
-		c.Session.Store = filepath.Join(stateRoot, "agents", "{agentId}", "sessions", "sessions.json")
-	}
-	defaultMemoryStorePath := strings.TrimSpace(defaults.Agents.Defaults.MemorySearch.Store.Path)
-	if strings.TrimSpace(c.Agents.Defaults.MemorySearch.Store.Path) == defaultMemoryStorePath {
-		c.Agents.Defaults.MemorySearch.Store.Path = filepath.Join(stateRoot, "memory", "{agentId}.sqlite")
-	}
 }
 
 func containsString(values []string, target string) bool {
@@ -513,6 +447,19 @@ func validateMemoryFlushConfig(cfg MemoryFlushConfig, fieldPrefix string) error 
 	}
 	if cfg.TimeoutSeconds < 0 {
 		return fmt.Errorf("%s.timeoutSeconds must be >= 0", fieldPrefix)
+	}
+	return nil
+}
+
+func validateLocalEmbeddingConfig(cfg LocalConfig, fieldPrefix string) error {
+	if strings.TrimSpace(cfg.RuntimePath) == "" && cfg.RuntimePath != "" {
+		return fmt.Errorf("%s.runtimePath cannot be blank", fieldPrefix)
+	}
+	if cfg.QueryTimeoutSeconds < 0 {
+		return fmt.Errorf("%s.queryTimeoutSeconds must be >= 0", fieldPrefix)
+	}
+	if cfg.BatchTimeoutSeconds < 0 {
+		return fmt.Errorf("%s.batchTimeoutSeconds must be >= 0", fieldPrefix)
 	}
 	return nil
 }

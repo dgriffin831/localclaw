@@ -178,6 +178,41 @@ func TestSearchDisableVectorSkipsVectorOnlyFallback(t *testing.T) {
 	}
 }
 
+func TestSearchLocalProviderRequiredReturnsErrorWhenRuntimeUnavailable(t *testing.T) {
+	ctx := context.Background()
+	workspace := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
+
+	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "alpha marker")
+
+	m := NewSQLiteIndexManager(IndexManagerConfig{
+		DBPath:        dbPath,
+		WorkspaceRoot: workspace,
+		ChunkTokens:   64,
+		ChunkOverlap:  0,
+		Provider:      EmbeddingProviderLocal,
+		Fallback:      EmbeddingProviderLocal,
+		EnableVector:  true,
+		EnableFTS:     false,
+	})
+	if err := m.Open(ctx); err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer m.Close()
+
+	if _, err := m.Sync(ctx, true); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	_, err := m.Search(ctx, "marker", SearchOptions{MaxResults: 5})
+	if err == nil {
+		t.Fatalf("expected local embedding runtime setup error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "runtime") {
+		t.Fatalf("expected runtime setup messaging, got %q", err.Error())
+	}
+}
+
 func TestSearchEmptyQueryReturnsError(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()

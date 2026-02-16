@@ -9,7 +9,9 @@ Implementation location:
 ## Execution model
 
 - `PromptStream` executes:
-  - `claude -p <input> --output-format stream-json --verbose`
+  - `claude -p <input> --output-format stream-json --verbose --mcp-config <run-scoped.json>`
+  - with `--strict-mcp-config` when enabled
+  - with `--allowed-tools` for localclaw MCP runtime tools derived from request tool definitions (pre-approves memory MCP tools and avoids per-call permission denials)
   - via `exec.CommandContext`.
 - stdout JSONL stream is parsed into provider-agnostic events:
   - assistant text blocks -> `StreamEventDelta`
@@ -39,13 +41,11 @@ Implementation location:
 Client appends environment values when configured:
 
 - `AWS_PROFILE=<profile>` when `llm.claude_code.profile` is set.
-- `AWS_REGION` and `AWS_DEFAULT_REGION` when `llm.claude_code.bedrock_region` is set.
-- `LOCALCLAW_GOVCLOUD_MODE=1` when `llm.claude_code.use_govcloud=true`.
+- Other AWS/GovCloud settings are inherited from the parent process environment.
 
 ## Configuration notes
 
-- `llm.provider` is currently constrained to `claudecode`.
-- `llm.claude_code.auth_mode` is validated (`default|aws_profile|bedrock`) but is not yet translated into explicit CLI flags inside this adapter.
+- `llm.provider` supports `claudecode` and `codex`.
 - `localclaw` does not implement direct network model clients.
 
 ## Error behavior

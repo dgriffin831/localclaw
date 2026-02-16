@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm"
@@ -494,7 +495,7 @@ func (a *App) newMemoryToolManager(ctx context.Context, agentID string, searchCf
 		Provider:             searchCfg.Provider,
 		Model:                searchCfg.Model,
 		Fallback:             searchCfg.Fallback,
-		Local:                memory.LocalEmbeddingConfig{ModelPath: searchCfg.Local.ModelPath, ModelCacheDir: searchCfg.Local.ModelCacheDir},
+		Local:                memoryLocalEmbeddingConfig(searchCfg.Local),
 		EnableFTS:            true,
 		EnableVector:         searchCfg.Store.Vector.Enabled,
 		EnableEmbeddingCache: searchCfg.Cache.Enabled,
@@ -658,17 +659,16 @@ func hasMemorySearchOverride(cfg config.MemorySearchConfig) bool {
 		cfg.Query.Hybrid.VectorWeight > 0 ||
 		cfg.Query.Hybrid.KeywordWeight > 0 ||
 		cfg.Query.Hybrid.CandidateMultiplier > 0 ||
-		cfg.Sync.OnSessionStart ||
 		cfg.Sync.OnSearch ||
-		cfg.Sync.Watch ||
-		cfg.Sync.WatchDebounceMs > 0 ||
-		cfg.Sync.IntervalMinutes > 0 ||
 		cfg.Sync.Sessions.DeltaBytes > 0 ||
 		cfg.Sync.Sessions.DeltaMessages > 0 ||
 		cfg.Cache.Enabled ||
 		cfg.Cache.MaxEntries > 0 ||
+		strings.TrimSpace(cfg.Local.RuntimePath) != "" ||
 		strings.TrimSpace(cfg.Local.ModelPath) != "" ||
-		strings.TrimSpace(cfg.Local.ModelCacheDir) != ""
+		strings.TrimSpace(cfg.Local.ModelCacheDir) != "" ||
+		cfg.Local.QueryTimeoutSeconds > 0 ||
+		cfg.Local.BatchTimeoutSeconds > 0
 }
 
 func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.MemorySearchConfig {
@@ -721,20 +721,8 @@ func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.Me
 	if override.Query.Hybrid.CandidateMultiplier > 0 {
 		merged.Query.Hybrid.CandidateMultiplier = override.Query.Hybrid.CandidateMultiplier
 	}
-	if override.Sync.OnSessionStart {
-		merged.Sync.OnSessionStart = true
-	}
 	if override.Sync.OnSearch {
 		merged.Sync.OnSearch = true
-	}
-	if override.Sync.Watch {
-		merged.Sync.Watch = true
-	}
-	if override.Sync.WatchDebounceMs > 0 {
-		merged.Sync.WatchDebounceMs = override.Sync.WatchDebounceMs
-	}
-	if override.Sync.IntervalMinutes > 0 {
-		merged.Sync.IntervalMinutes = override.Sync.IntervalMinutes
 	}
 	if override.Sync.Sessions.DeltaBytes > 0 {
 		merged.Sync.Sessions.DeltaBytes = override.Sync.Sessions.DeltaBytes
@@ -754,7 +742,26 @@ func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.Me
 	if strings.TrimSpace(override.Local.ModelCacheDir) != "" {
 		merged.Local.ModelCacheDir = override.Local.ModelCacheDir
 	}
+	if strings.TrimSpace(override.Local.RuntimePath) != "" {
+		merged.Local.RuntimePath = override.Local.RuntimePath
+	}
+	if override.Local.QueryTimeoutSeconds > 0 {
+		merged.Local.QueryTimeoutSeconds = override.Local.QueryTimeoutSeconds
+	}
+	if override.Local.BatchTimeoutSeconds > 0 {
+		merged.Local.BatchTimeoutSeconds = override.Local.BatchTimeoutSeconds
+	}
 	return merged
+}
+
+func memoryLocalEmbeddingConfig(local config.LocalConfig) memory.LocalEmbeddingConfig {
+	return memory.LocalEmbeddingConfig{
+		RuntimePath:   local.RuntimePath,
+		ModelPath:     local.ModelPath,
+		ModelCacheDir: local.ModelCacheDir,
+		QueryTimeout:  time.Duration(local.QueryTimeoutSeconds) * time.Second,
+		BatchTimeout:  time.Duration(local.BatchTimeoutSeconds) * time.Second,
+	}
 }
 
 func argPresent(args map[string]interface{}, name string) bool {

@@ -74,7 +74,10 @@ func (m *SQLiteIndexManager) Search(ctx context.Context, query string, opts Sear
 		merged[chunk.ID] = &chunk
 	}
 
-	provider, vectorEnabled := m.vectorProvider(ctx)
+	provider, vectorEnabled, err := m.vectorProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if vectorEnabled && len(merged) == 0 {
 		recent, err := m.recentCandidates(ctx, candidateLimit)
 		if err != nil {
@@ -448,15 +451,15 @@ func (m *SQLiteIndexManager) pruneEmbeddingCache(ctx context.Context, provider s
 	return err
 }
 
-func (m *SQLiteIndexManager) vectorProvider(ctx context.Context) (EmbeddingProvider, bool) {
+func (m *SQLiteIndexManager) vectorProvider(ctx context.Context) (EmbeddingProvider, bool, error) {
 	if !m.cfg.EnableVector {
-		return nil, false
+		return nil, false, nil
 	}
 	if m.embeddingProvider != nil {
-		return m.embeddingProvider, strings.EqualFold(m.embeddingProvider.ProviderName(), EmbeddingProviderLocal)
+		return m.embeddingProvider, strings.EqualFold(m.embeddingProvider.ProviderName(), EmbeddingProviderLocal), nil
 	}
 	if !strings.EqualFold(m.cfg.Provider, EmbeddingProviderLocal) {
-		return nil, false
+		return nil, false, nil
 	}
 
 	resolution, err := ResolveEmbeddingProvider(EmbeddingProviderConfig{
@@ -466,14 +469,14 @@ func (m *SQLiteIndexManager) vectorProvider(ctx context.Context) (EmbeddingProvi
 		Local:    m.cfg.Local,
 	})
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	if !strings.EqualFold(resolution.ProviderName, EmbeddingProviderLocal) {
-		return nil, false
+		return nil, false, nil
 	}
 	m.embeddingProvider = resolution.Provider
 	_ = ctx
-	return m.embeddingProvider, true
+	return m.embeddingProvider, true, nil
 }
 
 func (m *SQLiteIndexManager) resolveAllowedFile(path string) (MemoryFile, error) {

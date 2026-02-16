@@ -39,6 +39,10 @@ func TestBuildCommandArgsForRequestIncludesMCPFlagsAndSystemPrompt(t *testing.T)
 		Input:         "hello",
 		SystemContext: "system guidance",
 		SkillPrompt:   "skill guidance",
+		ToolDefinitions: []llm.ToolDefinition{
+			{Name: "memory_search"},
+			{Name: "memory_get"},
+		},
 	}
 	args := client.buildCommandArgsForRequest(req, "/tmp/mcp.json")
 	want := []string{
@@ -47,6 +51,7 @@ func TestBuildCommandArgsForRequestIncludesMCPFlagsAndSystemPrompt(t *testing.T)
 		"--verbose",
 		"--mcp-config", "/tmp/mcp.json",
 		"--strict-mcp-config",
+		"--allowed-tools", "mcp__localclaw__memory_search,mcp__localclaw__localclaw_memory_search,mcp__localclaw__memory_get,mcp__localclaw__localclaw_memory_get",
 		"--append-system-prompt", "system guidance\n\nskill guidance",
 	}
 	if len(args) != len(want) {
@@ -65,6 +70,16 @@ func TestBuildCommandArgsForRequestOmitsStrictFlagWhenDisabled(t *testing.T) {
 	for _, arg := range args {
 		if arg == "--strict-mcp-config" {
 			t.Fatalf("expected strict flag to be omitted when disabled")
+		}
+	}
+}
+
+func TestBuildCommandArgsForRequestOmitsAllowedToolsWhenNoToolDefinitions(t *testing.T) {
+	client := NewClient(Settings{BinaryPath: "claude", StrictMCPConfig: true})
+	args := client.buildCommandArgsForRequest(llm.Request{Input: "hello"}, "/tmp/mcp.json")
+	for _, arg := range args {
+		if arg == "--allowed-tools" {
+			t.Fatalf("expected allowed-tools flag to be omitted when no tool definitions are available")
 		}
 	}
 }

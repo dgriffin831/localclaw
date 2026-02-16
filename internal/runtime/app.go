@@ -124,9 +124,6 @@ func New(cfg config.Config) (*App, error) {
 		claudeClient := claudecode.NewClient(claudecode.Settings{
 			BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
 			Profile:             cfg.LLM.ClaudeCode.Profile,
-			UseGovCloud:         cfg.LLM.ClaudeCode.UseGovCloud,
-			BedrockRegion:       cfg.LLM.ClaudeCode.BedrockRegion,
-			AuthMode:            cfg.LLM.ClaudeCode.AuthMode,
 			StrictMCPConfig:     true,
 			MCPConfigDir:        filepath.Join(resolvedStateRoot, "runtime", "mcp"),
 			MCPServerBinaryPath: "localclaw",
@@ -165,7 +162,7 @@ func New(cfg config.Config) (*App, error) {
 
 	return &App{
 		cfg:    cfg,
-		memory: memory.NewLocalStore(cfg.Memory.Path),
+		memory: memory.NewLocalStore(""),
 		tools:  skills.DefaultToolRegistry(),
 		sessions: session.NewStore(session.Settings{
 			StateRoot:     cfg.State.Root,

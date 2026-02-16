@@ -3,7 +3,8 @@ package protocol
 import "encoding/json"
 
 const (
-	JSONRPCVersion = "2.0"
+	JSONRPCVersion     = "2.0"
+	MCPProtocolVersion = "2024-11-05"
 
 	JSONRPCParseError     = -32700
 	JSONRPCInvalidRequest = -32600

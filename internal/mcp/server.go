@@ -123,6 +123,9 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 				}
 				continue
 			}
+			if isNotificationRequest(req) {
+				continue
+			}
 
 			resp, err := s.handleRequest(ctx, req)
 			if err != nil {
@@ -160,7 +163,7 @@ func (s *Server) handleRequest(ctx context.Context, req protocol.Request) (proto
 
 func (s *Server) handleInitialize(id interface{}) protocol.Response {
 	result, _ := json.Marshal(protocol.InitializeResult{
-		ProtocolVersion: protocol.JSONRPCVersion,
+		ProtocolVersion: protocol.MCPProtocolVersion,
 		ServerInfo: protocol.ServerInfo{
 			Name:    s.serverName,
 			Version: s.serverVersion,
@@ -170,6 +173,14 @@ func (s *Server) handleInitialize(id interface{}) protocol.Response {
 		},
 	})
 	return protocol.Response{JSONRPC: protocol.JSONRPCVersion, ID: id, Result: result}
+}
+
+func isNotificationRequest(req protocol.Request) bool {
+	if req.ID != nil {
+		return false
+	}
+	method := strings.TrimSpace(req.Method)
+	return strings.HasPrefix(method, "notifications/")
 }
 
 func (s *Server) handleToolsList(id interface{}) protocol.Response {

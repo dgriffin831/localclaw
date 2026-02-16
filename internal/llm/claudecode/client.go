@@ -27,9 +27,6 @@ const (
 type Settings struct {
 	BinaryPath           string
 	Profile              string
-	UseGovCloud          bool
-	BedrockRegion        string
-	AuthMode             string
 	StrictMCPConfig      bool
 	MCPConfigDir         string
 	MCPServerBinaryPath  string
@@ -317,10 +314,49 @@ func (c *LocalClient) buildCommandArgsForRequest(req llm.Request, mcpConfigPath 
 	if c.settings.StrictMCPConfig {
 		args = append(args, "--strict-mcp-config")
 	}
+	if allowedTools := buildAllowedToolsForRequest(req); len(allowedTools) > 0 {
+		args = append(args, "--allowed-tools", strings.Join(allowedTools, ","))
+	}
 	if systemPrompt := buildAppendSystemPrompt(req); systemPrompt != "" {
 		args = append(args, "--append-system-prompt", systemPrompt)
 	}
 	return args
+}
+
+func buildAllowedToolsForRequest(req llm.Request) []string {
+	if len(req.ToolDefinitions) == 0 {
+		return nil
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(req.ToolDefinitions)*2)
+	add := func(name string) {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+
+	for _, tool := range req.ToolDefinitions {
+		name := strings.TrimSpace(tool.Name)
+		if name == "" {
+			continue
+		}
+		add("mcp__localclaw__" + name)
+		if strings.HasPrefix(name, "localclaw_") {
+			add("mcp__localclaw__" + strings.TrimPrefix(name, "localclaw_"))
+			continue
+		}
+		add("mcp__localclaw__localclaw_" + name)
+	}
+
+	return out
 }
 
 func buildAppendSystemPrompt(req llm.Request) string {
@@ -700,14 +736,6 @@ func (c *LocalClient) buildEnv() []string {
 
 	if c.settings.Profile != "" {
 		env = append(env, "AWS_PROFILE="+c.settings.Profile)
-	}
-	if c.settings.BedrockRegion != "" {
-		env = append(env, "AWS_REGION="+c.settings.BedrockRegion)
-		env = append(env, "AWS_DEFAULT_REGION="+c.settings.BedrockRegion)
-	}
-	if c.settings.UseGovCloud {
-		// TODO: replace with exact Claude Code CLI GovCloud knobs once pinned.
-		env = append(env, "LOCALCLAW_GOVCLOUD_MODE=1")
 	}
 
 	return env

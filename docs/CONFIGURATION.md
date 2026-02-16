@@ -19,8 +19,6 @@
 - `state`
 - `agents`
 - `session`
-- `memory`
-- `workspace`
 - `tools`
 - `skills`
 - `cron`
@@ -43,10 +41,18 @@
     "provider": "claudecode",
     "claude_code": {
       "binary_path": "claude",
-      "profile": "default",
-      "use_govcloud": false,
-      "bedrock_region": "",
-      "auth_mode": "default"
+      "profile": "default"
+    },
+    "codex": {
+      "binary_path": "codex",
+      "profile": "",
+      "model": "",
+      "mcp": {
+        "config_path": "",
+        "use_isolated_home": true,
+        "home_path": "",
+        "server_name": "localclaw"
+      }
     }
   },
   "channels": {
@@ -92,11 +98,7 @@
           }
         },
         "sync": {
-          "onSessionStart": false,
           "onSearch": false,
-          "watch": false,
-          "watchDebounceMs": 500,
-          "intervalMinutes": 0,
           "sessions": {
             "deltaBytes": 32768,
             "deltaMessages": 20
@@ -107,17 +109,11 @@
           "maxEntries": 1000
         },
         "local": {
+          "runtimePath": "",
           "modelPath": "",
-          "modelCacheDir": ""
-        },
-        "remote": {
-          "baseURL": "",
-          "apiKey": "",
-          "headers": {},
-          "batch": {
-            "enabled": false,
-            "size": 16
-          }
+          "modelCacheDir": "",
+          "queryTimeoutSeconds": 0,
+          "batchTimeoutSeconds": 0
         }
       },
       "compaction": {
@@ -135,12 +131,6 @@
   "session": {
     "store": "~/.localclaw/agents/{agentId}/sessions/sessions.json"
   },
-  "memory": {
-    "path": ".localclaw/memory.json"
-  },
-  "workspace": {
-    "root": "."
-  },
   "tools": {
     "delegated": {
       "enabled": false
@@ -157,32 +147,15 @@
 }
 ```
 
-## Compatibility mappings
-
-`applyCompatibilityMappings()` currently performs:
-
-- `workspace.root` -> `agents.defaults.workspace` when the new field is unset/defaulted.
-- `agents.defaults.workspace` -> `workspace.root` when legacy field is empty.
-- `memory.path` -> `agents.defaults.memorySearch.legacyImportPath` when unset.
-- If `state.root` changes and derived defaults are still untouched:
-  - rebase `session.store`
-  - rebase `agents.defaults.memorySearch.store.path`
-
-Notes:
-
-- `memory.path` is legacy compatibility metadata only in current runtime.
-- Startup does not automatically import legacy JSON memory into `MEMORY.md`.
-
 ## Validation rules
 
 General:
 
 - `app.name` is required.
 - `app.thinking_messages` entries must be non-blank when provided.
-- `llm.provider` must be `claudecode`.
+- `llm.provider` must be `claudecode` or `codex`.
 - `llm.claude_code.binary_path` is required.
-- `llm.claude_code.auth_mode` allowlist: `default`, `aws_profile`, `bedrock`.
-- if `llm.claude_code.use_govcloud=true`, `llm.claude_code.bedrock_region` is required.
+- `llm.codex.binary_path` is required when `llm.provider` is `codex`.
 - `channels.enabled` must contain at least one value.
 - `channels.enabled` allowlist: `slack`, `signal`.
 - duplicate channel names are rejected.
@@ -198,6 +171,11 @@ General:
   - `thresholdTokens`
   - `triggerWindowTokens`
   - `timeoutSeconds`
+- local embedding timeouts must be non-negative:
+  - `agents.defaults.memorySearch.local.queryTimeoutSeconds`
+  - `agents.defaults.memorySearch.local.batchTimeoutSeconds`
+  - same constraint applies to `agents.list[].memorySearch.local.*` overrides
+- `memorySearch.local.runtimePath` cannot be whitespace-only when set.
 - if heartbeat is enabled, `heartbeat.interval_seconds` must be `> 0`.
 
 Local-only hard guardrails (`ValidateLocalOnlyPolicy`):
@@ -223,6 +201,9 @@ Provider values:
 - Config accepts provider/fallback strings without strict validation.
 - Memory manager currently supports local-only embedding modes: `none` and `local`.
 - Unsupported provider values fail when memory manager resolves embedding provider.
+- When `provider=local` and fallback also requires local embeddings (for example `fallback=local`), `memorySearch.local.runtimePath` must point to an executable embedding runtime.
+- `memorySearch.local.modelPath` is currently validated as a file path (directory values are rejected).
+- See `docs/EMBEDDINGS.md` for local runtime + model setup.
 
 ## Tool policy configuration notes
 

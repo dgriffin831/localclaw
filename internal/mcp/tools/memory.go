@@ -58,8 +58,16 @@ func NewMemoryGetTool(backend MemoryBackend) MemoryGetTool {
 }
 
 func MemorySearchDefinition() protocol.Tool {
+	return memorySearchDefinition(ToolLocalclawMemorySearch)
+}
+
+func MemorySearchAliasDefinition() protocol.Tool {
+	return memorySearchDefinition(RuntimeToolMemorySearch)
+}
+
+func memorySearchDefinition(name string) protocol.Tool {
 	return protocol.Tool{
-		Name:        ToolLocalclawMemorySearch,
+		Name:        name,
 		Description: "Search indexed localclaw memory chunks",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -77,8 +85,16 @@ func MemorySearchDefinition() protocol.Tool {
 }
 
 func MemoryGetDefinition() protocol.Tool {
+	return memoryGetDefinition(ToolLocalclawMemoryGet)
+}
+
+func MemoryGetAliasDefinition() protocol.Tool {
+	return memoryGetDefinition(RuntimeToolMemoryGet)
+}
+
+func memoryGetDefinition(name string) protocol.Tool {
 	return protocol.Tool{
-		Name:        ToolLocalclawMemoryGet,
+		Name:        name,
 		Description: "Read a markdown memory file slice from the local index scope",
 		InputSchema: map[string]interface{}{
 			"type": "object",

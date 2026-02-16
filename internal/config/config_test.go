@@ -64,7 +64,7 @@ func TestLoadSupportsThinkingMessages(t *testing.T) {
 	}
 }
 
-func TestLoadMapsLegacyWorkspaceAndMemoryFields(t *testing.T) {
+func TestLoadIgnoresLegacyWorkspaceAndMemoryFields(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
@@ -79,50 +79,16 @@ func TestLoadMapsLegacyWorkspaceAndMemoryFields(t *testing.T) {
 	if err != nil {
 		fatalf(t, "load config: %v", err)
 	}
-	if cfg.Agents.Defaults.Workspace != "/tmp/legacy-workspace" {
-		fatalf(t, "expected legacy workspace to map to agents.defaults.workspace, got %q", cfg.Agents.Defaults.Workspace)
-	}
-	if cfg.Agents.Defaults.MemorySearch.LegacyImportPath != "/tmp/legacy-memory.json" {
-		fatalf(t, "expected legacy memory.path to map to agents.defaults.memorySearch.legacyImportPath, got %q", cfg.Agents.Defaults.MemorySearch.LegacyImportPath)
+	if cfg.Agents.Defaults.Workspace != Default().Agents.Defaults.Workspace {
+		fatalf(t, "expected legacy workspace to be ignored, got %q", cfg.Agents.Defaults.Workspace)
 	}
 }
 
-func TestLoadPrefersExplicitNewFieldsOverLegacyMappings(t *testing.T) {
+func TestLoadUsesExplicitAgentDefaultsWorkspace(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
 		"workspace": {"root": "/tmp/legacy-workspace"},
-		"memory": {"path": "/tmp/legacy-memory.json"},
-		"agents": {
-			"defaults": {
-				"workspace": "/tmp/new-workspace",
-				"memorySearch": {
-					"legacyImportPath": "/tmp/new-memory.json"
-				}
-			}
-		}
-	}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
-		fatalf(t, "write config: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		fatalf(t, "load config: %v", err)
-	}
-	if cfg.Agents.Defaults.Workspace != "/tmp/new-workspace" {
-		fatalf(t, "expected explicit agents.defaults.workspace to be preserved, got %q", cfg.Agents.Defaults.Workspace)
-	}
-	if cfg.Agents.Defaults.MemorySearch.LegacyImportPath != "/tmp/new-memory.json" {
-		fatalf(t, "expected explicit memorySearch.legacyImportPath to be preserved, got %q", cfg.Agents.Defaults.MemorySearch.LegacyImportPath)
-	}
-}
-
-func TestLoadMapsAgentDefaultWorkspaceToLegacyWorkspaceRoot(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "config.json")
-	payload := `{
-		"workspace": {"root": ""},
 		"agents": {
 			"defaults": {
 				"workspace": "/tmp/new-workspace"
@@ -137,12 +103,12 @@ func TestLoadMapsAgentDefaultWorkspaceToLegacyWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		fatalf(t, "load config: %v", err)
 	}
-	if cfg.Workspace.Root != "/tmp/new-workspace" {
-		fatalf(t, "expected agents.defaults.workspace to map to workspace.root for compatibility, got %q", cfg.Workspace.Root)
+	if cfg.Agents.Defaults.Workspace != "/tmp/new-workspace" {
+		fatalf(t, "expected explicit agents.defaults.workspace to be preserved, got %q", cfg.Agents.Defaults.Workspace)
 	}
 }
 
-func TestLoadRebasesDerivedDefaultsWhenStateRootChanges(t *testing.T) {
+func TestLoadDoesNotRebaseDerivedDefaultsWhenStateRootChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
 	payload := `{
@@ -156,11 +122,12 @@ func TestLoadRebasesDerivedDefaultsWhenStateRootChanges(t *testing.T) {
 	if err != nil {
 		fatalf(t, "load config: %v", err)
 	}
-	if cfg.Session.Store != "/var/lib/localclaw/agents/{agentId}/sessions/sessions.json" {
-		fatalf(t, "expected session.store to rebase to state.root, got %q", cfg.Session.Store)
+	defaults := Default()
+	if cfg.Session.Store != defaults.Session.Store {
+		fatalf(t, "expected session.store default without rebasing, got %q", cfg.Session.Store)
 	}
-	if cfg.Agents.Defaults.MemorySearch.Store.Path != "/var/lib/localclaw/memory/{agentId}.sqlite" {
-		fatalf(t, "expected memorySearch.store.path to rebase to state.root, got %q", cfg.Agents.Defaults.MemorySearch.Store.Path)
+	if cfg.Agents.Defaults.MemorySearch.Store.Path != defaults.Agents.Defaults.MemorySearch.Store.Path {
+		fatalf(t, "expected memorySearch.store.path default without rebasing, got %q", cfg.Agents.Defaults.MemorySearch.Store.Path)
 	}
 }
 
@@ -212,20 +179,30 @@ func TestValidateRejectsNetworkServerFlags(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsUnsupportedClaudeAuthMode(t *testing.T) {
-	cfg := Default()
-	cfg.LLM.ClaudeCode.AuthMode = "oidc"
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected unsupported auth mode error")
+func TestLoadIgnoresLegacyGovCloudFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"llm": {
+			"provider": "claudecode",
+			"claude_code": {
+				"binary_path": "claude",
+				"profile": "default",
+				"use_govcloud": true,
+				"bedrock_region": ""
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+		fatalf(t, "write config: %v", err)
 	}
-}
 
-func TestValidateRequiresGovCloudRegion(t *testing.T) {
-	cfg := Default()
-	cfg.LLM.ClaudeCode.UseGovCloud = true
-	cfg.LLM.ClaudeCode.BedrockRegion = ""
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected govcloud region error")
+	cfg, err := Load(path)
+	if err != nil {
+		fatalf(t, "expected legacy govcloud fields to be ignored, got error: %v", err)
+	}
+	if cfg.LLM.Provider != "claudecode" {
+		fatalf(t, "expected provider claudecode, got %q", cfg.LLM.Provider)
 	}
 }
 
@@ -274,11 +251,75 @@ func TestValidateRejectsNegativeMemoryFlushValues(t *testing.T) {
 	}
 }
 
+func TestLoadSupportsMemoryLocalEmbeddingSettings(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"defaults": {
+				"memorySearch": {
+					"local": {
+						"runtimePath": "/usr/local/bin/local-embed",
+						"modelPath": "/models/embeddinggemma-300m",
+						"modelCacheDir": "/var/cache/localclaw/models",
+						"queryTimeoutSeconds": 7,
+						"batchTimeoutSeconds": 29
+					}
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+		fatalf(t, "write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		fatalf(t, "load config: %v", err)
+	}
+
+	if cfg.Agents.Defaults.MemorySearch.Local.RuntimePath != "/usr/local/bin/local-embed" {
+		fatalf(t, "expected memorySearch.local.runtimePath to load, got %q", cfg.Agents.Defaults.MemorySearch.Local.RuntimePath)
+	}
+	if cfg.Agents.Defaults.MemorySearch.Local.ModelPath != "/models/embeddinggemma-300m" {
+		fatalf(t, "expected memorySearch.local.modelPath to load, got %q", cfg.Agents.Defaults.MemorySearch.Local.ModelPath)
+	}
+	if cfg.Agents.Defaults.MemorySearch.Local.ModelCacheDir != "/var/cache/localclaw/models" {
+		fatalf(t, "expected memorySearch.local.modelCacheDir to load, got %q", cfg.Agents.Defaults.MemorySearch.Local.ModelCacheDir)
+	}
+	if cfg.Agents.Defaults.MemorySearch.Local.QueryTimeoutSeconds != 7 {
+		fatalf(t, "expected memorySearch.local.queryTimeoutSeconds=7, got %d", cfg.Agents.Defaults.MemorySearch.Local.QueryTimeoutSeconds)
+	}
+	if cfg.Agents.Defaults.MemorySearch.Local.BatchTimeoutSeconds != 29 {
+		fatalf(t, "expected memorySearch.local.batchTimeoutSeconds=29, got %d", cfg.Agents.Defaults.MemorySearch.Local.BatchTimeoutSeconds)
+	}
+}
+
 func TestValidateRejectsBlankThinkingMessages(t *testing.T) {
 	cfg := Default()
 	cfg.App.ThinkingMessages = []string{"thinking", "   "}
 	if err := cfg.Validate(); err == nil {
 		fatalf(t, "expected blank thinking message error")
+	}
+}
+
+func TestValidateRejectsInvalidLocalEmbeddingConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Agents.Defaults.MemorySearch.Local.RuntimePath = "   "
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected blank local runtimePath validation error")
+	}
+
+	cfg = Default()
+	cfg.Agents.Defaults.MemorySearch.Local.QueryTimeoutSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected negative queryTimeoutSeconds validation error")
+	}
+
+	cfg = Default()
+	cfg.Agents.Defaults.MemorySearch.Local.BatchTimeoutSeconds = -1
+	if err := cfg.Validate(); err == nil {
+		fatalf(t, "expected negative batchTimeoutSeconds validation error")
 	}
 }
 

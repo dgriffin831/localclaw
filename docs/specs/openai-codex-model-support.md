@@ -137,11 +137,27 @@ JSON stream parsing contract:
 - parse JSONL events from stdout.
 - treat Codex `item.completed` with `item.type=="agent_message"` as assistant content.
 - emit as `delta` and aggregate for `final` event.
-- ignore non-message events except for diagnostics hooks.
 - parse provider init/capability metadata (when present) and emit `provider_metadata` with:
   - provider id (`codex`)
   - model (if present)
   - provider-native tools (if present)
+- parse tool lifecycle events for shell/tool execution:
+  - `item.started` + `item.type=="command_execution"` -> emit `tool_call`
+    - `tool_call.id` = item `id`
+    - `tool_call.name` = `command_execution`
+    - `tool_call.class` = provider-native/delegated
+    - `tool_call.args.command` = item `command`
+  - `item.completed` + `item.type=="command_execution"` -> emit `tool_result`
+    - `tool_result.call_id` = item `id`
+    - `tool_result.tool` = `command_execution`
+    - `tool_result.status` = item `status` (for example `completed`, `failed`, `cancelled`)
+    - `tool_result.ok` = true only when status indicates success and `exit_code==0`
+    - `tool_result.error` populated when non-zero `exit_code` or provider reports failure text
+    - `tool_result.data` includes:
+      - `command`
+      - `aggregated_output`
+      - `exit_code`
+- ignore non-tool/non-message events by default (for example `thread.started`, `turn.started`, `turn.completed`, reasoning items), while keeping parser tolerant to unknown future event types.
 
 Failure contract:
 - capture stderr; include it in wait/start/read errors.

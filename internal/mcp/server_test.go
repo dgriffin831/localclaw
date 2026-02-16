@@ -154,3 +154,36 @@ func TestServerListToolsDeduplicatesToolNames(t *testing.T) {
 		t.Fatalf("expected latest registration to win, got %+v", listResult.Tools[0])
 	}
 }
+
+func TestServerInitializeReturnsMCPProtocolVersion(t *testing.T) {
+	server := NewServer(Settings{})
+	input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n")
+	var out bytes.Buffer
+	if err := server.Serve(context.Background(), input, &out); err != nil {
+		t.Fatalf("Serve error: %v", err)
+	}
+
+	var resp protocol.Response
+	if err := json.NewDecoder(&out).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	var initResult protocol.InitializeResult
+	if err := json.Unmarshal(resp.Result, &initResult); err != nil {
+		t.Fatalf("unmarshal initialize result: %v", err)
+	}
+	if initResult.ProtocolVersion != protocol.MCPProtocolVersion {
+		t.Fatalf("expected protocolVersion %q, got %q", protocol.MCPProtocolVersion, initResult.ProtocolVersion)
+	}
+}
+
+func TestServerIgnoresInitializedNotification(t *testing.T) {
+	server := NewServer(Settings{})
+	input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\",\"params\":{}}\n")
+	var out bytes.Buffer
+	if err := server.Serve(context.Background(), input, &out); err != nil {
+		t.Fatalf("Serve error: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no response for notification, got %q", out.String())
+	}
+}

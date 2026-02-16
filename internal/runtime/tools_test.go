@@ -739,7 +739,6 @@ func newToolTestApp(t *testing.T, toolsEnabled bool) (config.Config, *App, strin
 	cfg := config.Default()
 	cfg.State.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = filepath.Join(cfg.State.Root, "agents", "{agentId}", "sessions", "sessions.json")
 	cfg.Agents.Defaults.MemorySearch.Enabled = toolsEnabled
 	cfg.Agents.Defaults.MemorySearch.Sources = []string{"memory"}

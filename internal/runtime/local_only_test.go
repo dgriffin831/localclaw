@@ -97,7 +97,6 @@ func TestAppResolvesWorkspaceAndSessionPaths(t *testing.T) {
 	cfg := config.Default()
 	cfg.State.Root = stateRoot
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)
@@ -142,7 +141,6 @@ func TestRunBootstrapsDefaultConfigFileWhenMissing(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 	cfg.Cron.Enabled = false
 	cfg.Heartbeat.Enabled = false
@@ -191,7 +189,6 @@ func TestRunDoesNotOverwriteExistingBootstrappedConfigFile(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 	cfg.Cron.Enabled = false
 	cfg.Heartbeat.Enabled = false
@@ -346,45 +343,74 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	}
 }
 
-func TestRunDoesNotImportLegacyMemoryJSON(t *testing.T) {
+func TestPromptForSessionIncludesAllowedMCPMemoryToolsForClaude(t *testing.T) {
 	stateRoot := t.TempDir()
-	legacyPath := filepath.Join(t.TempDir(), "legacy-memory.json")
-	if err := os.WriteFile(legacyPath, []byte(`{"topic":"legacy alpha"}`), 0o600); err != nil {
-		t.Fatalf("write legacy memory json: %v", err)
+	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
+	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+`, argsPath)
+	if err := os.WriteFile(claudeScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
 	}
 
 	cfg := config.Default()
 	cfg.State.Root = stateRoot
-	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
-	cfg.Memory.Path = legacyPath
-	cfg.Cron.Enabled = false
-	cfg.Heartbeat.Enabled = false
+	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
+	cfg.Agents.Defaults.MemorySearch.Enabled = true
+	cfg.Agents.Defaults.MemorySearch.Provider = "none"
+	cfg.Agents.Defaults.MemorySearch.Fallback = "none"
+	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
+	cfg.Agents.Defaults.MemorySearch.Store.Vector.Enabled = false
+	cfg.Agents.Defaults.MemorySearch.Cache.Enabled = false
+	cfg.Agents.Defaults.MemorySearch.Query.Hybrid.Enabled = false
 
 	app, err := New(cfg)
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
-	if err := app.Run(context.Background()); err != nil {
-		t.Fatalf("run app: %v", err)
+
+	if _, err := app.PromptForSession(context.Background(), "", "", "hello"); err != nil {
+		t.Fatalf("prompt for session: %v", err)
 	}
 
-	workspacePath, err := app.ResolveWorkspacePath("")
+	argsFile, err := os.Open(argsPath)
 	if err != nil {
-		t.Fatalf("resolve workspace path: %v", err)
+		t.Fatalf("open captured args: %v", err)
 	}
-	memoryPath := filepath.Join(workspacePath, "MEMORY.md")
-	body, err := os.ReadFile(memoryPath)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read MEMORY.md: %v", err)
+	defer argsFile.Close()
+
+	var args []string
+	scanner := bufio.NewScanner(argsFile)
+	for scanner.Scan() {
+		args = append(args, strings.TrimSpace(scanner.Text()))
 	}
-	if err == nil && strings.Contains(string(body), "\"legacy alpha\"") {
-		t.Fatalf("did not expect legacy JSON data to be imported into MEMORY.md")
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan captured args: %v", err)
 	}
 
-	markerPath := filepath.Join(workspacePath, ".localclaw-legacy-memory-import-v1")
-	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
-		t.Fatalf("did not expect legacy import marker file, got err=%v", err)
+	var allowedTools string
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--allowed-tools" {
+			allowedTools = args[i+1]
+			break
+		}
+	}
+	if allowedTools == "" {
+		t.Fatalf("expected --allowed-tools flag in args: %v", args)
+	}
+	wantTools := []string{
+		"mcp__localclaw__memory_search",
+		"mcp__localclaw__localclaw_memory_search",
+		"mcp__localclaw__memory_get",
+		"mcp__localclaw__localclaw_memory_get",
+	}
+	for _, tool := range wantTools {
+		if !strings.Contains(allowedTools, tool) {
+			t.Fatalf("expected allowed tools to include %q, got %q", tool, allowedTools)
+		}
 	}
 }
 
@@ -471,7 +497,6 @@ func TestResetSessionCreatesSessionMemorySnapshot(t *testing.T) {
 	cfg := config.Default()
 	cfg.State.Root = stateRoot
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)
@@ -534,7 +559,6 @@ func TestResetSessionHookFailureIsNonFatal(t *testing.T) {
 	cfg := config.Default()
 	cfg.State.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)
@@ -567,7 +591,6 @@ func TestResetSessionStartNewAvoidsCurrentSessionIDCollision(t *testing.T) {
 	cfg := config.Default()
 	cfg.State.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)
@@ -601,7 +624,6 @@ func TestResetSessionStartNewAvoidsExistingTranscriptCollision(t *testing.T) {
 	cfg := config.Default()
 	cfg.State.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
-	cfg.Workspace.Root = "."
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 
 	app, err := New(cfg)

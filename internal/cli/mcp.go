@@ -80,7 +80,15 @@ func newMCPServer(app *runtime.App) (*mcp.Server, error) {
 			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemorySearch, searchTool.Call),
 		},
 		{
+			Definition: mcpTools.MemorySearchAliasDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemorySearch, searchTool.Call),
+		},
+		{
 			Definition: mcpTools.MemoryGetDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGet, getTool.Call),
+		},
+		{
+			Definition: mcpTools.MemoryGetAliasDefinition(),
 			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGet, getTool.Call),
 		},
 		{

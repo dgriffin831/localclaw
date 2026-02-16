@@ -7,7 +7,7 @@
 - Local-only enforcement is enabled by default.
 - Any config enabling gateway/server/listener behavior fails startup.
 - Channels are restricted to `slack` and `signal` identifiers.
-- LLM provider is constrained to local Claude Code CLI subprocess invocation.
+- LLM providers are constrained to local CLI subprocess invocation (`claudecode` or `codex`).
 - Runtime tool execution is policy-mediated (deny/allow + delegated gating).
 
 ## Enforced guardrails
@@ -38,9 +38,9 @@ Guardrail violations fail startup before runtime initialization.
 
 ## LLM execution boundary
 
-- Claude Code integration is local subprocess only (`exec.CommandContext`).
+- Claude Code and Codex integrations are local subprocess only (`exec.CommandContext`).
 - No direct model HTTP client is implemented in `localclaw`.
-- AWS/GovCloud values are passed as environment variables to the subprocess.
+- Claude subprocess environment inherits parent process variables (with optional profile override).
 - Structured tool-call orchestration, when available, is still mediated by local runtime policy.
 
 ## Tool boundary and delegated controls

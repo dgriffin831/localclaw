@@ -70,26 +70,33 @@ func TestMCPServerAppliesRuntimeToolPolicy(t *testing.T) {
 		t.Fatalf("newMCPServer error: %v", err)
 	}
 
-	input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"localclaw_memory_search\",\"arguments\":{\"query\":\"needle\"}}}\n")
-	var out bytes.Buffer
-	if err := server.Serve(context.Background(), input, &out); err != nil {
-		t.Fatalf("Serve error: %v", err)
-	}
+	toolNames := []string{"localclaw_memory_search", "memory_search"}
+	for _, toolName := range toolNames {
+		input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" + toolName + "\",\"arguments\":{\"query\":\"needle\"}}}\n")
+		var out bytes.Buffer
+		if err := server.Serve(context.Background(), input, &out); err != nil {
+			t.Fatalf("Serve error for %s: %v", toolName, err)
+		}
 
-	var resp struct {
-		Result struct {
-			IsError           bool                   `json:"isError"`
-			StructuredContent map[string]interface{} `json:"structuredContent"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(&out).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !resp.Result.IsError {
-		t.Fatalf("expected tool policy error response")
-	}
-	if got := resp.Result.StructuredContent["ok"]; got != false {
-		t.Fatalf("expected ok=false, got %v", got)
+		var resp struct {
+			Result struct {
+				IsError           bool                   `json:"isError"`
+				StructuredContent map[string]interface{} `json:"structuredContent"`
+			} `json:"result"`
+		}
+		if err := json.NewDecoder(&out).Decode(&resp); err != nil {
+			t.Fatalf("decode response for %s: %v", toolName, err)
+		}
+		if !resp.Result.IsError {
+			t.Fatalf("expected tool policy error response for %s", toolName)
+		}
+		if got := resp.Result.StructuredContent["ok"]; got != false {
+			t.Fatalf("expected ok=false for %s, got %v", toolName, got)
+		}
+		errorText, _ := resp.Result.StructuredContent["error"].(string)
+		if !strings.Contains(strings.ToLower(errorText), "denied") {
+			t.Fatalf("expected policy denied error for %s, got %q", toolName, errorText)
+		}
 	}
 }
 
@@ -143,6 +150,8 @@ func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 		"localclaw_sessions_send",
 		"localclaw_workspace_bootstrap_context",
 		"localclaw_workspace_status",
+		"memory_get",
+		"memory_search",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("unexpected tool count %d: %v", len(names), names)

@@ -58,18 +58,20 @@ This scaffold file is not auto-loaded unless you pass `-config`.
 - `Ctrl+J` insert newline
 - `Tab` autocomplete selected slash command while typing `/...`
 - `Shift+Tab` move slash-command selection backward
-- `Up/Down` navigate slash-command suggestions when slash menu is open
+- `Up/Down` navigate slash-command suggestions when slash menu is open; otherwise they continue prompt history traversal only after a non-empty draft (or active history selection), and default to transcript scrolling from an empty draft
 - `Ctrl+P` / `Ctrl+N` (also `Alt+Up` / `Alt+Down`) navigate prompt history
 - `Mouse wheel` scroll transcript viewport
 - `Esc` abort active run
 - `Ctrl+T` toggle thinking visibility
-- `Ctrl+O` toggle tool-card expansion flag
+- `Ctrl+O` expand/collapse tool-card details in the transcript
+- `Ctrl+Y` toggle mouse capture (off enables standard text selection)
 - `Ctrl+C` clear input (press twice quickly to exit)
 - `Ctrl+D` exit when input is empty
 
 TUI slash commands:
 
 - `/help`
+- `/shortcuts`
 - `/status`
 - `/tools`
 - `/clear`
@@ -77,6 +79,7 @@ TUI slash commands:
 - `/new`
 - `/thinking <on|off>`
 - `/verbose <on|off>`
+- `/mouse <on|off>`
 - `/model <name>` (currently a placeholder; override is not implemented)
 - `/exit`
 - `/quit`
@@ -108,6 +111,7 @@ Optional waiting-text customization:
 - `docs/ARCHITECTURE.md` - implementation-detail architecture map.
 - `docs/RUNTIME.md` - startup flow and command mode behavior.
 - `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
+- `docs/EMBEDDINGS.md` - local embedding runtime setup and Hugging Face model installation.
 - `docs/TUI.md` - terminal UX behavior and controls.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
 - `docs/TESTING.md` - package coverage and Red/Green command loops.
