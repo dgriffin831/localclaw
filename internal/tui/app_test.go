@@ -362,7 +362,13 @@ func TestHandleSlashToolsShowsProviderWhenRuntimeUnavailable(t *testing.T) {
 	if !strings.Contains(got, "provider="+cfg.LLM.Provider) {
 		t.Fatalf("expected /tools output to include provider, got %q", got)
 	}
-	if !strings.Contains(got, "runtime unavailable") {
+	if !strings.Contains(got, "provider_native:") {
+		t.Fatalf("expected /tools output to include provider_native section, got %q", got)
+	}
+	if !strings.Contains(got, "localclaw_mcp:") {
+		t.Fatalf("expected /tools output to include localclaw_mcp section, got %q", got)
+	}
+	if !strings.Contains(got, "- runtime unavailable") {
 		t.Fatalf("expected /tools output to mention runtime availability, got %q", got)
 	}
 }
@@ -401,6 +407,9 @@ func TestHandleSlashToolsShowsLocalclawTools(t *testing.T) {
 	if !strings.Contains(got, "provider="+cfg.LLM.Provider) {
 		t.Fatalf("expected /tools output to include provider, got %q", got)
 	}
+	if !strings.Contains(got, "provider_native:") || !strings.Contains(got, "localclaw_mcp:") {
+		t.Fatalf("expected /tools output to include ownership split sections, got %q", got)
+	}
 	if !strings.Contains(got, "memory_search") {
 		t.Fatalf("expected /tools output to include memory_search, got %q", got)
 	}
@@ -429,7 +438,10 @@ func TestHandleSlashToolsShowsDiscoveredProviderTools(t *testing.T) {
 	_ = m.handleSlash("/tools")
 
 	got := m.messages[len(m.messages)-1].Raw
-	if !strings.Contains(got, "provider tools: Bash, Task, WebFetch") {
+	if !strings.Contains(got, "provider_native:") {
+		t.Fatalf("expected provider_native section in /tools output, got %q", got)
+	}
+	if !strings.Contains(got, "- Bash, Task, WebFetch") {
 		t.Fatalf("expected discovered provider tools in /tools output, got %q", got)
 	}
 }
@@ -626,7 +638,8 @@ func TestToolCallEventSurfacesToolActivity(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolCall,
 			ToolCall: &llm.ToolCall{
-				Name: "memory_search",
+				Name:  "memory_search",
+				Class: llm.ToolClassLocal,
 			},
 		},
 	})
@@ -642,6 +655,9 @@ func TestToolCallEventSurfacesToolActivity(t *testing.T) {
 	if !strings.Contains(last.Raw, "memory_search") {
 		t.Fatalf("expected tool call message to mention tool name, got %q", last.Raw)
 	}
+	if !strings.Contains(last.Raw, "[localclaw_mcp]") {
+		t.Fatalf("expected tool call message to include ownership label, got %q", last.Raw)
+	}
 }
 
 func TestToolResultEventReturnsToWaitingState(t *testing.T) {
@@ -656,8 +672,9 @@ func TestToolResultEventReturnsToWaitingState(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolResult,
 			ToolResult: &llm.ToolResult{
-				Tool: "memory_search",
-				OK:   true,
+				Tool:  "memory_search",
+				Class: llm.ToolClassDelegated,
+				OK:    true,
 			},
 		},
 	})
@@ -672,6 +689,94 @@ func TestToolResultEventReturnsToWaitingState(t *testing.T) {
 	last := next.messages[len(next.messages)-1]
 	if !strings.Contains(last.Raw, "memory_search") {
 		t.Fatalf("expected tool result message to mention tool name, got %q", last.Raw)
+	}
+	if !strings.Contains(last.Raw, "[provider_native]") {
+		t.Fatalf("expected tool result message to include ownership label, got %q", last.Raw)
+	}
+}
+
+func TestToolResultEventUsesCallOwnershipWhenResultClassMissing(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.running = true
+	m.activeRunID = 7
+	m.status = statusWaiting
+
+	updated, _ := m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{
+			Type: llm.StreamEventToolCall,
+			ToolCall: &llm.ToolCall{
+				ID:    "call-123",
+				Name:  "Bash",
+				Class: llm.ToolClassDelegated,
+			},
+		},
+	})
+	m = updated.(model)
+
+	updated, _ = m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{
+			Type: llm.StreamEventToolResult,
+			ToolResult: &llm.ToolResult{
+				CallID: "call-123",
+				Tool:   "Bash",
+				OK:     true,
+			},
+		},
+	})
+	next := updated.(model)
+	last := next.messages[len(next.messages)-1]
+	if !strings.Contains(last.Raw, "[provider_native]") {
+		t.Fatalf("expected ownership to resolve from prior call id, got %q", last.Raw)
+	}
+}
+
+func TestToolResultEventWithoutOwnershipShowsUnspecified(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.running = true
+	m.activeRunID = 7
+	m.status = statusWaiting
+
+	updated, _ := m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{
+			Type: llm.StreamEventToolResult,
+			ToolResult: &llm.ToolResult{
+				Tool: "mystery_tool",
+				OK:   true,
+			},
+		},
+	})
+	next := updated.(model)
+	last := next.messages[len(next.messages)-1]
+	if !strings.Contains(last.Raw, "[unspecified]") {
+		t.Fatalf("expected unknown ownership label, got %q", last.Raw)
+	}
+}
+
+func TestFinishRunClearsToolCallOwnershipCache(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.toolCallOwnershipByID["call-123"] = llm.ToolClassDelegated
+
+	m.finishRun(statusIdle)
+
+	if len(m.toolCallOwnershipByID) != 0 {
+		t.Fatalf("expected finishRun to clear call ownership cache")
+	}
+}
+
+func TestAbortRunClearsToolCallOwnershipCache(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.toolCallOwnershipByID["call-123"] = llm.ToolClassDelegated
+
+	m.abortRun("aborted")
+
+	if len(m.toolCallOwnershipByID) != 0 {
+		t.Fatalf("expected abortRun to clear call ownership cache")
 	}
 }
 

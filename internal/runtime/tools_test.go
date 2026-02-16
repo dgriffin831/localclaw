@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -394,45 +396,36 @@ func TestExecuteToolRejectsFractionalMaxResults(t *testing.T) {
 	}
 }
 
-func TestPromptStreamStructuredToolLoopExecutesLocalTools(t *testing.T) {
+func TestPromptStreamForSessionHardCutoverDoesNotExecuteLegacyStructuredToolLoop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	_, app, workspace := newToolTestApp(t, true)
-	if err := osWriteFile(filepath.Join(workspace, "MEMORY.md"), "search target line"); err != nil {
-		t.Fatalf("write memory file: %v", err)
-	}
+	_, app, _ := newToolTestApp(t, true)
+	respondCalled := make(chan struct{}, 1)
 
 	app.llm = &structuredToolLoopClient{
 		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
-			events := make(chan llm.StreamEvent, 4)
+			events := make(chan llm.StreamEvent, 2)
 			errs := make(chan error, 1)
-			resultCh := make(chan llm.ToolResult, 1)
-
 			go func() {
 				defer close(events)
 				defer close(errs)
-
 				events <- llm.StreamEvent{
 					Type: llm.StreamEventToolCall,
 					ToolCall: &llm.ToolCall{
-						ID:    "tool-1",
+						ID:    "tool-legacy",
 						Name:  skills.ToolMemorySearch,
 						Args:  map[string]interface{}{"query": "search target"},
 						Class: llm.ToolClassLocal,
 						Respond: func(ctx context.Context, result llm.ToolResult) error {
-							resultCh <- result
+							select {
+							case respondCalled <- struct{}{}:
+							default:
+							}
 							return nil
 						},
 					},
 				}
-
-				result := <-resultCh
-				if !result.OK {
-					errs <- context.DeadlineExceeded
-					return
-				}
-
 				events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "final output"}
 			}()
 			return events, errs
@@ -441,7 +434,8 @@ func TestPromptStreamStructuredToolLoopExecutesLocalTools(t *testing.T) {
 
 	events, errs := app.PromptStreamForSession(ctx, "", "", "hello")
 	final := ""
-	toolCompleted := false
+	sawToolCall := false
+	sawToolResult := false
 
 	for events != nil || errs != nil {
 		select {
@@ -450,8 +444,11 @@ func TestPromptStreamStructuredToolLoopExecutesLocalTools(t *testing.T) {
 				events = nil
 				continue
 			}
-			if evt.Type == llm.StreamEventToolResult && evt.ToolResult != nil && evt.ToolResult.OK {
-				toolCompleted = true
+			if evt.Type == llm.StreamEventToolCall && evt.ToolCall != nil {
+				sawToolCall = true
+			}
+			if evt.Type == llm.StreamEventToolResult {
+				sawToolResult = true
 			}
 			if evt.Type == llm.StreamEventFinal {
 				final = strings.TrimSpace(evt.Text)
@@ -467,83 +464,224 @@ func TestPromptStreamStructuredToolLoopExecutesLocalTools(t *testing.T) {
 		}
 	}
 
-	if !toolCompleted {
-		t.Fatalf("expected tool result event in structured loop")
+	if !sawToolCall {
+		t.Fatalf("expected provider tool call event to pass through")
+	}
+	if sawToolResult {
+		t.Fatalf("did not expect runtime to execute legacy structured tool loop")
+	}
+	select {
+	case <-respondCalled:
+		t.Fatalf("did not expect tool responder to be called in hard-cutover mode")
+	default:
 	}
 	if final != "final output" {
 		t.Fatalf("expected final output after tool loop, got %q", final)
 	}
 }
 
-func TestPromptStreamStructuredToolLoopContinuesAfterToolError(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	_, app, _ := newToolTestApp(t, true)
-	app.llm = &structuredToolLoopClient{
-		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
-			events := make(chan llm.StreamEvent, 4)
-			errs := make(chan error, 1)
-			resultCh := make(chan llm.ToolResult, 1)
-
-			go func() {
-				defer close(events)
-				defer close(errs)
-
-				events <- llm.StreamEvent{
-					Type: llm.StreamEventToolCall,
-					ToolCall: &llm.ToolCall{
-						ID:    "tool-err",
-						Name:  "unknown_tool",
-						Args:  map[string]interface{}{},
-						Class: llm.ToolClassLocal,
-						Respond: func(ctx context.Context, result llm.ToolResult) error {
-							resultCh <- result
-							return nil
-						},
-					},
-				}
-				_ = <-resultCh
-				events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "still final"}
-			}()
-			return events, errs
-		},
+func TestHandleToolCallEventTelemetryIncludesOwnershipClassOnAllEvents(t *testing.T) {
+	ctx := context.Background()
+	_, app, workspace := newToolTestApp(t, true)
+	if err := osWriteFile(filepath.Join(workspace, "MEMORY.md"), "incident summary"); err != nil {
+		t.Fatalf("write memory file: %v", err)
 	}
 
-	events, errs := app.PromptStreamForSession(ctx, "", "", "hello")
-	final := ""
-	sawToolError := false
+	outEvents := make(chan llm.StreamEvent, 1)
+	outErrs := make(chan error, 1)
+	ok := app.handleToolCallEvent(ctx, ResolveSession("", ""), &llm.ToolCall{
+		ID:    "tool-1",
+		Name:  skills.ToolMemorySearch,
+		Class: llm.ToolClassUnspecified,
+		Args: map[string]interface{}{
+			"query": "incident",
+		},
+	}, outEvents, outErrs)
+	if !ok {
+		t.Fatalf("expected handleToolCallEvent to succeed")
+	}
 
-	for events != nil || errs != nil {
-		select {
-		case evt, ok := <-events:
-			if !ok {
-				events = nil
-				continue
+	select {
+	case err := <-outErrs:
+		if err != nil {
+			t.Fatalf("unexpected tool call error: %v", err)
+		}
+	default:
+	}
+
+	select {
+	case evt := <-outEvents:
+		if evt.ToolResult == nil {
+			t.Fatalf("expected tool result event payload")
+		}
+		if evt.ToolResult.Class != llm.ToolClassLocal {
+			t.Fatalf("expected tool result class local, got %q", evt.ToolResult.Class)
+		}
+	default:
+		t.Fatalf("expected tool result event")
+	}
+
+	transcriptPath, err := app.ResolveTranscriptPath("", "")
+	if err != nil {
+		t.Fatalf("resolve transcript path: %v", err)
+	}
+
+	seenStarted := false
+	seenCompleted := false
+	for _, payload := range readToolPayloadsFromTranscript(t, transcriptPath) {
+		eventType := strings.TrimSpace(fmt.Sprintf("%v", payload["type"]))
+		class := strings.TrimSpace(fmt.Sprintf("%v", payload["class"]))
+		switch eventType {
+		case "tool_call_started":
+			seenStarted = true
+			if class != string(llm.ToolClassLocal) {
+				t.Fatalf("expected started class %q, got %q", llm.ToolClassLocal, class)
 			}
-			if evt.Type == llm.StreamEventToolResult && evt.ToolResult != nil && !evt.ToolResult.OK {
-				sawToolError = true
-			}
-			if evt.Type == llm.StreamEventFinal {
-				final = strings.TrimSpace(evt.Text)
-			}
-		case err, ok := <-errs:
-			if !ok {
-				errs = nil
-				continue
-			}
-			if err != nil {
-				t.Fatalf("unexpected stream error: %v", err)
+		case "tool_call_completed":
+			seenCompleted = true
+			if class != string(llm.ToolClassLocal) {
+				t.Fatalf("expected completed class %q, got %q", llm.ToolClassLocal, class)
 			}
 		}
 	}
+	if !seenStarted {
+		t.Fatalf("expected tool_call_started telemetry event")
+	}
+	if !seenCompleted {
+		t.Fatalf("expected tool_call_completed telemetry event")
+	}
+}
 
-	if !sawToolError {
-		t.Fatalf("expected structured tool error result event")
+func TestHandleToolCallEventTelemetryIncludesOwnershipClassForBlockedAndFailedEvents(t *testing.T) {
+	testCases := []struct {
+		name          string
+		call          llm.ToolCall
+		expectedEvent string
+		expectedClass llm.ToolClass
+	}{
+		{
+			name: "blocked delegated tool",
+			call: llm.ToolCall{
+				ID:    "tool-blocked",
+				Name:  "Bash",
+				Class: llm.ToolClassDelegated,
+				Args:  map[string]interface{}{},
+			},
+			expectedEvent: "tool_call_blocked",
+			expectedClass: llm.ToolClassDelegated,
+		},
+		{
+			name: "failed local unknown tool",
+			call: llm.ToolCall{
+				ID:    "tool-failed",
+				Name:  "unknown_tool",
+				Class: llm.ToolClassLocal,
+				Args:  map[string]interface{}{},
+			},
+			expectedEvent: "tool_call_failed",
+			expectedClass: llm.ToolClassLocal,
+		},
 	}
-	if final != "still final" {
-		t.Fatalf("expected final output even when tool fails, got %q", final)
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, app, _ := newToolTestApp(t, true)
+			outEvents := make(chan llm.StreamEvent, 1)
+			outErrs := make(chan error, 1)
+
+			ok := app.handleToolCallEvent(ctx, ResolveSession("", ""), &tc.call, outEvents, outErrs)
+			if !ok {
+				t.Fatalf("expected handleToolCallEvent to succeed")
+			}
+
+			select {
+			case err := <-outErrs:
+				if err != nil {
+					t.Fatalf("unexpected tool call error: %v", err)
+				}
+			default:
+			}
+
+			select {
+			case evt := <-outEvents:
+				if evt.ToolResult == nil {
+					t.Fatalf("expected tool result event payload")
+				}
+				if evt.ToolResult.Class != tc.expectedClass {
+					t.Fatalf("expected tool result class %q, got %q", tc.expectedClass, evt.ToolResult.Class)
+				}
+			default:
+				t.Fatalf("expected tool result event")
+			}
+
+			transcriptPath, err := app.ResolveTranscriptPath("", "")
+			if err != nil {
+				t.Fatalf("resolve transcript path: %v", err)
+			}
+			payloads := readToolPayloadsFromTranscript(t, transcriptPath)
+			if len(payloads) < 2 {
+				t.Fatalf("expected at least two tool telemetry events, got %d", len(payloads))
+			}
+
+			seenStarted := false
+			seenExpected := false
+			for _, payload := range payloads {
+				eventType := strings.TrimSpace(fmt.Sprintf("%v", payload["type"]))
+				class := strings.TrimSpace(fmt.Sprintf("%v", payload["class"]))
+				switch eventType {
+				case "tool_call_started":
+					seenStarted = true
+					if class != string(tc.expectedClass) {
+						t.Fatalf("expected started class %q, got %q", tc.expectedClass, class)
+					}
+				case tc.expectedEvent:
+					seenExpected = true
+					if class != string(tc.expectedClass) {
+						t.Fatalf("expected %s class %q, got %q", tc.expectedEvent, tc.expectedClass, class)
+					}
+				}
+			}
+			if !seenStarted {
+				t.Fatalf("expected tool_call_started telemetry event")
+			}
+			if !seenExpected {
+				t.Fatalf("expected %s telemetry event", tc.expectedEvent)
+			}
+		})
 	}
+}
+
+func readToolPayloadsFromTranscript(t *testing.T, transcriptPath string) []map[string]interface{} {
+	t.Helper()
+	body, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(lines) == 0 {
+		t.Fatalf("expected transcript lines, got empty transcript")
+	}
+	payloads := make([]map[string]interface{}, 0, len(lines))
+	for _, line := range lines {
+		var row map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			continue
+		}
+		if strings.TrimSpace(fmt.Sprintf("%v", row["role"])) != "tool" {
+			continue
+		}
+		rawContent := strings.TrimSpace(fmt.Sprintf("%v", row["content"]))
+		if rawContent == "" {
+			continue
+		}
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(rawContent), &payload); err != nil {
+			t.Fatalf("decode tool payload: %v", err)
+		}
+		payloads = append(payloads, payload)
+	}
+	return payloads
 }
 
 func TestPromptForSessionCachesSkillsSnapshotUntilCompaction(t *testing.T) {

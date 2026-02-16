@@ -81,6 +81,10 @@ TUI slash commands:
 - `/exit`
 - `/quit`
 
+`/tools` shows ownership split sections:
+- `provider_native` (provider-discovered native tools)
+- `localclaw_mcp` (localclaw MCP-exposed tools for the active agent)
+
 `/verbose on` adds `[verbose]` system diagnostics to the transcript, including:
 - prompt/session summary at run start
 - runtime context (workspace/tool availability)

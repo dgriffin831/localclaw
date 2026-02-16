@@ -119,6 +119,7 @@ type model struct {
 	providerName          string
 	providerModel         string
 	providerTools         []string
+	toolCallOwnershipByID map[string]llm.ToolClass
 	streamDeltaEvents     int
 	streamDeltaChars      int
 
@@ -262,22 +263,23 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	vp.MouseWheelEnabled = true
 
 	m := model{
-		ctx:                ctx,
-		app:                app,
-		cfg:                cfg,
-		agentID:            resolution.AgentID,
-		sessionID:          resolution.SessionID,
-		sessionKey:         resolution.SessionKey,
-		workspacePath:      workspacePath,
-		viewport:           vp,
-		input:              input,
-		spinner:            sp,
-		status:             statusIdle,
-		showThinking:       true,
-		historyIdx:         -1,
-		activeAssistantIdx: -1,
-		thinkingMessages:   resolveThinkingMessages(cfg.App.ThinkingMessages),
-		providerName:       strings.TrimSpace(cfg.LLM.Provider),
+		ctx:                   ctx,
+		app:                   app,
+		cfg:                   cfg,
+		agentID:               resolution.AgentID,
+		sessionID:             resolution.SessionID,
+		sessionKey:            resolution.SessionKey,
+		workspacePath:         workspacePath,
+		viewport:              vp,
+		input:                 input,
+		spinner:               sp,
+		status:                statusIdle,
+		showThinking:          true,
+		historyIdx:            -1,
+		activeAssistantIdx:    -1,
+		thinkingMessages:      resolveThinkingMessages(cfg.App.ThinkingMessages),
+		providerName:          strings.TrimSpace(cfg.LLM.Provider),
+		toolCallOwnershipByID: map[string]llm.ToolClass{},
 	}
 	m.addSystem("localclaw ready. Type /help for commands.")
 	if welcome := m.loadWelcomeMessage(); welcome != "" {
@@ -456,39 +458,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport(true)
 		case llm.StreamEventToolCall:
 			toolName := "tool"
+			toolClass := llm.ToolClassUnspecified
 			if msg.Event.ToolCall != nil && strings.TrimSpace(msg.Event.ToolCall.Name) != "" {
 				toolName = msg.Event.ToolCall.Name
 			}
 			if msg.Event.ToolCall != nil {
+				toolClass = msg.Event.ToolCall.Class
 				class := string(msg.Event.ToolCall.Class)
 				if class == "" {
 					class = "unspecified"
 				}
 				callID := strings.TrimSpace(msg.Event.ToolCall.ID)
+				if callID != "" {
+					m.toolCallOwnershipByID[callID] = toolClass
+				}
 				if callID == "" {
 					callID = "n/a"
 				}
 				m.addVerbose("tool call details: id=%s class=%s args=%s", callID, class, summarizeVerboseMap(msg.Event.ToolCall.Args))
 			}
-			m.setStatus("tool " + toolName)
-			m.addSystem(fmt.Sprintf("tool call: %s", toolName))
+			ownership := toolOwnershipLabel(toolClass)
+			m.setStatus(fmt.Sprintf("tool [%s] %s", ownership, toolName))
+			m.addSystem(fmt.Sprintf("tool call [%s]: %s", ownership, toolName))
 			m.refreshViewport(true)
 		case llm.StreamEventToolResult:
 			if msg.Event.ToolResult != nil {
 				toolName := msg.Event.ToolResult.Tool
+				toolClass := msg.Event.ToolResult.Class
+				callID := strings.TrimSpace(msg.Event.ToolResult.CallID)
+				if toolClass == llm.ToolClassUnspecified && callID != "" {
+					toolClass = m.toolCallOwnershipByID[callID]
+				}
+				if callID != "" {
+					delete(m.toolCallOwnershipByID, callID)
+				}
 				if toolName == "" && msg.Event.ToolCall != nil {
 					toolName = msg.Event.ToolCall.Name
 				}
+				ownership := toolOwnershipLabel(toolClass)
 				if msg.Event.ToolResult.OK {
-					m.addSystem(fmt.Sprintf("tool completed: %s", toolName))
+					m.addSystem(fmt.Sprintf("tool completed [%s]: %s", ownership, toolName))
 				} else {
 					if strings.TrimSpace(msg.Event.ToolResult.Error) != "" {
-						m.addSystem(fmt.Sprintf("tool failed: %s (%s)", toolName, msg.Event.ToolResult.Error))
+						m.addSystem(fmt.Sprintf("tool failed [%s]: %s (%s)", ownership, toolName, msg.Event.ToolResult.Error))
 					} else {
-						m.addSystem(fmt.Sprintf("tool failed: %s", toolName))
+						m.addSystem(fmt.Sprintf("tool failed [%s]: %s", ownership, toolName))
 					}
 				}
-				callID := strings.TrimSpace(msg.Event.ToolResult.CallID)
 				if callID == "" {
 					callID = "n/a"
 				}
@@ -783,26 +799,28 @@ func (m *model) toolsSummary() string {
 		provider = "unknown"
 	}
 
-	lines := []string{
-		fmt.Sprintf("provider=%s", provider),
-	}
+	lines := []string{fmt.Sprintf("provider=%s", provider)}
 	if strings.TrimSpace(m.providerModel) != "" {
 		lines = append(lines, "provider model: "+m.providerModel)
 	}
+
+	lines = append(lines, "provider_native:")
 	if len(m.providerTools) == 0 {
-		lines = append(lines, "provider tools: not discovered yet")
+		lines = append(lines, "- not discovered yet")
 	} else {
-		lines = append(lines, "provider tools: "+strings.Join(m.providerTools, ", "))
+		lines = append(lines, "- "+strings.Join(m.providerTools, ", "))
 	}
 
+	lines = append(lines, "localclaw_mcp:")
+
 	if m.app == nil {
-		lines = append(lines, "localclaw tools: runtime unavailable")
+		lines = append(lines, "- runtime unavailable")
 		return strings.Join(lines, "\n")
 	}
 
 	tools := m.app.ToolDefinitions(m.agentID)
 	if len(tools) == 0 {
-		lines = append(lines, "localclaw tools: none enabled")
+		lines = append(lines, "- none enabled")
 		return strings.Join(lines, "\n")
 	}
 
@@ -810,8 +828,25 @@ func (m *model) toolsSummary() string {
 	for _, tool := range tools {
 		parts = append(parts, tool.Name)
 	}
-	lines = append(lines, "localclaw tools: "+strings.Join(parts, ", "))
+	lines = append(lines, "- "+strings.Join(parts, ", "))
 	return strings.Join(lines, "\n")
+}
+
+func toolOwnershipLabel(class llm.ToolClass) string {
+	switch class {
+	case llm.ToolClassDelegated:
+		return "provider_native"
+	case llm.ToolClassLocal:
+		return "localclaw_mcp"
+	default:
+		return "unspecified"
+	}
+}
+
+func resetToolCallOwnershipByID(values map[string]llm.ToolClass) {
+	for id := range values {
+		delete(values, id)
+	}
 }
 
 func normalizeProviderToolList(values []string) []string {
@@ -1013,6 +1048,7 @@ func formatSlashInput(cmd slashCommandDef) string {
 }
 
 func (m *model) startRun(input string) {
+	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
 	m.runSeq++
 	m.activeRunID = m.runSeq
 	m.running = true
@@ -1055,6 +1091,7 @@ func (m *model) finishRun(finalStatus string) {
 	m.running = false
 	m.setStatus(finalStatus)
 	m.activeThinkingMessage = ""
+	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
 	m.activeRunID = 0
 	m.activeAssistantIdx = -1
 	m.streamEvents = nil
@@ -1070,6 +1107,7 @@ func (m *model) abortRun(message string) {
 		m.runCancel()
 		m.runCancel = nil
 	}
+	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
 	if m.running {
 		m.running = false
 		m.activeRunID = 0

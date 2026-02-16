@@ -283,6 +283,9 @@ func TestParseStreamJSONLineToolUseAndToolResult(t *testing.T) {
 	if events[0].ToolResult.Status != "completed" {
 		t.Fatalf("expected status completed, got %q", events[0].ToolResult.Status)
 	}
+	if events[0].ToolResult.Class != llm.ToolClassDelegated {
+		t.Fatalf("expected delegated tool class on result, got %q", events[0].ToolResult.Class)
+	}
 	content, _ := events[0].ToolResult.Data["content"].(string)
 	if content != "AGENTS.md" {
 		t.Fatalf("expected tool content AGENTS.md, got %q", content)
@@ -313,6 +316,9 @@ func TestParseStreamJSONLineToolResultError(t *testing.T) {
 	}
 	if events[0].ToolResult.Error != "permission denied" {
 		t.Fatalf("expected tool error text, got %q", events[0].ToolResult.Error)
+	}
+	if events[0].ToolResult.Class != llm.ToolClassDelegated {
+		t.Fatalf("expected delegated tool class on result, got %q", events[0].ToolResult.Class)
 	}
 }
 

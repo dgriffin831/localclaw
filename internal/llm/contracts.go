@@ -38,6 +38,7 @@ type ToolCall struct {
 type ToolResult struct {
 	CallID string                 `json:"call_id,omitempty"`
 	Tool   string                 `json:"tool"`
+	Class  ToolClass              `json:"class,omitempty"`
 	OK     bool                   `json:"ok"`
 	Data   map[string]interface{} `json:"data,omitempty"`
 	Error  string                 `json:"error,omitempty"`

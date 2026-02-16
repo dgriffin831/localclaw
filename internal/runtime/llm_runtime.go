@@ -81,27 +81,36 @@ func (a *App) handleToolCallEvent(
 		return emitRuntimeError(ctx, outErrs, errors.New("structured tool call event missing payload"))
 	}
 
+	callClass := call.Class
+	if callClass == llm.ToolClassUnspecified {
+		callClass = llm.ToolClassLocal
+	}
+
 	a.appendToolTranscriptEvent(ctx, resolution, "tool_call_started", map[string]interface{}{
 		"id":    call.ID,
 		"tool":  call.Name,
-		"class": call.Class,
+		"class": callClass,
 	})
 
 	result := a.ExecuteTool(ctx, ToolExecutionRequest{
 		AgentID:   resolution.AgentID,
 		SessionID: resolution.SessionID,
 		Name:      call.Name,
-		Class:     call.Class,
+		Class:     callClass,
 		Args:      call.Args,
 	})
 
 	toolResult := llm.ToolResult{
 		CallID: call.ID,
 		Tool:   result.Tool,
+		Class:  result.Class,
 		OK:     result.OK,
 		Data:   result.Data,
 		Error:  strings.TrimSpace(result.Error),
 		Status: summarizeToolStatus(result),
+	}
+	if toolResult.Class == llm.ToolClassUnspecified {
+		toolResult.Class = callClass
 	}
 
 	if call.Respond != nil {
@@ -126,6 +135,7 @@ func (a *App) handleToolCallEvent(
 	a.appendToolTranscriptEvent(ctx, resolution, eventName, map[string]interface{}{
 		"id":     call.ID,
 		"tool":   toolResult.Tool,
+		"class":  toolResult.Class,
 		"ok":     toolResult.OK,
 		"status": toolResult.Status,
 		"error":  toolResult.Error,

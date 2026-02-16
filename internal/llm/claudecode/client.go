@@ -591,6 +591,7 @@ func parseUserMessageToolResultEvents(env claudeStreamEnvelope, toolNames map[st
 		result := llm.ToolResult{
 			CallID: callID,
 			Tool:   toolName,
+			Class:  llm.ToolClassDelegated,
 			OK:     !item.IsError,
 		}
 		if item.IsError {

@@ -331,12 +331,7 @@ func (a *App) PromptForSession(ctx context.Context, agentID, sessionID, input st
 func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, input string) (<-chan llm.StreamEvent, <-chan error) {
 	resolution := ResolveSession(agentID, sessionID)
 	req := a.buildPromptRequest(ctx, resolution, input)
-
-	streamEvents, streamErrs := a.promptStreamFromClient(ctx, req)
-	if !a.llm.Capabilities().StructuredToolCalls {
-		return streamEvents, streamErrs
-	}
-	return a.runStructuredToolLoop(ctx, resolution, streamEvents, streamErrs)
+	return a.promptStreamFromClient(ctx, req)
 }
 
 func (a *App) AddSessionTokens(ctx context.Context, agentID, sessionID string, delta int) error {
