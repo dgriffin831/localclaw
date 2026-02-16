@@ -44,6 +44,7 @@ type CodexConfig struct {
 	BinaryPath string         `json:"binary_path"`
 	Profile    string         `json:"profile"`
 	Model      string         `json:"model"`
+	ExtraArgs  []string       `json:"extra_args"`
 	MCP        CodexMCPConfig `json:"mcp"`
 }
 
@@ -170,6 +171,7 @@ func Default() Config {
 			},
 			Codex: CodexConfig{
 				BinaryPath: "codex",
+				ExtraArgs:  []string{},
 				MCP: CodexMCPConfig{
 					ConfigPath:      "",
 					UseIsolatedHome: true,

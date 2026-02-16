@@ -212,13 +212,33 @@ func TestBuildCommandArgsForRequestIncludesExpectedShape(t *testing.T) {
 		Profile:          "dev",
 		Model:            "gpt-5-codex",
 		WorkingDirectory: "/tmp/workspace",
+		ExtraArgs:        []string{"--sandbox", "workspace-write"},
 	})
 	args := client.buildCommandArgsForRequest(llm.Request{
 		Input:         "hello",
 		SystemContext: "system",
 		SkillPrompt:   "skill",
 	})
-	want := []string{"exec", "--json", "-C", "/tmp/workspace", "-p", "dev", "-m", "gpt-5-codex", "system\n\nskill\n\nUser input:\nhello"}
+	want := []string{"exec", "--json", "-C", "/tmp/workspace", "-p", "dev", "-m", "gpt-5-codex", "--sandbox", "workspace-write", "-"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("unexpected args:\n got: %#v\nwant: %#v", args, want)
+	}
+}
+
+func TestBuildCommandArgsForRequestUsesModelOverride(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		Profile:          "dev",
+		Model:            "gpt-5-codex",
+		WorkingDirectory: "/tmp/workspace",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Options: llm.PromptOptions{
+			ModelOverride: "gpt-5-mini",
+		},
+	})
+	want := []string{"exec", "--json", "-C", "/tmp/workspace", "-p", "dev", "-m", "gpt-5-mini", "-"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("unexpected args:\n got: %#v\nwant: %#v", args, want)
 	}
@@ -228,14 +248,16 @@ func TestPromptStreamRequestParsesJSONStream(t *testing.T) {
 	tmpDir := t.TempDir()
 	codexArgsPath := filepath.Join(tmpDir, "codex-args.txt")
 	codexEnvPath := filepath.Join(tmpDir, "codex-env.txt")
+	codexStdinPath := filepath.Join(tmpDir, "codex-stdin.txt")
 	fakeCodexPath := filepath.Join(tmpDir, "codex")
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 printf "%%s\n" "$@" > %q
 env | grep '^CODEX_HOME=' > %q || true
+cat > %q
 printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"hello"}}'
 printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":" world"}}'
-`, codexArgsPath, codexEnvPath)
+`, codexArgsPath, codexEnvPath, codexStdinPath)
 	if err := os.WriteFile(fakeCodexPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
 	}
@@ -305,6 +327,17 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 			t.Fatalf("unexpected args prefix[%d]: got %q want %q (all=%v)", i, args[i], wantPrefix[i], args)
 		}
 	}
+	if args[len(args)-1] != "-" {
+		t.Fatalf("expected codex prompt arg to use stdin marker '-', got %v", args)
+	}
+
+	stdinPayload, err := os.ReadFile(codexStdinPath)
+	if err != nil {
+		t.Fatalf("read stdin capture: %v", err)
+	}
+	if strings.TrimSpace(string(stdinPayload)) != "prompt" {
+		t.Fatalf("expected prompt text via stdin, got %q", strings.TrimSpace(string(stdinPayload)))
+	}
 
 	envPayload, err := os.ReadFile(codexEnvPath)
 	if err != nil {
@@ -324,5 +357,86 @@ func TestPromptStreamRequestReturnsErrorWhenBinaryMissing(t *testing.T) {
 	err := <-errs
 	if err == nil || !strings.Contains(err.Error(), "start codex cli") {
 		t.Fatalf("expected start codex cli error, got %v", err)
+	}
+}
+
+func TestParseStreamJSONLineCommandExecutionStarted(t *testing.T) {
+	line := `{"type":"item.started","item":{"type":"command_execution","id":"cmd_1","command":"ls -la"}}`
+	events, err := parseStreamJSONLine(line)
+	if err != nil {
+		t.Fatalf("parse stream line: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	if events[0].Type != llm.StreamEventToolCall {
+		t.Fatalf("expected tool_call event, got %q", events[0].Type)
+	}
+	if events[0].ToolCall == nil {
+		t.Fatalf("expected tool call payload")
+	}
+	if events[0].ToolCall.ID != "cmd_1" {
+		t.Fatalf("expected call id cmd_1, got %q", events[0].ToolCall.ID)
+	}
+	if events[0].ToolCall.Name != "command_execution" {
+		t.Fatalf("expected command_execution tool name, got %q", events[0].ToolCall.Name)
+	}
+	if events[0].ToolCall.Class != llm.ToolClassDelegated {
+		t.Fatalf("expected delegated tool class, got %q", events[0].ToolCall.Class)
+	}
+	if got, _ := events[0].ToolCall.Args["command"].(string); got != "ls -la" {
+		t.Fatalf("expected command arg ls -la, got %#v", events[0].ToolCall.Args["command"])
+	}
+}
+
+func TestParseStreamJSONLineCommandExecutionCompleted(t *testing.T) {
+	line := `{"type":"item.completed","item":{"type":"command_execution","id":"cmd_1","command":"ls -la","status":"completed","exit_code":0,"aggregated_output":"file.txt"}}`
+	events, err := parseStreamJSONLine(line)
+	if err != nil {
+		t.Fatalf("parse stream line: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	if events[0].Type != llm.StreamEventToolResult {
+		t.Fatalf("expected tool_result event, got %q", events[0].Type)
+	}
+	if events[0].ToolResult == nil {
+		t.Fatalf("expected tool result payload")
+	}
+	if events[0].ToolResult.CallID != "cmd_1" {
+		t.Fatalf("expected call id cmd_1, got %q", events[0].ToolResult.CallID)
+	}
+	if !events[0].ToolResult.OK {
+		t.Fatalf("expected successful command result")
+	}
+	if events[0].ToolResult.Status != "completed" {
+		t.Fatalf("expected status completed, got %q", events[0].ToolResult.Status)
+	}
+	if got, _ := events[0].ToolResult.Data["aggregated_output"].(string); got != "file.txt" {
+		t.Fatalf("expected aggregated output file.txt, got %#v", events[0].ToolResult.Data["aggregated_output"])
+	}
+}
+
+func TestParseStreamJSONLineCommandExecutionFailed(t *testing.T) {
+	line := `{"type":"item.completed","item":{"type":"command_execution","id":"cmd_1","command":"ls -la","status":"failed","exit_code":2,"aggregated_output":"permission denied"}}`
+	events, err := parseStreamJSONLine(line)
+	if err != nil {
+		t.Fatalf("parse stream line: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	if events[0].Type != llm.StreamEventToolResult {
+		t.Fatalf("expected tool_result event, got %q", events[0].Type)
+	}
+	if events[0].ToolResult == nil {
+		t.Fatalf("expected tool result payload")
+	}
+	if events[0].ToolResult.OK {
+		t.Fatalf("expected failed command result")
+	}
+	if strings.TrimSpace(events[0].ToolResult.Error) == "" {
+		t.Fatalf("expected non-empty tool result error for failed command")
 	}
 }

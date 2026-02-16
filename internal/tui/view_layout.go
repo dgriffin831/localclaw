@@ -10,20 +10,18 @@ import (
 )
 
 func (m *model) headerView() string {
-	profile := m.cfg.LLM.ClaudeCode.Profile
-	if strings.TrimSpace(profile) == "" {
-		profile = "default"
-	}
+	provider := m.activeProvider()
+	model := valueOrDefault(m.effectiveModel(), "n/a")
 	innerWidth := panelInnerWidth(m.width)
 	left := "# localclaw"
 	right := fmt.Sprintf(
-		"model:%s/%s  workspace:%s",
-		m.cfg.LLM.Provider,
-		profile,
+		"provider:%s  model:%s  workspace:%s",
+		provider,
+		model,
 		formatWorkspacePath(m.workspacePath),
 	)
 	if innerWidth < 70 {
-		right = fmt.Sprintf("model:%s  workspace:%s", m.cfg.LLM.Provider, formatWorkspacePath(m.workspacePath))
+		right = fmt.Sprintf("p:%s m:%s ws:%s", provider, model, formatWorkspacePath(m.workspacePath))
 	}
 	line := twoColumn(left, right, innerWidth)
 	return headerStyle.Width(max(1, m.width)).Render(line)
@@ -39,8 +37,12 @@ func (m *model) statusView() string {
 	if base == statusWaiting && m.showThinking && !m.hasStreamDelta {
 		base = m.currentThinkingMessage()
 	}
+	provider := m.activeProvider()
+	model := valueOrDefault(m.effectiveModel(), "n/a")
 	settings := fmt.Sprintf(
-		"thinking:%s  verbose:%s  tools:%s  mouse:%s  /status",
+		"provider:%s  model:%s  thinking:%s  verbose:%s  tools:%s  mouse:%s  /status",
+		provider,
+		model,
 		onOff(m.showThinking),
 		onOff(m.verbose),
 		mapBool(m.toolsExpanded, "expanded", "collapsed"),
@@ -48,7 +50,7 @@ func (m *model) statusView() string {
 	)
 	innerWidth := panelInnerWidth(m.width)
 	if innerWidth < 70 {
-		settings = fmt.Sprintf("t:%s v:%s m:%s /status", onOff(m.showThinking), onOff(m.verbose), onOff(m.mouseEnabled))
+		settings = fmt.Sprintf("p:%s m:%s t:%s v:%s /status", provider, model, onOff(m.showThinking), onOff(m.verbose))
 	}
 	if innerWidth < 42 {
 		settings = "/status"

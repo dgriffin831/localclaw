@@ -28,8 +28,7 @@ var slashCommandDefs = []slashCommandDef{
 	{Name: "verbose", Args: "<on|off>", Description: "toggle verbose mode"},
 	{Name: "mouse", Args: "<on|off>", Description: "toggle mouse capture (wheel/selection tradeoff)", Shortcut: "Ctrl+Y"},
 	{Name: "shortcuts", Description: "show keyboard shortcuts"},
-	// TODO: Implement /model override plumbing through runtime request options and provider adapters; currently this command is intentionally informational-only.
-	{Name: "model", Args: "<name>", Description: "set model override (not implemented)"},
+	{Name: "model", Args: "<name>", Description: "set model override for this TUI session"},
 	{Name: "exit", Description: "exit the TUI", Shortcut: "Ctrl+D"},
 	{Name: "quit", Description: "alias for /exit", Shortcut: "Ctrl+D"},
 }
@@ -42,7 +41,11 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 	case "shortcuts":
 		m.addSystem(keyboardShortcutsText())
 	case "status":
-		m.addSystem(fmt.Sprintf("status=%s model=%s agent=%s session=%s workspace=%s thinking=%s verbose=%s mouse=%s", m.status, m.cfg.LLM.Provider, m.agentID, m.sessionID, m.workspacePath, onOff(m.showThinking), onOff(m.verbose), onOff(m.mouseEnabled)))
+		override := strings.TrimSpace(m.modelOverride)
+		if override == "" {
+			override = "none"
+		}
+		m.addSystem(fmt.Sprintf("status=%s provider=%s configured_model=%s effective_model=%s model_override=%s agent=%s session=%s workspace=%s thinking=%s verbose=%s mouse=%s", m.status, m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a"), valueOrDefault(m.effectiveModel(), "n/a"), override, m.agentID, m.sessionID, m.workspacePath, onOff(m.showThinking), onOff(m.verbose), onOff(m.mouseEnabled)))
 	case "tools":
 		m.addSystem(m.toolsSummary())
 	case "clear":
@@ -90,11 +93,23 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 			m.addSystem("usage: /mouse <on|off>")
 		}
 	case "model":
-		if strings.TrimSpace(arg) == "" {
+		requested := strings.TrimSpace(arg)
+		if requested == "" {
 			m.addSystem("usage: /model <name>")
+			break
+		}
+		normalized := strings.ToLower(requested)
+		if normalized == "default" || normalized == "off" {
+			m.modelOverride = ""
+			m.addSystem(fmt.Sprintf("model override cleared; using configured model %s", valueOrDefault(m.configuredModel(), "n/a")))
+			break
+		}
+		if !m.providerSupportsModelOverride() {
+			m.modelOverride = ""
+			m.addSystem(fmt.Sprintf("provider %s does not support model override; using configured model %s", m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a")))
 		} else {
-			// TODO: Persist requested model override in TUI state and propagate it into runtime prompt requests instead of returning this placeholder message.
-			m.addSystem(fmt.Sprintf("model override is not implemented yet (%s)", arg))
+			m.modelOverride = requested
+			m.addSystem(fmt.Sprintf("model override set to %s", requested))
 		}
 	default:
 		m.addSystem(fmt.Sprintf("unknown command: /%s", name))
@@ -104,17 +119,17 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 }
 
 func (m *model) toolsSummary() string {
-	provider := strings.TrimSpace(m.providerName)
-	if provider == "" {
-		provider = strings.TrimSpace(m.cfg.LLM.Provider)
-	}
-	if provider == "" {
-		provider = "unknown"
-	}
+	provider := m.activeProvider()
 
 	lines := []string{fmt.Sprintf("provider=%s", provider)}
+	if model := strings.TrimSpace(m.effectiveModel()); model != "" {
+		lines = append(lines, "effective model: "+model)
+	}
 	if strings.TrimSpace(m.providerModel) != "" {
 		lines = append(lines, "provider model: "+m.providerModel)
+	}
+	if override := strings.TrimSpace(m.modelOverride); override != "" {
+		lines = append(lines, "model override: "+override)
 	}
 
 	lines = append(lines, "provider_native:")
@@ -143,6 +158,47 @@ func (m *model) toolsSummary() string {
 	}
 	lines = append(lines, "- "+strings.Join(parts, ", "))
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) activeProvider() string {
+	provider := strings.TrimSpace(m.providerName)
+	if provider == "" {
+		provider = strings.TrimSpace(m.cfg.LLM.Provider)
+	}
+	if provider == "" {
+		return "unknown"
+	}
+	return provider
+}
+
+func (m *model) configuredModel() string {
+	switch strings.ToLower(strings.TrimSpace(m.cfg.LLM.Provider)) {
+	case "codex":
+		return strings.TrimSpace(m.cfg.LLM.Codex.Model)
+	case "claudecode":
+		return strings.TrimSpace(m.cfg.LLM.ClaudeCode.Profile)
+	default:
+		return ""
+	}
+}
+
+func (m *model) effectiveModel() string {
+	if m.providerSupportsModelOverride() {
+		if override := strings.TrimSpace(m.modelOverride); override != "" {
+			return override
+		}
+	}
+	if model := strings.TrimSpace(m.providerModel); model != "" {
+		return model
+	}
+	if model := strings.TrimSpace(m.configuredModel()); model != "" {
+		return model
+	}
+	return ""
+}
+
+func (m *model) providerSupportsModelOverride() bool {
+	return strings.EqualFold(m.activeProvider(), "codex")
 }
 
 func toolOwnershipLabel(class llm.ToolClass) string {

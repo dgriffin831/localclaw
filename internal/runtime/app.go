@@ -140,6 +140,7 @@ func New(cfg config.Config) (*App, error) {
 			BinaryPath:       cfg.LLM.Codex.BinaryPath,
 			Profile:          cfg.LLM.Codex.Profile,
 			Model:            cfg.LLM.Codex.Model,
+			ExtraArgs:        cfg.LLM.Codex.ExtraArgs,
 			WorkingDirectory: cfg.Agents.Defaults.Workspace,
 			MCP: codex.MCPSettings{
 				ConfigPath:       cfg.LLM.Codex.MCP.ConfigPath,
@@ -278,17 +279,22 @@ func (a *App) bootstrapDefaultConfigFile() error {
 
 // Prompt sends a single input to the configured local LLM client.
 func (a *App) Prompt(ctx context.Context, input string) (string, error) {
-	return a.PromptForSession(ctx, DefaultAgentID, DefaultSessionID, input)
+	return a.PromptForSessionWithOptions(ctx, DefaultAgentID, DefaultSessionID, input, llm.PromptOptions{})
 }
 
 // PromptStream sends input to the local LLM client and yields incremental output events.
 func (a *App) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
-	return a.PromptStreamForSession(ctx, DefaultAgentID, DefaultSessionID, input)
+	return a.PromptStreamForSessionWithOptions(ctx, DefaultAgentID, DefaultSessionID, input, llm.PromptOptions{})
 }
 
 // PromptForSession sends a single input with the resolved agent/session context.
 func (a *App) PromptForSession(ctx context.Context, agentID, sessionID, input string) (string, error) {
-	events, errs := a.PromptStreamForSession(ctx, agentID, sessionID, input)
+	return a.PromptForSessionWithOptions(ctx, agentID, sessionID, input, llm.PromptOptions{})
+}
+
+// PromptForSessionWithOptions sends a single input with session context and prompt options.
+func (a *App) PromptForSessionWithOptions(ctx context.Context, agentID, sessionID, input string, opts llm.PromptOptions) (string, error) {
+	events, errs := a.PromptStreamForSessionWithOptions(ctx, agentID, sessionID, input, opts)
 	var streamed strings.Builder
 	final := ""
 	for events != nil || errs != nil {
@@ -322,8 +328,13 @@ func (a *App) PromptForSession(ctx context.Context, agentID, sessionID, input st
 
 // PromptStreamForSession streams output with the resolved agent/session context.
 func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, input string) (<-chan llm.StreamEvent, <-chan error) {
+	return a.PromptStreamForSessionWithOptions(ctx, agentID, sessionID, input, llm.PromptOptions{})
+}
+
+// PromptStreamForSessionWithOptions streams output with the resolved agent/session context and prompt options.
+func (a *App) PromptStreamForSessionWithOptions(ctx context.Context, agentID, sessionID, input string, opts llm.PromptOptions) (<-chan llm.StreamEvent, <-chan error) {
 	resolution := ResolveSession(agentID, sessionID)
-	req := a.buildPromptRequest(ctx, resolution, input)
+	req := a.buildPromptRequest(ctx, resolution, input, opts)
 	return a.promptStreamFromClient(ctx, req)
 }
 

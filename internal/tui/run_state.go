@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/runtime"
 )
@@ -79,7 +80,11 @@ func (m *model) startRun(input string) {
 
 	runCtx, cancel := context.WithCancel(m.ctx)
 	m.runCancel = cancel
-	m.streamEvents, m.streamErrs = m.app.PromptStreamForSession(runCtx, m.agentID, m.sessionID, input)
+	opts := llm.PromptOptions{}
+	if m.providerSupportsModelOverride() {
+		opts.ModelOverride = strings.TrimSpace(m.modelOverride)
+	}
+	m.streamEvents, m.streamErrs = m.app.PromptStreamForSessionWithOptions(runCtx, m.agentID, m.sessionID, input, opts)
 	m.setStatus(statusWaiting)
 }
 
@@ -173,6 +178,7 @@ func (m *model) runSessionReset(startNew bool, source string) {
 		m.sessionKey = next.SessionKey
 	}
 	m.messages = nil
+	m.modelOverride = ""
 	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 	if startNew {
 		m.addSystem(fmt.Sprintf("started new session %s", m.sessionID))

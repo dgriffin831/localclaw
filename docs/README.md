@@ -11,6 +11,7 @@ This directory is the implementation-level documentation surface for `localclaw`
 - `EMBEDDINGS.md`: archived deprecation pointer for pre-v2 embedding docs.
 - `TUI.md`: terminal UX model, keybindings, and slash commands.
 - `CLAUDE_CODE.md`: local Claude Code CLI integration behavior.
+- `CODEX.md`: local Codex CLI integration behavior.
 - `TESTING.md`: test locations, commands, and Red/Green workflow.
 - `SECURITY.md`: local-only boundary and security controls.
 

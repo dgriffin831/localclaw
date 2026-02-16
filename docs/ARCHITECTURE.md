@@ -15,7 +15,9 @@ Primary implementation anchors:
 - Memory index/search/flush: `internal/memory/*`
 - Session reset hook: `internal/hooks/session_memory.go`
 - TUI runtime: `internal/tui/app.go`
-- LLM adapter: `internal/llm/claudecode/client.go`
+- LLM adapters:
+  - `internal/llm/claudecode/client.go`
+  - `internal/llm/codex/client.go`
 - Security boundary summary: `docs/SECURITY.md`
 
 ## 2. System context
@@ -34,11 +36,13 @@ localclaw binary (single process)
   |   |- cron scheduler
   |   |- heartbeat monitor
   |   |- slack/signal local adapters
-  |   `- Claude Code client (subprocess)
+  |   |- Claude Code client (subprocess)
+  |   `- Codex client (subprocess)
   `- command modes
       |- check
       |- tui
-      `- memory {status,index,search,grep}
+      |- memory {status,index,search,grep}
+      `- mcp {serve}
 ```
 
 No server, gateway, or listener process exists.
