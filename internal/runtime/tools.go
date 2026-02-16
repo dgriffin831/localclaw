@@ -21,6 +21,7 @@ import (
 const memoryRecallPolicyPrompt = `System policy:
 - Memory recall is mandatory before finalizing an answer when tools are available.
 - First call memory_search with the user's intent and review the top matches.
+- Use memory_grep for exact token or regex follow-up when precision is needed.
 - If details are incomplete, call memory_get for exact lines from relevant files.
 - If a tool fails or returns no relevant data, continue with best effort and explicitly note that memory recall was unavailable or empty.`
 
@@ -136,6 +137,10 @@ func (a *App) ExecuteTool(ctx context.Context, req ToolExecutionRequest) ToolExe
 		return out
 	case skills.ToolMemoryGet:
 		out := a.executeMemoryGetTool(ctx, req)
+		out.Class = llm.ToolClassLocal
+		return out
+	case skills.ToolMemoryGrep:
+		out := a.executeMemoryGrepTool(ctx, req)
 		out.Class = llm.ToolClassLocal
 		return out
 	default:
@@ -456,6 +461,80 @@ func (a *App) executeMemoryGetTool(ctx context.Context, req ToolExecutionRequest
 	result.OK = true
 	result.Data = map[string]interface{}{
 		"result": out,
+	}
+	return result
+}
+
+func (a *App) executeMemoryGrepTool(ctx context.Context, req ToolExecutionRequest) ToolExecutionResult {
+	result := ToolExecutionResult{Tool: skills.ToolMemoryGrep, OK: false}
+
+	query, err := stringArg(req.Args, "query", true)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	mode, err := stringArg(req.Args, "mode", false)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	caseSensitive, err := boolArg(req.Args, "case_sensitive")
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	word, err := boolArg(req.Args, "word")
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	maxMatches, err := intArg(req.Args, "max_matches")
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	contextLines, err := intArg(req.Args, "context_lines")
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	pathGlob, err := stringSliceArg(req.Args, "path_glob")
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	source, err := stringArg(req.Args, "source", false)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+
+	searchCfg := a.resolveMemorySearchConfig(req.AgentID)
+	manager, cleanup, toolErr := a.newMemoryToolManager(ctx, req.AgentID, searchCfg)
+	if toolErr != nil {
+		result.Error = toolErr.Error()
+		return result
+	}
+	defer cleanup()
+
+	out, err := manager.Grep(ctx, query, memory.GrepOptions{
+		Mode:          mode,
+		CaseSensitive: caseSensitive,
+		Word:          word,
+		MaxMatches:    maxMatches,
+		ContextLines:  contextLines,
+		PathGlob:      pathGlob,
+		Source:        source,
+	})
+	if err != nil {
+		result.Error = fmt.Sprintf("memory_grep failed: %v", err)
+		return result
+	}
+
+	result.OK = true
+	result.Data = map[string]interface{}{
+		"count":   out.Count,
+		"matches": out.Matches,
 	}
 	return result
 }
@@ -830,6 +909,72 @@ func intArg(args map[string]interface{}, name string) (int, error) {
 		return n, nil
 	default:
 		return 0, fmt.Errorf("%s must be an integer", name)
+	}
+}
+
+func boolArg(args map[string]interface{}, name string) (bool, error) {
+	if args == nil {
+		return false, nil
+	}
+	raw, ok := args[name]
+	if !ok || raw == nil {
+		return false, nil
+	}
+	switch v := raw.(type) {
+	case bool:
+		return v, nil
+	case string:
+		trimmed := strings.TrimSpace(strings.ToLower(v))
+		if trimmed == "true" {
+			return true, nil
+		}
+		if trimmed == "false" {
+			return false, nil
+		}
+		return false, fmt.Errorf("%s must be a boolean", name)
+	default:
+		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+}
+
+func stringSliceArg(args map[string]interface{}, name string) ([]string, error) {
+	if args == nil {
+		return nil, nil
+	}
+	raw, ok := args[name]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+
+	appendText := func(out []string, text string) []string {
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			return out
+		}
+		return append(out, trimmed)
+	}
+
+	switch v := raw.(type) {
+	case string:
+		return appendText(nil, v), nil
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, entry := range v {
+			out = appendText(out, entry)
+		}
+		return out, nil
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, entry := range v {
+			text, ok := entry.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s must be a string or string array", name)
+			}
+			out = appendText(out, text)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be a string or string array", name)
 	}
 }
 

@@ -57,6 +57,7 @@ func newMCPServer(app *runtime.App) (*mcp.Server, error) {
 	memoryBackend := mcpTools.RuntimeMemoryBackend{App: app}
 	searchTool := mcpTools.NewMemorySearchTool(memoryBackend)
 	getTool := mcpTools.NewMemoryGetTool(memoryBackend)
+	grepTool := mcpTools.NewMemoryGrepTool(memoryBackend)
 
 	workspaceBackend := mcpTools.RuntimeWorkspaceBackend{App: app}
 	workspaceStatusTool := mcpTools.NewWorkspaceStatusTool(workspaceBackend)
@@ -90,6 +91,14 @@ func newMCPServer(app *runtime.App) (*mcp.Server, error) {
 		{
 			Definition: mcpTools.MemoryGetAliasDefinition(),
 			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGet, getTool.Call),
+		},
+		{
+			Definition: mcpTools.MemoryGrepDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGrep, grepTool.Call),
+		},
+		{
+			Definition: mcpTools.MemoryGrepAliasDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGrep, grepTool.Call),
 		},
 		{
 			Definition: mcpTools.WorkspaceStatusDefinition(),

@@ -126,6 +126,9 @@ func TestToolDefinitionsIncludeMemoryToolsWhenEnabled(t *testing.T) {
 	if !toolNames[skills.ToolMemoryGet] {
 		t.Fatalf("expected %s tool in registry", skills.ToolMemoryGet)
 	}
+	if !toolNames["memory_grep"] {
+		t.Fatalf("expected memory_grep tool in registry")
+	}
 }
 
 func TestToolDefinitionsDenyOverridesAllow(t *testing.T) {
@@ -205,6 +208,41 @@ func TestExecuteToolMemorySearchReturnsResults(t *testing.T) {
 	}
 }
 
+func TestExecuteToolMemoryGrepReturnsMatches(t *testing.T) {
+	ctx := context.Background()
+	_, app, workspace := newToolTestApp(t, true)
+
+	if err := osWriteFile(filepath.Join(workspace, "MEMORY.md"), "token-123 appears\nsecond line"); err != nil {
+		t.Fatalf("write memory file: %v", err)
+	}
+
+	res := app.ExecuteTool(ctx, ToolExecutionRequest{
+		Name: skills.ToolMemoryGrep,
+		Args: map[string]interface{}{
+			"query": "token-123",
+			"mode":  "literal",
+		},
+	})
+	if !res.OK {
+		t.Fatalf("expected memory_grep success, got error %q", res.Error)
+	}
+
+	rawMatches, ok := res.Data["matches"]
+	if !ok {
+		t.Fatalf("expected matches payload")
+	}
+	matches, ok := rawMatches.([]memory.GrepMatch)
+	if !ok {
+		t.Fatalf("expected []memory.GrepMatch payload, got %T", rawMatches)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("expected at least one grep match")
+	}
+	if matches[0].Path == "" {
+		t.Fatalf("expected match path")
+	}
+}
+
 func TestExecuteToolFailureIsGraceful(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)
@@ -268,6 +306,9 @@ func TestPromptIncludesMemoryRecallPolicyWhenToolsEnabled(t *testing.T) {
 	}
 	if !strings.Contains(llm.lastPromptInput, "memory_search") {
 		t.Fatalf("expected memory_search tool schema in prompt")
+	}
+	if !strings.Contains(llm.lastPromptInput, "memory_grep") {
+		t.Fatalf("expected memory_grep tool schema in prompt")
 	}
 	if !strings.Contains(llm.lastPromptInput, "User input:\nhello") {
 		t.Fatalf("expected original user input in composed prompt")

@@ -100,6 +100,46 @@ func TestMCPServerAppliesRuntimeToolPolicy(t *testing.T) {
 	}
 }
 
+func TestMCPServerAppliesRuntimeToolPolicyForMemoryGrep(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("set HOME: %v", err)
+	}
+	cfg := config.Default()
+	cfg.State.Root = filepath.Join(t.TempDir(), "state")
+	cfg.Tools.Deny = []string{"memory_grep"}
+	app, err := runtime.New(cfg)
+	if err != nil {
+		t.Fatalf("runtime.New error: %v", err)
+	}
+	server, err := newMCPServer(app)
+	if err != nil {
+		t.Fatalf("newMCPServer error: %v", err)
+	}
+
+	toolNames := []string{"localclaw_memory_grep", "memory_grep"}
+	for _, toolName := range toolNames {
+		input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" + toolName + "\",\"arguments\":{\"query\":\"needle\"}}}\n")
+		var out bytes.Buffer
+		if err := server.Serve(context.Background(), input, &out); err != nil {
+			t.Fatalf("Serve error for %s: %v", toolName, err)
+		}
+
+		var resp struct {
+			Result struct {
+				IsError           bool                   `json:"isError"`
+				StructuredContent map[string]interface{} `json:"structuredContent"`
+			} `json:"result"`
+		}
+		if err := json.NewDecoder(&out).Decode(&resp); err != nil {
+			t.Fatalf("decode response for %s: %v", toolName, err)
+		}
+		if !resp.Result.IsError {
+			t.Fatalf("expected tool policy error response for %s", toolName)
+		}
+	}
+}
+
 func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 	home := t.TempDir()
 	if err := os.Setenv("HOME", home); err != nil {
@@ -143,6 +183,7 @@ func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 		"localclaw_cron_remove",
 		"localclaw_cron_run",
 		"localclaw_memory_get",
+		"localclaw_memory_grep",
 		"localclaw_memory_search",
 		"localclaw_session_status",
 		"localclaw_sessions_history",
@@ -151,6 +192,7 @@ func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 		"localclaw_workspace_bootstrap_context",
 		"localclaw_workspace_status",
 		"memory_get",
+		"memory_grep",
 		"memory_search",
 	}
 	if len(names) != len(want) {

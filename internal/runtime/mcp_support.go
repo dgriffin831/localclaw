@@ -96,6 +96,23 @@ func (a *App) MCPMemoryGet(ctx context.Context, agentID, _ string, path string, 
 	return manager.Get(ctx, path, opts)
 }
 
+func (a *App) MCPMemoryGrep(ctx context.Context, agentID, sessionID, query string, opts memory.GrepOptions) (memory.GrepResult, error) {
+	_ = sessionID
+	resolvedAgentID := ResolveAgentID(agentID)
+	searchCfg := a.resolveMemorySearchConfig(resolvedAgentID)
+	if !searchCfg.Enabled {
+		return memory.GrepResult{}, fmt.Errorf("memory tools are disabled for agent %q", resolvedAgentID)
+	}
+
+	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, searchCfg)
+	if err != nil {
+		return memory.GrepResult{}, err
+	}
+	defer cleanup()
+
+	return manager.Grep(ctx, query, opts)
+}
+
 func (a *App) MCPWorkspaceStatus(ctx context.Context, agentID string) (MCPWorkspaceStatus, error) {
 	resolvedAgentID := ResolveAgentID(agentID)
 	workspacePath, err := a.ResolveWorkspacePath(resolvedAgentID)

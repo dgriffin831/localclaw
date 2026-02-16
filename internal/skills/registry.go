@@ -21,6 +21,7 @@ type Registry interface {
 const (
 	ToolMemorySearch = "memory_search"
 	ToolMemoryGet    = "memory_get"
+	ToolMemoryGrep   = "memory_grep"
 )
 
 type ToolParameter struct {
@@ -116,6 +117,20 @@ func DefaultMemoryTools() []ToolDefinition {
 				{Name: "path", Type: "string", Required: true, Description: "Workspace-relative markdown path."},
 				{Name: "from_line", Type: "integer", Required: false, Description: "1-based starting line."},
 				{Name: "lines", Type: "integer", Required: false, Description: "Optional line count."},
+			},
+		},
+		{
+			Name:        ToolMemoryGrep,
+			Description: "Find exact literals or regex matches across allowed memory/session files.",
+			Parameters: []ToolParameter{
+				{Name: "query", Type: "string", Required: true, Description: "Literal text or regex pattern to match."},
+				{Name: "mode", Type: "string", Required: false, Description: "Matching mode: literal or regex."},
+				{Name: "case_sensitive", Type: "boolean", Required: false, Description: "Enable case-sensitive matching."},
+				{Name: "word", Type: "boolean", Required: false, Description: "Require whole-word matches in literal mode."},
+				{Name: "max_matches", Type: "integer", Required: false, Description: "Maximum number of matches to return."},
+				{Name: "context_lines", Type: "integer", Required: false, Description: "Context lines before/after each match (0-5)."},
+				{Name: "path_glob", Type: "array", Required: false, Description: "Optional workspace-relative glob filter(s)."},
+				{Name: "source", Type: "string", Required: false, Description: "Source filter: memory, sessions, or all."},
 			},
 		},
 	}
