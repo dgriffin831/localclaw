@@ -1,47 +1,42 @@
 # HANDOFF
 
-## Branch
+## Branch / Scope
+- Branch: `feature/agentic-loop-improvements`
+- Scope finalized: memory retrieval v2 keyword-only stack (FTS/LIKE search + grep), embedding/vector path removal, schema compatibility/migration cleanup.
 
-- `feature/agentic-loop-improvements`
-
-## Scope Completed
-
-Memory retrieval v2 stabilization and cleanup from in-progress working state:
-
-- Removed embedding/vector runtime paths from memory config/runtime/indexing.
-- Kept memory retrieval surface focused on:
-  - `memory_search` (keyword ranking via FTS/LIKE fallback)
-  - `memory_grep` (literal/regex exact matching)
-  - `memory_get` (scoped markdown reads)
-- Added schema migration coverage for legacy embedding artifacts:
-  - drops legacy `embedding_cache` table if present
-  - removes legacy `meta.embedding_cache_enabled`
-- Aligned runtime/tool tests and CLI tests with v2 config shape.
-- Updated docs to reflect v2 behavior and command surface.
-
-## Commits (Newest First)
-
-- `cf8e705` `feat(memory): finalize retrieval v2 keyword-only memory stack`
-  - code + tests
-  - deletes obsolete embedding provider/runtime implementation and tests
-  - adds `internal/memory/schema_migration_test.go`
+## Commits
+- `cf8e705` feat(memory): finalize retrieval v2 keyword-only memory stack
+  - Removes embedding provider/runtime/cache implementation from memory indexing/search.
+  - Simplifies `memorySearch` config surface to v2 fields (sources/path/chunking/query/sync).
+  - Updates runtime + CLI manager wiring to keyword/grep-only retrieval.
+  - Adds schema migration coverage to remove legacy `embedding_cache` artifacts.
+  - Updates tests impacted by removed embedding knobs.
 
 ## Verification
+Commands run from repo root:
 
-Executed from repo root:
+1. `go test ./internal/config ./internal/memory`
+- Result: pass
 
-1. `/usr/local/go/bin/go fmt ./...`
-   - result: success
-2. `/usr/local/go/bin/go clean -testcache && /usr/local/go/bin/go test ./...`
-   - result: success
-   - key package checks:
-     - `ok github.com/dgriffin831/localclaw/internal/memory`
-     - `ok github.com/dgriffin831/localclaw/internal/runtime`
-     - `ok github.com/dgriffin831/localclaw/internal/cli`
-     - full suite green
+2. `/usr/local/go/bin/go test ./...`
+- Result: pass
 
-## Remaining Risks / Follow-ups
+3. `/usr/local/go/bin/go fmt ./...`
+- Result: pass (no formatting errors)
 
-1. Config compatibility intentionally ignores legacy embedding/vector keys at unmarshal time; malformed values under ignored keys will no longer be validated, by design for v2 compatibility.
-2. `docs/EMBEDDINGS.md` is now a deprecated note; if you want to retire it fully, remove the file in a docs-only follow-up.
-3. Consider adding a changelog/spec entry explicitly calling out removal of embedding/vector support for operator migration visibility.
+4. `/usr/local/go/bin/go test ./...` (post-format re-run)
+- Result: pass
+
+## Docs Updated
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CONFIGURATION.md`
+- `docs/EMBEDDINGS.md` (now deprecation note for embedding runtime)
+- `docs/README.md`
+- `docs/RUNTIME.md`
+- `docs/TESTING.md`
+
+## Risks / Follow-ups
+1. Legacy JSON keys are silently ignored by Go unmarshalling; this preserves startup compatibility but does not produce explicit deprecation warnings.
+2. `docs/specs/memory-retrieval-v2.md` still contains historical phase checklist items that may now lag implementation status; reconcile checklist items if strict spec parity is required.
+3. If operators still rely on old embedding docs/workflows, consider adding a dedicated migration note in release notes/changelog.
