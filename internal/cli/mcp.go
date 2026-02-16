@@ -54,9 +54,25 @@ func RunMCPCommand(ctx context.Context, cfg config.Config, app *runtime.App, arg
 }
 
 func newMCPServer(app *runtime.App) (*mcp.Server, error) {
-	backend := mcpTools.RuntimeMemoryBackend{App: app}
-	searchTool := mcpTools.NewMemorySearchTool(backend)
-	getTool := mcpTools.NewMemoryGetTool(backend)
+	memoryBackend := mcpTools.RuntimeMemoryBackend{App: app}
+	searchTool := mcpTools.NewMemorySearchTool(memoryBackend)
+	getTool := mcpTools.NewMemoryGetTool(memoryBackend)
+
+	workspaceBackend := mcpTools.RuntimeWorkspaceBackend{App: app}
+	workspaceStatusTool := mcpTools.NewWorkspaceStatusTool(workspaceBackend)
+	workspaceBootstrapContextTool := mcpTools.NewWorkspaceBootstrapContextTool(workspaceBackend)
+
+	cronBackend := mcpTools.RuntimeCronBackend{App: app}
+	cronListTool := mcpTools.NewCronListTool(cronBackend)
+	cronAddTool := mcpTools.NewCronAddTool(cronBackend)
+	cronRemoveTool := mcpTools.NewCronRemoveTool(cronBackend)
+	cronRunTool := mcpTools.NewCronRunTool(cronBackend)
+
+	orchestrationBackend := mcpTools.RuntimeOrchestrationBackend{App: app}
+	sessionsListTool := mcpTools.NewSessionsListTool(orchestrationBackend)
+	sessionsHistoryTool := mcpTools.NewSessionsHistoryTool(orchestrationBackend)
+	sessionsSendTool := mcpTools.NewSessionsSendTool(orchestrationBackend)
+	sessionStatusTool := mcpTools.NewSessionStatusTool(orchestrationBackend)
 
 	tools := []mcp.ToolRegistration{
 		{
@@ -67,8 +83,48 @@ func newMCPServer(app *runtime.App) (*mcp.Server, error) {
 			Definition: mcpTools.MemoryGetDefinition(),
 			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolMemoryGet, getTool.Call),
 		},
+		{
+			Definition: mcpTools.WorkspaceStatusDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolWorkspaceStatus, workspaceStatusTool.Call),
+		},
+		{
+			Definition: mcpTools.WorkspaceBootstrapContextDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolWorkspaceBootstrapContext, workspaceBootstrapContextTool.Call),
+		},
+		{
+			Definition: mcpTools.CronListDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolCronList, cronListTool.Call),
+		},
+		{
+			Definition: mcpTools.CronAddDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolCronAdd, cronAddTool.Call),
+		},
+		{
+			Definition: mcpTools.CronRemoveDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolCronRemove, cronRemoveTool.Call),
+		},
+		{
+			Definition: mcpTools.CronRunDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolCronRun, cronRunTool.Call),
+		},
+		{
+			Definition: mcpTools.SessionsListDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolSessionsList, sessionsListTool.Call),
+		},
+		{
+			Definition: mcpTools.SessionsHistoryDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolSessionsHistory, sessionsHistoryTool.Call),
+		},
+		{
+			Definition: mcpTools.SessionsSendDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolSessionsSend, sessionsSendTool.Call),
+		},
+		{
+			Definition: mcpTools.SessionStatusDefinition(),
+			Handler:    withRuntimePolicy(app, mcpTools.RuntimeToolSessionStatus, sessionStatusTool.Call),
+		},
 	}
-	return mcp.NewServer(mcp.Settings{ServerName: "localclaw", ServerVersion: "phase1", Tools: tools}), nil
+	return mcp.NewServer(mcp.Settings{ServerName: "localclaw", ServerVersion: "phase4", Tools: tools}), nil
 }
 
 func withRuntimePolicy(app *runtime.App, runtimeToolName string, next func(context.Context, map[string]interface{}) protocol.CallToolResult) mcp.ToolHandler {
