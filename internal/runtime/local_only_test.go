@@ -13,6 +13,7 @@ import (
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm"
+	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/workspace"
 )
 
@@ -630,5 +631,56 @@ func TestResetSessionStartNewAvoidsExistingTranscriptCollision(t *testing.T) {
 	}
 	if !strings.HasPrefix(next.SessionID, "s-20260216-000000") {
 		t.Fatalf("unexpected next session id %q", next.SessionID)
+	}
+}
+
+func TestResetSessionSameSessionClearsProviderSessionContinuation(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.App.Root = t.TempDir()
+	cfg.Agents.Defaults.Workspace = "."
+	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
+	cfg.Cron.Enabled = false
+	cfg.Heartbeat.Enabled = false
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if err := app.Run(ctx); err != nil {
+		t.Fatalf("run app: %v", err)
+	}
+
+	_, err = app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		session.SetProviderSessionID(entry, "claudecode", "claude-session")
+		session.SetProviderSessionID(entry, "codex", "codex-thread")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed provider session ids: %v", err)
+	}
+
+	current := app.ResetSession(ctx, ResetSessionRequest{
+		AgentID:   "default",
+		SessionID: "main",
+		Source:    "test",
+		StartNew:  false,
+	})
+	if current.SessionID != "main" {
+		t.Fatalf("expected same session id after reset, got %q", current.SessionID)
+	}
+
+	entry, exists, err := app.sessions.Get(ctx, "default", "main")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected session entry to exist")
+	}
+	if got := session.GetProviderSessionID(entry, "claudecode"); got != "" {
+		t.Fatalf("expected claudecode provider session cleared, got %q", got)
+	}
+	if got := session.GetProviderSessionID(entry, "codex"); got != "" {
+		t.Fatalf("expected codex provider session cleared, got %q", got)
 	}
 }

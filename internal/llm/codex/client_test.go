@@ -244,6 +244,51 @@ func TestBuildCommandArgsForRequestUsesModelOverride(t *testing.T) {
 	}
 }
 
+func TestBuildCommandArgsForRequestUsesResumeArgsWhenPersistedSessionExists(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		WorkingDirectory: "/tmp/workspace",
+		SessionMode:      "existing",
+		ResumeArgs:       []string{"resume", "{sessionId}"},
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			ProviderSessionID: "thread-42",
+		},
+	})
+	wantPrefix := []string{"exec", "resume", "thread-42"}
+	if len(args) < len(wantPrefix) {
+		t.Fatalf("unexpected short args for resume path: %v", args)
+	}
+	for i := range wantPrefix {
+		if args[i] != wantPrefix[i] {
+			t.Fatalf("unexpected resume args prefix[%d]: got %q want %q (all=%v)", i, args[i], wantPrefix[i], args)
+		}
+	}
+}
+
+func TestBuildCommandArgsForRequestResumeTextOutputOmitsJSONFlag(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		WorkingDirectory: "/tmp/workspace",
+		SessionMode:      "existing",
+		ResumeArgs:       []string{"resume", "{sessionId}"},
+		ResumeOutput:     "text",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			ProviderSessionID: "thread-42",
+		},
+	})
+	for _, arg := range args {
+		if arg == "--json" {
+			t.Fatalf("expected --json to be omitted for resume text output mode, got %v", args)
+		}
+	}
+}
+
 func TestPromptStreamRequestParsesJSONStream(t *testing.T) {
 	tmpDir := t.TempDir()
 	codexArgsPath := filepath.Join(tmpDir, "codex-args.txt")
@@ -362,7 +407,7 @@ func TestPromptStreamRequestReturnsErrorWhenBinaryMissing(t *testing.T) {
 
 func TestParseStreamJSONLineCommandExecutionStarted(t *testing.T) {
 	line := `{"type":"item.started","item":{"type":"command_execution","id":"cmd_1","command":"ls -la"}}`
-	events, err := parseStreamJSONLine(line)
+	events, err := parseStreamJSONLine(line, nil)
 	if err != nil {
 		t.Fatalf("parse stream line: %v", err)
 	}
@@ -391,7 +436,7 @@ func TestParseStreamJSONLineCommandExecutionStarted(t *testing.T) {
 
 func TestParseStreamJSONLineCommandExecutionCompleted(t *testing.T) {
 	line := `{"type":"item.completed","item":{"type":"command_execution","id":"cmd_1","command":"ls -la","status":"completed","exit_code":0,"aggregated_output":"file.txt"}}`
-	events, err := parseStreamJSONLine(line)
+	events, err := parseStreamJSONLine(line, nil)
 	if err != nil {
 		t.Fatalf("parse stream line: %v", err)
 	}
@@ -418,9 +463,29 @@ func TestParseStreamJSONLineCommandExecutionCompleted(t *testing.T) {
 	}
 }
 
+func TestParseStreamJSONLineEmitsProviderSessionMetadata(t *testing.T) {
+	line := `{"type":"session.configured","model":"gpt-5-codex","thread_id":"thread-123","tools":["mcp__localclaw__memory_search"]}`
+	events, err := parseStreamJSONLine(line, nil)
+	if err != nil {
+		t.Fatalf("parse stream line: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	if events[0].Type != llm.StreamEventProviderMetadata || events[0].ProviderMetadata == nil {
+		t.Fatalf("expected provider metadata event, got %#v", events[0])
+	}
+	if events[0].ProviderMetadata.Provider != "codex" {
+		t.Fatalf("expected codex provider, got %q", events[0].ProviderMetadata.Provider)
+	}
+	if events[0].ProviderMetadata.SessionID != "thread-123" {
+		t.Fatalf("expected thread id in provider metadata, got %q", events[0].ProviderMetadata.SessionID)
+	}
+}
+
 func TestParseStreamJSONLineCommandExecutionFailed(t *testing.T) {
 	line := `{"type":"item.completed","item":{"type":"command_execution","id":"cmd_1","command":"ls -la","status":"failed","exit_code":2,"aggregated_output":"permission denied"}}`
-	events, err := parseStreamJSONLine(line)
+	events, err := parseStreamJSONLine(line, nil)
 	if err != nil {
 		t.Fatalf("parse stream line: %v", err)
 	}

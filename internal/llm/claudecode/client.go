@@ -3,6 +3,8 @@ package claudecode
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +20,10 @@ import (
 type Settings struct {
 	BinaryPath           string
 	Profile              string
+	SessionMode          string
+	SessionArg           string
+	ResumeArgs           []string
+	SessionIDFields      []string
 	StrictMCPConfig      bool
 	MCPConfigDir         string
 	MCPServerBinaryPath  string
@@ -30,11 +36,26 @@ type LocalClient struct {
 }
 
 func NewClient(settings Settings) *LocalClient {
+	if strings.TrimSpace(settings.BinaryPath) == "" {
+		settings.BinaryPath = "claude"
+	}
 	if strings.TrimSpace(settings.MCPServerBinaryPath) == "" {
 		settings.MCPServerBinaryPath = "localclaw"
 	}
 	if len(settings.MCPServerArgs) == 0 {
 		settings.MCPServerArgs = []string{"mcp", "serve"}
+	}
+	if strings.TrimSpace(settings.SessionMode) == "" {
+		settings.SessionMode = "always"
+	}
+	if strings.TrimSpace(settings.SessionArg) == "" {
+		settings.SessionArg = "--session-id"
+	}
+	if len(settings.ResumeArgs) == 0 {
+		settings.ResumeArgs = []string{"--resume", "{sessionId}"}
+	}
+	if len(settings.SessionIDFields) == 0 {
+		settings.SessionIDFields = []string{"session_id", "sessionId", "conversation_id", "conversationId"}
 	}
 	return &LocalClient{settings: settings}
 }
@@ -222,11 +243,27 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, c
 		var deltaText strings.Builder
 		finalSeen := false
 		resultErr := ""
+		lastSessionID := ""
 
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line == "" {
 				continue
+			}
+			sessionID := extractSessionIDFromJSONLine(line, c.settings.SessionIDFields)
+			if sessionID != "" && sessionID != lastSessionID {
+				lastSessionID = sessionID
+				if !emitEvent(ctx, events, llm.StreamEvent{
+					Type: llm.StreamEventProviderMetadata,
+					ProviderMetadata: &llm.ProviderMetadata{
+						Provider:  "claudecode",
+						SessionID: sessionID,
+					},
+				}) {
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					return
+				}
 			}
 
 			parsedEvents, parseResultErr, parseErr := parseStreamJSONLine(line, toolNames)
@@ -301,6 +338,7 @@ func (c *LocalClient) buildCommandArgs(input string) []string {
 
 func (c *LocalClient) buildCommandArgsForRequest(req llm.Request, mcpConfigPath string) []string {
 	args := c.buildCommandArgs(strings.TrimSpace(req.Input))
+	args = append(args, c.buildSessionArgsForRequest(req)...)
 	args = append(args, "--mcp-config", mcpConfigPath)
 	if c.settings.StrictMCPConfig {
 		args = append(args, "--strict-mcp-config")
@@ -312,6 +350,54 @@ func (c *LocalClient) buildCommandArgsForRequest(req llm.Request, mcpConfigPath 
 		args = append(args, "--append-system-prompt", systemPrompt)
 	}
 	return args
+}
+
+func (c *LocalClient) buildSessionArgsForRequest(req llm.Request) []string {
+	mode := strings.ToLower(strings.TrimSpace(c.settings.SessionMode))
+	providerSessionID := strings.TrimSpace(req.Session.ProviderSessionID)
+	if mode == "" {
+		mode = "always"
+	}
+	if mode == "none" {
+		return nil
+	}
+	if providerSessionID != "" {
+		return expandSessionArgs(c.settings.ResumeArgs, providerSessionID, []string{"--resume", "{sessionId}"})
+	}
+	if mode != "always" {
+		return nil
+	}
+
+	sessionArg := strings.TrimSpace(c.settings.SessionArg)
+	if sessionArg == "" {
+		sessionArg = "--session-id"
+	}
+	return []string{sessionArg, generateSessionID()}
+}
+
+func expandSessionArgs(args []string, sessionID string, defaults []string) []string {
+	templates := args
+	if len(templates) == 0 {
+		templates = defaults
+	}
+	out := make([]string, 0, len(templates))
+	for _, arg := range templates {
+		expanded := strings.ReplaceAll(arg, "{sessionId}", sessionID)
+		expanded = strings.TrimSpace(expanded)
+		if expanded == "" {
+			continue
+		}
+		out = append(out, expanded)
+	}
+	return out
+}
+
+func generateSessionID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err == nil {
+		return hex.EncodeToString(buf)
+	}
+	return fmt.Sprintf("%d", os.Getpid())
 }
 
 func buildAllowedToolsForRequest(req llm.Request) []string {
@@ -469,14 +555,18 @@ func copyEnvMap(src map[string]string) map[string]string {
 }
 
 type claudeStreamEnvelope struct {
-	Type          string                 `json:"type"`
-	Subtype       string                 `json:"subtype,omitempty"`
-	IsError       bool                   `json:"is_error,omitempty"`
-	Result        string                 `json:"result,omitempty"`
-	Model         string                 `json:"model,omitempty"`
-	Tools         []string               `json:"tools,omitempty"`
-	Message       claudeStreamMessage    `json:"message,omitempty"`
-	ToolUseResult map[string]interface{} `json:"tool_use_result,omitempty"`
+	Type              string                 `json:"type"`
+	Subtype           string                 `json:"subtype,omitempty"`
+	IsError           bool                   `json:"is_error,omitempty"`
+	Result            string                 `json:"result,omitempty"`
+	Model             string                 `json:"model,omitempty"`
+	SessionID         string                 `json:"session_id,omitempty"`
+	SessionIDAlt      string                 `json:"sessionId,omitempty"`
+	ConversationID    string                 `json:"conversation_id,omitempty"`
+	ConversationIDAlt string                 `json:"conversationId,omitempty"`
+	Tools             []string               `json:"tools,omitempty"`
+	Message           claudeStreamMessage    `json:"message,omitempty"`
+	ToolUseResult     map[string]interface{} `json:"tool_use_result,omitempty"`
 }
 
 type claudeStreamMessage struct {
@@ -550,9 +640,10 @@ func parseSystemEvents(env claudeStreamEnvelope) []llm.StreamEvent {
 		{
 			Type: llm.StreamEventProviderMetadata,
 			ProviderMetadata: &llm.ProviderMetadata{
-				Provider: "claudecode",
-				Model:    strings.TrimSpace(env.Model),
-				Tools:    tools,
+				Provider:  "claudecode",
+				Model:     strings.TrimSpace(env.Model),
+				Tools:     tools,
+				SessionID: firstNonBlankString(env.SessionID, env.SessionIDAlt, env.ConversationID, env.ConversationIDAlt),
 			},
 		},
 	}
@@ -709,6 +800,38 @@ func normalizeProviderToolNames(raw []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func extractSessionIDFromJSONLine(line string, fields []string) string {
+	if strings.TrimSpace(line) == "" {
+		return ""
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &payload); err != nil {
+		return ""
+	}
+	for _, field := range fields {
+		key := strings.TrimSpace(field)
+		if key == "" {
+			continue
+		}
+		if value, ok := payload[key]; ok {
+			if text := strings.TrimSpace(fmt.Sprint(value)); text != "" && text != "<nil>" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func firstNonBlankString(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func emitEvent(ctx context.Context, events chan<- llm.StreamEvent, evt llm.StreamEvent) bool {

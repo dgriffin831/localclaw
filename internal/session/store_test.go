@@ -258,3 +258,34 @@ func TestUpdatePreservesRequiredMetadataFields(t *testing.T) {
 		t.Fatalf("expected updatedAt to remain populated")
 	}
 }
+
+func TestProviderSessionIDHelpersNormalizeSetGetClear(t *testing.T) {
+	t.Parallel()
+
+	entry := SessionEntry{}
+	SetProviderSessionID(&entry, "  ClaudeCode  ", " sess-123 ")
+	if got := GetProviderSessionID(entry, "claudecode"); got != "sess-123" {
+		t.Fatalf("expected canonical provider session id, got %q", got)
+	}
+	if got := GetProviderSessionID(entry, " CLAUDECODE "); got != "sess-123" {
+		t.Fatalf("expected normalized provider lookup to succeed, got %q", got)
+	}
+
+	SetProviderSessionID(&entry, "codex", "thread-1")
+	if got := GetProviderSessionID(entry, "codex"); got != "thread-1" {
+		t.Fatalf("expected codex provider session id, got %q", got)
+	}
+
+	ClearProviderSessionID(&entry, "clAudeCode")
+	if got := GetProviderSessionID(entry, "claudecode"); got != "" {
+		t.Fatalf("expected provider session id cleared, got %q", got)
+	}
+	if got := GetProviderSessionID(entry, "codex"); got != "thread-1" {
+		t.Fatalf("expected other provider session id to remain, got %q", got)
+	}
+
+	ClearProviderSessionID(&entry, "codex")
+	if entry.ProviderSessionIDs != nil && len(entry.ProviderSessionIDs) != 0 {
+		t.Fatalf("expected provider session map to be empty after clear, got %#v", entry.ProviderSessionIDs)
+	}
+}

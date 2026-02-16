@@ -37,6 +37,8 @@ func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResoluti
 	bootstrapSection := a.buildBootstrapPromptSection(ctx, resolution)
 	skillsSection := a.buildSkillsPromptSection(ctx, resolution)
 	modelOverride := strings.TrimSpace(opts.ModelOverride)
+	provider := strings.ToLower(strings.TrimSpace(a.cfg.LLM.Provider))
+	providerSessionID := a.loadPersistedProviderSessionID(ctx, resolution, provider)
 
 	var system strings.Builder
 	if bootstrapSection != "" {
@@ -48,14 +50,27 @@ func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResoluti
 		SystemContext: strings.TrimSpace(system.String()),
 		SkillPrompt:   strings.TrimSpace(skillsSection),
 		Session: llm.SessionMetadata{
-			AgentID:    resolution.AgentID,
-			SessionID:  resolution.SessionID,
-			SessionKey: resolution.SessionKey,
+			AgentID:           resolution.AgentID,
+			SessionID:         resolution.SessionID,
+			SessionKey:        resolution.SessionKey,
+			Provider:          provider,
+			ProviderSessionID: providerSessionID,
 		},
 		Options: llm.PromptOptions{
 			ModelOverride: modelOverride,
 		},
 	}
+}
+
+func (a *App) loadPersistedProviderSessionID(ctx context.Context, resolution SessionResolution, provider string) string {
+	if a.sessions == nil {
+		return ""
+	}
+	entry, exists, err := a.sessions.Get(ctx, resolution.AgentID, resolution.SessionID)
+	if err != nil || !exists {
+		return ""
+	}
+	return session.GetProviderSessionID(entry, provider)
 }
 
 func (a *App) buildBootstrapPromptSection(ctx context.Context, resolution SessionResolution) string {

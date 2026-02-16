@@ -466,3 +466,51 @@ func TestValidateRejectsBlankThinkingMessages(t *testing.T) {
 		t.Fatalf("expected blank thinking message error")
 	}
 }
+
+func TestDefaultConfigIncludesProviderSessionContinuationDefaults(t *testing.T) {
+	cfg := Default()
+	if cfg.LLM.ClaudeCode.SessionMode != "always" {
+		t.Fatalf("expected claude_code.session_mode=always, got %q", cfg.LLM.ClaudeCode.SessionMode)
+	}
+	if cfg.LLM.Codex.SessionMode != "existing" {
+		t.Fatalf("expected codex.session_mode=existing, got %q", cfg.LLM.Codex.SessionMode)
+	}
+}
+
+func TestValidateRejectsInvalidProviderSessionModes(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.ClaudeCode.SessionMode = "invalid"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid claude_code.session_mode error")
+	}
+
+	cfg = Default()
+	cfg.LLM.Codex.SessionMode = "bad"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid codex.session_mode error")
+	}
+}
+
+func TestValidateRejectsResumeArgsWithoutSessionIDPlaceholderForExistingMode(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.ClaudeCode.SessionMode = "existing"
+	cfg.LLM.ClaudeCode.ResumeArgs = []string{"--resume", "fixed-id"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected claude_code.resume_args placeholder validation error")
+	}
+
+	cfg = Default()
+	cfg.LLM.Codex.SessionMode = "existing"
+	cfg.LLM.Codex.ResumeArgs = []string{"resume", "fixed-id"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected codex.resume_args placeholder validation error")
+	}
+}
+
+func TestValidateRejectsInvalidCodexResumeOutputMode(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.Codex.ResumeOutput = "yaml"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected codex.resume_output validation error")
+	}
+}

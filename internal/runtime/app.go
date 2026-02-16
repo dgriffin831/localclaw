@@ -122,6 +122,10 @@ func New(cfg config.Config) (*App, error) {
 		claudeClient := claudecode.NewClient(claudecode.Settings{
 			BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
 			Profile:             cfg.LLM.ClaudeCode.Profile,
+			SessionMode:         cfg.LLM.ClaudeCode.SessionMode,
+			SessionArg:          cfg.LLM.ClaudeCode.SessionArg,
+			ResumeArgs:          cfg.LLM.ClaudeCode.ResumeArgs,
+			SessionIDFields:     cfg.LLM.ClaudeCode.SessionIDFields,
 			StrictMCPConfig:     true,
 			MCPConfigDir:        filepath.Join(resolvedStateRoot, "runtime", "mcp"),
 			MCPServerBinaryPath: "localclaw",
@@ -141,6 +145,11 @@ func New(cfg config.Config) (*App, error) {
 			Profile:          cfg.LLM.Codex.Profile,
 			Model:            cfg.LLM.Codex.Model,
 			ExtraArgs:        cfg.LLM.Codex.ExtraArgs,
+			SessionMode:      cfg.LLM.Codex.SessionMode,
+			SessionArg:       cfg.LLM.Codex.SessionArg,
+			ResumeArgs:       cfg.LLM.Codex.ResumeArgs,
+			SessionIDFields:  cfg.LLM.Codex.SessionIDFields,
+			ResumeOutput:     cfg.LLM.Codex.ResumeOutput,
 			WorkingDirectory: cfg.Agents.Defaults.Workspace,
 			MCP: codex.MCPSettings{
 				ConfigPath:       cfg.LLM.Codex.MCP.ConfigPath,
@@ -335,7 +344,7 @@ func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, in
 func (a *App) PromptStreamForSessionWithOptions(ctx context.Context, agentID, sessionID, input string, opts llm.PromptOptions) (<-chan llm.StreamEvent, <-chan error) {
 	resolution := ResolveSession(agentID, sessionID)
 	req := a.buildPromptRequest(ctx, resolution, input, opts)
-	return a.promptStreamFromClient(ctx, req)
+	return a.promptStreamWithSessionContinuation(ctx, resolution, req)
 }
 
 func (a *App) AddSessionTokens(ctx context.Context, agentID, sessionID string, delta int) error {
@@ -428,6 +437,7 @@ func (a *App) ResetSession(ctx context.Context, req ResetSessionRequest) Session
 	}
 
 	if !req.StartNew {
+		a.clearProviderSessionContinuation(ctx, current)
 		a.clearSkillPromptSnapshot(current.SessionKey)
 		return current
 	}
@@ -505,4 +515,14 @@ func mergeMemoryFlushConfig(base, override config.MemoryFlushConfig) config.Memo
 		merged.TimeoutSeconds = override.TimeoutSeconds
 	}
 	return merged
+}
+
+func (a *App) clearProviderSessionContinuation(ctx context.Context, resolution SessionResolution) {
+	if a.sessions == nil {
+		return
+	}
+	_, _ = a.sessions.Update(ctx, resolution.AgentID, resolution.SessionID, func(entry *session.SessionEntry) error {
+		entry.ProviderSessionIDs = nil
+		return nil
+	})
 }

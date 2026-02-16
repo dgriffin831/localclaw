@@ -36,16 +36,25 @@ type LLMConfig struct {
 }
 
 type ClaudeCodeConfig struct {
-	BinaryPath string `json:"binary_path"`
-	Profile    string `json:"profile"`
+	BinaryPath      string   `json:"binary_path"`
+	Profile         string   `json:"profile"`
+	SessionMode     string   `json:"session_mode"`
+	SessionArg      string   `json:"session_arg"`
+	ResumeArgs      []string `json:"resume_args"`
+	SessionIDFields []string `json:"session_id_fields"`
 }
 
 type CodexConfig struct {
-	BinaryPath string         `json:"binary_path"`
-	Profile    string         `json:"profile"`
-	Model      string         `json:"model"`
-	ExtraArgs  []string       `json:"extra_args"`
-	MCP        CodexMCPConfig `json:"mcp"`
+	BinaryPath      string         `json:"binary_path"`
+	Profile         string         `json:"profile"`
+	Model           string         `json:"model"`
+	ExtraArgs       []string       `json:"extra_args"`
+	SessionMode     string         `json:"session_mode"`
+	SessionArg      string         `json:"session_arg"`
+	ResumeArgs      []string       `json:"resume_args"`
+	SessionIDFields []string       `json:"session_id_fields"`
+	ResumeOutput    string         `json:"resume_output"`
+	MCP             CodexMCPConfig `json:"mcp"`
 }
 
 type CodexMCPConfig struct {
@@ -166,12 +175,30 @@ func Default() Config {
 		LLM: LLMConfig{
 			Provider: "claudecode",
 			ClaudeCode: ClaudeCodeConfig{
-				BinaryPath: "claude",
-				Profile:    "default",
+				BinaryPath:  "claude",
+				Profile:     "default",
+				SessionMode: "always",
+				SessionArg:  "--session-id",
+				ResumeArgs:  []string{"--resume", "{sessionId}"},
+				SessionIDFields: []string{
+					"session_id",
+					"sessionId",
+					"conversation_id",
+					"conversationId",
+				},
 			},
 			Codex: CodexConfig{
-				BinaryPath: "codex",
-				ExtraArgs:  []string{},
+				BinaryPath:  "codex",
+				ExtraArgs:   []string{},
+				SessionMode: "existing",
+				ResumeArgs:  []string{"resume", "{sessionId}"},
+				SessionIDFields: []string{
+					"thread_id",
+					"threadId",
+					"session_id",
+					"sessionId",
+				},
+				ResumeOutput: "text",
 				MCP: CodexMCPConfig{
 					ConfigPath:      "",
 					UseIsolatedHome: true,
@@ -287,6 +314,27 @@ func (c Config) Validate() error {
 			return errors.New("llm.codex.binary_path is required")
 		}
 	}
+	if err := validateProviderSessionMode(c.LLM.ClaudeCode.SessionMode, "llm.claude_code.session_mode"); err != nil {
+		return err
+	}
+	if err := validateResumeArgs(c.LLM.ClaudeCode.SessionMode, c.LLM.ClaudeCode.ResumeArgs, "llm.claude_code.resume_args"); err != nil {
+		return err
+	}
+	if err := validateSessionIDFields(c.LLM.ClaudeCode.SessionIDFields, "llm.claude_code.session_id_fields"); err != nil {
+		return err
+	}
+	if err := validateProviderSessionMode(c.LLM.Codex.SessionMode, "llm.codex.session_mode"); err != nil {
+		return err
+	}
+	if err := validateResumeArgs(c.LLM.Codex.SessionMode, c.LLM.Codex.ResumeArgs, "llm.codex.resume_args"); err != nil {
+		return err
+	}
+	if err := validateSessionIDFields(c.LLM.Codex.SessionIDFields, "llm.codex.session_id_fields"); err != nil {
+		return err
+	}
+	if err := validateCodexResumeOutput(c.LLM.Codex.ResumeOutput); err != nil {
+		return err
+	}
 	// TODO: Keep this validation aligned with runtime wiring: channels.enabled is validated here, but runtime must also gate actual adapter wiring/usage by this allowlist.
 	if len(c.Channels.Enabled) == 0 {
 		return errors.New("channels.enabled must include at least one channel")
@@ -353,4 +401,48 @@ func validateMemoryFlushConfig(cfg MemoryFlushConfig, fieldPrefix string) error 
 		return fmt.Errorf("%s.timeoutSeconds must be >= 0", fieldPrefix)
 	}
 	return nil
+}
+
+func validateProviderSessionMode(value, fieldName string) error {
+	mode := strings.ToLower(strings.TrimSpace(value))
+	switch mode {
+	case "always", "existing", "none":
+		return nil
+	default:
+		return fmt.Errorf("%s must be one of: always, existing, none", fieldName)
+	}
+}
+
+func validateResumeArgs(mode string, resumeArgs []string, fieldName string) error {
+	if strings.ToLower(strings.TrimSpace(mode)) != "existing" {
+		return nil
+	}
+	if len(resumeArgs) == 0 {
+		return nil
+	}
+	for _, arg := range resumeArgs {
+		if strings.Contains(arg, "{sessionId}") {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must include {sessionId} placeholder when session_mode=existing", fieldName)
+}
+
+func validateSessionIDFields(fields []string, fieldName string) error {
+	for i, field := range fields {
+		if strings.TrimSpace(field) == "" {
+			return fmt.Errorf("%s[%d] cannot be blank", fieldName, i)
+		}
+	}
+	return nil
+}
+
+func validateCodexResumeOutput(value string) error {
+	mode := strings.ToLower(strings.TrimSpace(value))
+	switch mode {
+	case "", "json", "jsonl", "text":
+		return nil
+	default:
+		return errors.New("llm.codex.resume_output must be one of: json, jsonl, text")
+	}
 }

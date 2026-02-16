@@ -46,9 +46,10 @@ type ToolResult struct {
 }
 
 type ProviderMetadata struct {
-	Provider string   `json:"provider,omitempty"`
-	Model    string   `json:"model,omitempty"`
-	Tools    []string `json:"tools,omitempty"`
+	Provider  string   `json:"provider,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Tools     []string `json:"tools,omitempty"`
+	SessionID string   `json:"session_id,omitempty"`
 }
 
 type StreamEvent struct {
@@ -74,9 +75,11 @@ type ToolDefinition struct {
 }
 
 type SessionMetadata struct {
-	AgentID    string `json:"agent_id,omitempty"`
-	SessionID  string `json:"session_id,omitempty"`
-	SessionKey string `json:"session_key,omitempty"`
+	AgentID           string `json:"agent_id,omitempty"`
+	SessionID         string `json:"session_id,omitempty"`
+	SessionKey        string `json:"session_key,omitempty"`
+	Provider          string `json:"provider,omitempty"`
+	ProviderSessionID string `json:"provider_session_id,omitempty"`
 }
 
 type PromptOptions struct {

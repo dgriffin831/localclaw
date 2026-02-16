@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,7 @@ func (c *captureLLMClient) Capabilities() llm.Capabilities {
 
 type captureRequestLLMClient struct {
 	lastRequest llm.Request
+	requests    []llm.Request
 	streamFn    func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error)
 }
 
@@ -58,11 +60,13 @@ func (c *captureRequestLLMClient) PromptStream(ctx context.Context, input string
 
 func (c *captureRequestLLMClient) PromptRequest(ctx context.Context, req llm.Request) (string, error) {
 	c.lastRequest = req
+	c.requests = append(c.requests, req)
 	return "ok", nil
 }
 
 func (c *captureRequestLLMClient) PromptStreamRequest(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
 	c.lastRequest = req
+	c.requests = append(c.requests, req)
 	if c.streamFn != nil {
 		return c.streamFn(ctx, req)
 	}
@@ -159,6 +163,130 @@ func TestPromptStreamForSessionWithOptionsPassesModelOverride(t *testing.T) {
 
 	if llmClient.lastRequest.Options.ModelOverride != "gpt-5-mini" {
 		t.Fatalf("expected model override in request options, got %q", llmClient.lastRequest.Options.ModelOverride)
+	}
+}
+
+func TestPromptStreamForSessionIncludesPersistedProviderSessionMetadata(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
+
+	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		entry.Key = "default/main"
+		session.SetProviderSessionID(entry, "claudecode", "claude-session-1")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed provider session id: %v", err)
+	}
+
+	events, errs := app.PromptStreamForSession(ctx, "default", "main", "hello")
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("unexpected stream error: %v", err)
+			}
+		}
+	}
+
+	if llmClient.lastRequest.Session.Provider != "claudecode" {
+		t.Fatalf("expected provider metadata claudecode, got %q", llmClient.lastRequest.Session.Provider)
+	}
+	if llmClient.lastRequest.Session.ProviderSessionID != "claude-session-1" {
+		t.Fatalf("expected persisted provider session id, got %q", llmClient.lastRequest.Session.ProviderSessionID)
+	}
+}
+
+func TestPromptStreamPersistsProviderSessionIDAndRetriesAfterResumeFailure(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	attempt := 0
+	app.llm = &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			attempt++
+			events := make(chan llm.StreamEvent, 2)
+			errs := make(chan error, 1)
+			switch attempt {
+			case 1:
+				if req.Session.ProviderSessionID != "stale-id" {
+					errs <- fmt.Errorf("expected stale provider session id on first attempt, got %q", req.Session.ProviderSessionID)
+					close(events)
+					close(errs)
+					return events, errs
+				}
+				errs <- fmt.Errorf("resume failed: invalid session")
+			case 2:
+				if req.Session.ProviderSessionID != "" {
+					errs <- fmt.Errorf("expected cleared provider session id on retry, got %q", req.Session.ProviderSessionID)
+					close(events)
+					close(errs)
+					return events, errs
+				}
+				events <- llm.StreamEvent{
+					Type: llm.StreamEventProviderMetadata,
+					ProviderMetadata: &llm.ProviderMetadata{
+						Provider:  "claudecode",
+						SessionID: "fresh-session-id",
+					},
+				}
+				events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "ok"}
+			default:
+				errs <- fmt.Errorf("unexpected attempt %d", attempt)
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+
+	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		session.SetProviderSessionID(entry, "claudecode", "stale-id")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed stale provider session id: %v", err)
+	}
+
+	events, errs := app.PromptStreamForSession(ctx, "default", "main", "hello")
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("unexpected stream error: %v", err)
+			}
+		}
+	}
+	if attempt != 2 {
+		t.Fatalf("expected one retry after resume failure, got %d attempts", attempt)
+	}
+
+	entry, exists, err := app.sessions.Get(ctx, "default", "main")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected session entry to exist")
+	}
+	if got := session.GetProviderSessionID(entry, "claudecode"); got != "fresh-session-id" {
+		t.Fatalf("expected persisted fresh provider session id, got %q", got)
 	}
 }
 

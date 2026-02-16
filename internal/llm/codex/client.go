@@ -21,6 +21,11 @@ type Settings struct {
 	Profile          string
 	Model            string
 	ExtraArgs        []string
+	SessionMode      string
+	SessionArg       string
+	ResumeArgs       []string
+	SessionIDFields  []string
+	ResumeOutput     string
 	WorkingDirectory string
 	MCP              MCPSettings
 }
@@ -53,6 +58,18 @@ func NewClient(settings Settings) *LocalClient {
 	}
 	if len(settings.MCP.ServerArgs) == 0 {
 		settings.MCP.ServerArgs = []string{"mcp", "serve"}
+	}
+	if strings.TrimSpace(settings.SessionMode) == "" {
+		settings.SessionMode = "existing"
+	}
+	if len(settings.ResumeArgs) == 0 {
+		settings.ResumeArgs = []string{"resume", "{sessionId}"}
+	}
+	if len(settings.SessionIDFields) == 0 {
+		settings.SessionIDFields = []string{"thread_id", "threadId", "session_id", "sessionId"}
+	}
+	if strings.TrimSpace(settings.ResumeOutput) == "" {
+		settings.ResumeOutput = "text"
 	}
 	return &LocalClient{settings: settings}
 }
@@ -153,7 +170,21 @@ func (c *LocalClient) PromptStreamRequest(ctx context.Context, req llm.Request) 
 }
 
 func (c *LocalClient) buildCommandArgsForRequest(req llm.Request) []string {
-	args := []string{"exec", "--json", "-C", c.settings.WorkingDirectory}
+	mode := strings.ToLower(strings.TrimSpace(c.settings.SessionMode))
+	if mode == "" {
+		mode = "existing"
+	}
+	providerSessionID := strings.TrimSpace(req.Session.ProviderSessionID)
+	resume := mode != "none" && providerSessionID != ""
+
+	args := []string{"exec"}
+	if resume {
+		args = append(args, expandSessionArgs(c.settings.ResumeArgs, providerSessionID, []string{"resume", "{sessionId}"})...)
+	}
+	if !resume || c.resumeOutputMode() == "json" || c.resumeOutputMode() == "jsonl" {
+		args = append(args, "--json")
+	}
+	args = append(args, "-C", c.settings.WorkingDirectory)
 	if profile := strings.TrimSpace(c.settings.Profile); profile != "" {
 		args = append(args, "-p", profile)
 	}
@@ -370,7 +401,7 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 			if line == "" {
 				continue
 			}
-			parsedEvents, parseErr := parseStreamJSONLine(line)
+			parsedEvents, parseErr := parseStreamJSONLine(line, c.settings.SessionIDFields)
 			if parseErr != nil {
 				// NOTE: Compatibility fallback is intentionally retained for now; unparseable provider lines are streamed as raw text deltas.
 				delta := line + "\n"
@@ -426,7 +457,7 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 	return events, errs
 }
 
-func parseStreamJSONLine(line string) ([]llm.StreamEvent, error) {
+func parseStreamJSONLine(line string, sessionIDFields []string) ([]llm.StreamEvent, error) {
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &payload); err != nil {
 		return nil, err
@@ -434,6 +465,16 @@ func parseStreamJSONLine(line string) ([]llm.StreamEvent, error) {
 
 	events := make([]llm.StreamEvent, 0, 1)
 	lineType, _ := payload["type"].(string)
+	sessionID := extractProviderSessionID(payload, sessionIDFields)
+	if sessionID != "" && lineType != "session.configured" {
+		events = append(events, llm.StreamEvent{
+			Type: llm.StreamEventProviderMetadata,
+			ProviderMetadata: &llm.ProviderMetadata{
+				Provider:  "codex",
+				SessionID: sessionID,
+			},
+		})
+	}
 
 	if lineType == "item.completed" {
 		item, _ := payload["item"].(map[string]interface{})
@@ -469,10 +510,30 @@ func parseStreamJSONLine(line string) ([]llm.StreamEvent, error) {
 				}
 			}
 		}
+		meta.SessionID = sessionID
 		events = append(events, llm.StreamEvent{Type: llm.StreamEventProviderMetadata, ProviderMetadata: &meta})
 	}
 
 	return events, nil
+}
+
+func extractProviderSessionID(payload map[string]interface{}, fields []string) string {
+	if len(fields) == 0 {
+		fields = []string{"thread_id", "threadId", "session_id", "sessionId"}
+	}
+	for _, field := range fields {
+		key := strings.TrimSpace(field)
+		if key == "" {
+			continue
+		}
+		if value, ok := payload[key]; ok {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text != "" && text != "<nil>" {
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 func extractAgentMessageText(item map[string]interface{}) string {
@@ -656,6 +717,16 @@ func firstNonBlankString(values ...string) string {
 	return ""
 }
 
+func (c *LocalClient) resumeOutputMode() string {
+	mode := strings.ToLower(strings.TrimSpace(c.settings.ResumeOutput))
+	switch mode {
+	case "json", "jsonl", "text":
+		return mode
+	default:
+		return "text"
+	}
+}
+
 func isSuccessfulCommandStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "completed", "success", "succeeded", "ok":
@@ -676,6 +747,23 @@ func normalizeNonBlankArgs(args []string) []string {
 			continue
 		}
 		out = append(out, value)
+	}
+	return out
+}
+
+func expandSessionArgs(args []string, sessionID string, defaults []string) []string {
+	templates := args
+	if len(templates) == 0 {
+		templates = defaults
+	}
+	out := make([]string, 0, len(templates))
+	for _, arg := range templates {
+		expanded := strings.ReplaceAll(arg, "{sessionId}", sessionID)
+		expanded = strings.TrimSpace(expanded)
+		if expanded == "" {
+			continue
+		}
+		out = append(out, expanded)
 	}
 	return out
 }
