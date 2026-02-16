@@ -20,7 +20,6 @@ func TestGrepReturnsDeterministicPathAndLineOrdering(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderNone,
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)
@@ -54,7 +53,6 @@ func TestGrepRejectsOutOfScopePathGlob(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderNone,
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)

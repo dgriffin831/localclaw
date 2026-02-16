@@ -19,29 +19,17 @@ type IndexManagerConfig struct {
 	ExtraPaths           []string
 	ChunkTokens          int
 	ChunkOverlap         int
-	Provider             string
-	Model                string
-	Fallback             string
-	Local                LocalEmbeddingConfig
 	EnableFTS            bool
-	EnableVector         bool
-	EnableEmbeddingCache bool
-	HybridEnabled        bool
-	VectorWeight         float64
-	KeywordWeight        float64
-	CandidateMultiplier  int
-	EmbeddingCacheMax    int
 	SessionDeltaBytes    int
 	SessionDeltaMessages int
 }
 
 // IndexStatus is a lightweight snapshot of indexed memory state.
 type IndexStatus struct {
-	DBPath                string
-	FileCount             int
-	ChunkCount            int
-	FTSEnabled            bool
-	EmbeddingCacheEnabled bool
+	DBPath     string
+	FileCount  int
+	ChunkCount int
+	FTSEnabled bool
 }
 
 // SyncResult captures indexing work from one sync pass.

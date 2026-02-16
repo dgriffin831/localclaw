@@ -556,12 +556,7 @@ func TestHandleSlashToolsShowsLocalclawTools(t *testing.T) {
 	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 	cfg.Agents.Defaults.MemorySearch.Enabled = true
 	cfg.Agents.Defaults.MemorySearch.Sources = []string{"memory"}
-	cfg.Agents.Defaults.MemorySearch.Provider = "none"
-	cfg.Agents.Defaults.MemorySearch.Fallback = "none"
 	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
-	cfg.Agents.Defaults.MemorySearch.Store.Vector.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Cache.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Query.Hybrid.Enabled = false
 	cfg.Heartbeat.Enabled = false
 	cfg.Cron.Enabled = false
 

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/memory"
@@ -100,7 +99,7 @@ type syncSnapshot struct {
 	IndexedChunks int `json:"indexedChunks"`
 }
 
-// RunMemoryCommand executes localclaw memory status/index/search commands.
+// RunMemoryCommand executes localclaw memory status/index/search/grep commands.
 func RunMemoryCommand(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdout, stderr io.Writer) error {
 	if stdout == nil {
 		stdout = os.Stdout
@@ -559,31 +558,14 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	}
 
 	manager := memory.NewSQLiteIndexManager(memory.IndexManagerConfig{
-		DBPath:        storePath,
-		WorkspaceRoot: workspacePath,
-		SessionsRoot:  sessionsRoot,
-		Sources:       searchCfg.Sources,
-		ExtraPaths:    extraPaths,
-		ChunkTokens:   searchCfg.Chunking.Tokens,
-		ChunkOverlap:  searchCfg.Chunking.Overlap,
-		Provider:      searchCfg.Provider,
-		Model:         searchCfg.Model,
-		Fallback:      searchCfg.Fallback,
-		Local: memory.LocalEmbeddingConfig{
-			RuntimePath:   searchCfg.Local.RuntimePath,
-			ModelPath:     searchCfg.Local.ModelPath,
-			ModelCacheDir: searchCfg.Local.ModelCacheDir,
-			QueryTimeout:  time.Duration(searchCfg.Local.QueryTimeoutSeconds) * time.Second,
-			BatchTimeout:  time.Duration(searchCfg.Local.BatchTimeoutSeconds) * time.Second,
-		},
+		DBPath:               storePath,
+		WorkspaceRoot:        workspacePath,
+		SessionsRoot:         sessionsRoot,
+		Sources:              searchCfg.Sources,
+		ExtraPaths:           extraPaths,
+		ChunkTokens:          searchCfg.Chunking.Tokens,
+		ChunkOverlap:         searchCfg.Chunking.Overlap,
 		EnableFTS:            true,
-		EnableVector:         searchCfg.Store.Vector.Enabled,
-		EnableEmbeddingCache: searchCfg.Cache.Enabled,
-		EmbeddingCacheMax:    searchCfg.Cache.MaxEntries,
-		HybridEnabled:        searchCfg.Query.Hybrid.Enabled,
-		VectorWeight:         searchCfg.Query.Hybrid.VectorWeight,
-		KeywordWeight:        searchCfg.Query.Hybrid.KeywordWeight,
-		CandidateMultiplier:  searchCfg.Query.Hybrid.CandidateMultiplier,
 		SessionDeltaBytes:    searchCfg.Sync.Sessions.DeltaBytes,
 		SessionDeltaMessages: searchCfg.Sync.Sessions.DeltaMessages,
 	})

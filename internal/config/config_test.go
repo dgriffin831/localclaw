@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +48,7 @@ func TestLoadSupportsThinkingMessages(t *testing.T) {
 			"thinking_messages": ["thinking", "checking memory", "drafting response"]
 		}
 	}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		fatalf(t, "write config: %v", err)
 	}
 
@@ -71,7 +72,7 @@ func TestLoadIgnoresLegacyWorkspaceAndMemoryFields(t *testing.T) {
 		"workspace": {"root": "/tmp/legacy-workspace"},
 		"memory": {"path": "/tmp/legacy-memory.json"}
 	}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		fatalf(t, "write config: %v", err)
 	}
 
@@ -95,7 +96,7 @@ func TestLoadUsesExplicitAgentDefaultsWorkspace(t *testing.T) {
 			}
 		}
 	}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		fatalf(t, "write config: %v", err)
 	}
 
@@ -114,7 +115,7 @@ func TestLoadDoesNotRebaseDerivedDefaultsWhenStateRootChanges(t *testing.T) {
 	payload := `{
 		"state": {"root": "/var/lib/localclaw"}
 	}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		fatalf(t, "write config: %v", err)
 	}
 
@@ -147,7 +148,7 @@ func TestLoadPreservesExplicitPathsWhenStateRootChanges(t *testing.T) {
 			}
 		}
 	}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		fatalf(t, "write config: %v", err)
 	}
 
@@ -160,6 +161,112 @@ func TestLoadPreservesExplicitPathsWhenStateRootChanges(t *testing.T) {
 	}
 	if cfg.Agents.Defaults.MemorySearch.Store.Path != "/custom/memory/{agentId}.sqlite" {
 		fatalf(t, "expected explicit memorySearch.store.path to be preserved, got %q", cfg.Agents.Defaults.MemorySearch.Store.Path)
+	}
+}
+
+func TestDefaultMemorySearchConfigOmitsLegacyEmbeddingFieldsInJSON(t *testing.T) {
+	cfg := Default()
+	payload, err := json.Marshal(cfg.Agents.Defaults.MemorySearch)
+	if err != nil {
+		fatalf(t, "marshal memorySearch: %v", err)
+	}
+	encoded := string(payload)
+
+	disallowed := []string{
+		`"provider"`,
+		`"fallback"`,
+		`"model"`,
+		`"vector"`,
+		`"hybrid"`,
+		`"cache"`,
+		`"local"`,
+	}
+	for _, key := range disallowed {
+		if strings.Contains(encoded, key) {
+			fatalf(t, "expected v2 memorySearch JSON to omit %s, got %s", key, encoded)
+		}
+	}
+}
+
+func TestLoadIgnoresLegacyMemorySearchKeysInDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"defaults": {
+				"memorySearch": {
+					"provider": "local",
+					"fallback": "none",
+					"model": "legacy-model",
+					"store": {
+						"path": "/tmp/memory.sqlite",
+						"vector": {"enabled": true}
+					},
+					"query": {
+						"maxResults": 6,
+						"hybrid": {
+							"enabled": true,
+							"vectorWeight": 0.8,
+							"keywordWeight": 0.2,
+							"candidateMultiplier": 4
+						}
+					},
+					"cache": {"enabled": true, "maxEntries": 999},
+					"local": {
+						"runtimePath": "/bin/legacy",
+						"modelPath": "/tmp/model",
+						"modelCacheDir": "/tmp/cache",
+						"queryTimeoutSeconds": 5,
+						"batchTimeoutSeconds": 5
+					}
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		fatalf(t, "write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		fatalf(t, "load config: %v", err)
+	}
+	if cfg.Agents.Defaults.MemorySearch.Store.Path != "/tmp/memory.sqlite" {
+		fatalf(t, "expected supported memorySearch fields to still apply")
+	}
+	if cfg.Agents.Defaults.MemorySearch.Query.MaxResults != 6 {
+		fatalf(t, "expected supported query.maxResults to apply")
+	}
+}
+
+func TestLoadIgnoresLegacyMemorySearchKeysInAgentOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"list": [
+				{
+					"id": "agent-a",
+					"memorySearch": {
+						"provider": "local",
+						"fallback": "none",
+						"model": "legacy-model",
+						"cache": {"enabled": true}
+					}
+				}
+			]
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		fatalf(t, "write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		fatalf(t, "load config: %v", err)
+	}
+	if len(cfg.Agents.List) != 1 || cfg.Agents.List[0].ID != "agent-a" {
+		fatalf(t, "expected agent override to load")
 	}
 }
 
@@ -193,7 +300,7 @@ func TestLoadIgnoresLegacyGovCloudFields(t *testing.T) {
 			}
 		}
 	}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		fatalf(t, "write config: %v", err)
 	}
 
@@ -251,75 +358,11 @@ func TestValidateRejectsNegativeMemoryFlushValues(t *testing.T) {
 	}
 }
 
-func TestLoadSupportsMemoryLocalEmbeddingSettings(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "config.json")
-	payload := `{
-		"agents": {
-			"defaults": {
-				"memorySearch": {
-					"local": {
-						"runtimePath": "/usr/local/bin/local-embed",
-						"modelPath": "/models/embeddinggemma-300m",
-						"modelCacheDir": "/var/cache/localclaw/models",
-						"queryTimeoutSeconds": 7,
-						"batchTimeoutSeconds": 29
-					}
-				}
-			}
-		}
-	}`
-	if err := os.WriteFile(path, []byte(payload), 0600); err != nil {
-		fatalf(t, "write config: %v", err)
-	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		fatalf(t, "load config: %v", err)
-	}
-
-	if cfg.Agents.Defaults.MemorySearch.Local.RuntimePath != "/usr/local/bin/local-embed" {
-		fatalf(t, "expected memorySearch.local.runtimePath to load, got %q", cfg.Agents.Defaults.MemorySearch.Local.RuntimePath)
-	}
-	if cfg.Agents.Defaults.MemorySearch.Local.ModelPath != "/models/embeddinggemma-300m" {
-		fatalf(t, "expected memorySearch.local.modelPath to load, got %q", cfg.Agents.Defaults.MemorySearch.Local.ModelPath)
-	}
-	if cfg.Agents.Defaults.MemorySearch.Local.ModelCacheDir != "/var/cache/localclaw/models" {
-		fatalf(t, "expected memorySearch.local.modelCacheDir to load, got %q", cfg.Agents.Defaults.MemorySearch.Local.ModelCacheDir)
-	}
-	if cfg.Agents.Defaults.MemorySearch.Local.QueryTimeoutSeconds != 7 {
-		fatalf(t, "expected memorySearch.local.queryTimeoutSeconds=7, got %d", cfg.Agents.Defaults.MemorySearch.Local.QueryTimeoutSeconds)
-	}
-	if cfg.Agents.Defaults.MemorySearch.Local.BatchTimeoutSeconds != 29 {
-		fatalf(t, "expected memorySearch.local.batchTimeoutSeconds=29, got %d", cfg.Agents.Defaults.MemorySearch.Local.BatchTimeoutSeconds)
-	}
-}
-
 func TestValidateRejectsBlankThinkingMessages(t *testing.T) {
 	cfg := Default()
 	cfg.App.ThinkingMessages = []string{"thinking", "   "}
 	if err := cfg.Validate(); err == nil {
 		fatalf(t, "expected blank thinking message error")
-	}
-}
-
-func TestValidateRejectsInvalidLocalEmbeddingConfig(t *testing.T) {
-	cfg := Default()
-	cfg.Agents.Defaults.MemorySearch.Local.RuntimePath = "   "
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected blank local runtimePath validation error")
-	}
-
-	cfg = Default()
-	cfg.Agents.Defaults.MemorySearch.Local.QueryTimeoutSeconds = -1
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected negative queryTimeoutSeconds validation error")
-	}
-
-	cfg = Default()
-	cfg.Agents.Defaults.MemorySearch.Local.BatchTimeoutSeconds = -1
-	if err := cfg.Validate(); err == nil {
-		fatalf(t, "expected negative batchTimeoutSeconds validation error")
 	}
 }
 

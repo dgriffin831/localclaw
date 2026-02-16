@@ -216,12 +216,7 @@ func newTestApp(t *testing.T, sources []string) (config.Config, *runtime.App, st
 	cfg.State.Root = t.TempDir()
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Agents.Defaults.MemorySearch.Sources = sources
-	cfg.Agents.Defaults.MemorySearch.Provider = "none"
-	cfg.Agents.Defaults.MemorySearch.Fallback = "none"
 	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
-	cfg.Agents.Defaults.MemorySearch.Store.Vector.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Cache.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Query.Hybrid.Enabled = false
 	cfg.Heartbeat.Enabled = false
 	cfg.Cron.Enabled = false
 

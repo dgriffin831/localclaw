@@ -783,12 +783,7 @@ func newToolTestApp(t *testing.T, toolsEnabled bool) (config.Config, *App, strin
 	cfg.Session.Store = filepath.Join(cfg.State.Root, "agents", "{agentId}", "sessions", "sessions.json")
 	cfg.Agents.Defaults.MemorySearch.Enabled = toolsEnabled
 	cfg.Agents.Defaults.MemorySearch.Sources = []string{"memory"}
-	cfg.Agents.Defaults.MemorySearch.Provider = "none"
-	cfg.Agents.Defaults.MemorySearch.Fallback = "none"
 	cfg.Agents.Defaults.MemorySearch.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
-	cfg.Agents.Defaults.MemorySearch.Store.Vector.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Cache.Enabled = false
-	cfg.Agents.Defaults.MemorySearch.Query.Hybrid.Enabled = false
 	cfg.Agents.Defaults.MemorySearch.Sync.OnSearch = true
 	cfg.Heartbeat.Enabled = false
 	cfg.Cron.Enabled = false

@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const schemaVersion = "1"
+const schemaVersion = "2"
 
 var coreSchemaStatements = []string{
 	`PRAGMA foreign_keys = ON;`,
@@ -30,9 +30,7 @@ var coreSchemaStatements = []string{
 		start_line INTEGER NOT NULL,
 		end_line INTEGER NOT NULL,
 		hash TEXT NOT NULL,
-		model TEXT,
 		text TEXT NOT NULL,
-		embedding BLOB,
 		updated_at INTEGER NOT NULL,
 		FOREIGN KEY(path) REFERENCES files(path) ON DELETE CASCADE
 	);`,
@@ -44,8 +42,7 @@ var coreSchemaStatements = []string{
 }
 
 type schemaFeatures struct {
-	ftsEnabled            bool
-	embeddingCacheEnabled bool
+	ftsEnabled bool
 }
 
 func installSchema(ctx context.Context, db *sql.DB, cfg IndexManagerConfig) (schemaFeatures, error) {
@@ -74,28 +71,16 @@ func installSchema(ctx context.Context, db *sql.DB, cfg IndexManagerConfig) (sch
 		features.ftsEnabled = enabled
 	}
 
-	if cfg.EnableEmbeddingCache {
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS embedding_cache (
-			provider TEXT NOT NULL,
-			model TEXT NOT NULL,
-			provider_key TEXT NOT NULL,
-			hash TEXT NOT NULL,
-			embedding BLOB NOT NULL,
-			updated_at INTEGER NOT NULL,
-			PRIMARY KEY(provider, model, provider_key, hash)
-		);`); err != nil {
-			return features, fmt.Errorf("install embedding_cache schema: %w", err)
-		}
-		features.embeddingCacheEnabled = true
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS embedding_cache;`); err != nil {
+		return features, fmt.Errorf("drop legacy embedding_cache table: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key, value) VALUES('fts_enabled', ?)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value;`, boolAsString(features.ftsEnabled)); err != nil {
 		return features, fmt.Errorf("set fts_enabled meta: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO meta(key, value) VALUES('embedding_cache_enabled', ?)
-		ON CONFLICT(key) DO UPDATE SET value=excluded.value;`, boolAsString(features.embeddingCacheEnabled)); err != nil {
-		return features, fmt.Errorf("set embedding_cache_enabled meta: %w", err)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM meta WHERE key = 'embedding_cache_enabled';`); err != nil {
+		return features, fmt.Errorf("clear legacy embedding_cache meta: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

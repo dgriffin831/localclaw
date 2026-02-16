@@ -25,7 +25,6 @@ func TestSessionDeltaThresholdDebouncesSyncTrigger(t *testing.T) {
 		SessionsRoot:         sessionsRoot,
 		ChunkTokens:          32,
 		ChunkOverlap:         0,
-		Provider:             EmbeddingProviderNone,
 		SessionDeltaBytes:    1024,
 		SessionDeltaMessages: 3,
 	})
@@ -100,7 +99,6 @@ func TestSessionDeltaSyncFailureIsCaptured(t *testing.T) {
 		SessionsRoot:         sessionsRoot,
 		ChunkTokens:          32,
 		ChunkOverlap:         0,
-		Provider:             EmbeddingProviderNone,
 		SessionDeltaBytes:    1,
 		SessionDeltaMessages: 1,
 	})

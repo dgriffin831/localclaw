@@ -19,7 +19,6 @@ func TestSQLiteIndexManagerSafeReindexFailurePreservesExistingIndex(t *testing.T
 		WorkspaceRoot: workspace,
 		ChunkTokens:   4,
 		ChunkOverlap:  0,
-		Provider:      "none",
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)

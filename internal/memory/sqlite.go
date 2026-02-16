@@ -23,13 +23,12 @@ const (
 
 // SQLiteIndexManager provides local SQLite-backed file/chunk indexing.
 type SQLiteIndexManager struct {
-	cfg               IndexManagerConfig
-	db                *sql.DB
-	embeddingProvider EmbeddingProvider
-	mu                sync.Mutex
-	schemaInstalled   bool
-	features          schemaFeatures
-	syncMu            sync.Mutex
+	cfg             IndexManagerConfig
+	db              *sql.DB
+	mu              sync.Mutex
+	schemaInstalled bool
+	features        schemaFeatures
+	syncMu          sync.Mutex
 
 	stateMu           sync.Mutex
 	dirty             bool
@@ -59,22 +58,6 @@ func NewSQLiteIndexManager(cfg IndexManagerConfig) *SQLiteIndexManager {
 	}
 	if cfg.ChunkOverlap < 0 {
 		cfg.ChunkOverlap = 0
-	}
-	if strings.TrimSpace(cfg.Provider) == "" {
-		cfg.Provider = "none"
-	}
-	if cfg.CandidateMultiplier <= 0 {
-		cfg.CandidateMultiplier = 4
-	}
-	if cfg.VectorWeight == 0 && cfg.KeywordWeight == 0 {
-		cfg.VectorWeight = 0.8
-		cfg.KeywordWeight = 0.2
-	}
-	if cfg.VectorWeight < 0 {
-		cfg.VectorWeight = 0
-	}
-	if cfg.KeywordWeight < 0 {
-		cfg.KeywordWeight = 0
 	}
 	if len(cfg.Sources) == 0 {
 		cfg.Sources = []string{"memory"}
@@ -326,11 +309,10 @@ func (m *SQLiteIndexManager) Status(ctx context.Context) (IndexStatus, error) {
 	}
 
 	return IndexStatus{
-		DBPath:                m.cfg.DBPath,
-		FileCount:             fileCount,
-		ChunkCount:            chunkCount,
-		FTSEnabled:            m.features.ftsEnabled,
-		EmbeddingCacheEnabled: m.features.embeddingCacheEnabled,
+		DBPath:     m.cfg.DBPath,
+		FileCount:  fileCount,
+		ChunkCount: chunkCount,
+		FTSEnabled: m.features.ftsEnabled,
 	}, nil
 }
 
@@ -505,14 +487,13 @@ func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force b
 
 		chunks := chunkTextWithLines(doc.Text, m.cfg.ChunkTokens, m.cfg.ChunkOverlap)
 		for _, chunk := range chunks {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO chunks(path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-				VALUES(?, ?, ?, ?, ?, ?, ?, NULL, ?);`,
+			if _, err := tx.ExecContext(ctx, `INSERT INTO chunks(path, source, start_line, end_line, hash, text, updated_at)
+				VALUES(?, ?, ?, ?, ?, ?, ?);`,
 				doc.Path,
 				doc.Source,
 				chunk.StartLine,
 				chunk.EndLine,
 				chunk.Hash,
-				m.cfg.Model,
 				chunk.Text,
 				now,
 			); err != nil {

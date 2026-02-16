@@ -130,24 +130,14 @@ type MemorySearchConfig struct {
 	Enabled    bool                    `json:"enabled"`
 	Sources    []string                `json:"sources"`
 	ExtraPaths []string                `json:"extraPaths"`
-	Provider   string                  `json:"provider"`
-	Fallback   string                  `json:"fallback"`
-	Model      string                  `json:"model"`
 	Store      MemorySearchStoreConfig `json:"store"`
 	Chunking   ChunkingConfig          `json:"chunking"`
 	Query      QueryConfig             `json:"query"`
 	Sync       SyncConfig              `json:"sync"`
-	Cache      CacheConfig             `json:"cache"`
-	Local      LocalConfig             `json:"local"`
 }
 
 type MemorySearchStoreConfig struct {
-	Path   string                 `json:"path"`
-	Vector MemorySearchVectorMode `json:"vector"`
-}
-
-type MemorySearchVectorMode struct {
-	Enabled bool `json:"enabled"`
+	Path string `json:"path"`
 }
 
 type ChunkingConfig struct {
@@ -156,16 +146,8 @@ type ChunkingConfig struct {
 }
 
 type QueryConfig struct {
-	MaxResults int               `json:"maxResults"`
-	MinScore   float64           `json:"minScore"`
-	Hybrid     QueryHybridConfig `json:"hybrid"`
-}
-
-type QueryHybridConfig struct {
-	Enabled             bool    `json:"enabled"`
-	VectorWeight        float64 `json:"vectorWeight"`
-	KeywordWeight       float64 `json:"keywordWeight"`
-	CandidateMultiplier int     `json:"candidateMultiplier"`
+	MaxResults int     `json:"maxResults"`
+	MinScore   float64 `json:"minScore"`
 }
 
 type SyncConfig struct {
@@ -176,19 +158,6 @@ type SyncConfig struct {
 type SyncSessionsConfig struct {
 	DeltaBytes    int `json:"deltaBytes"`
 	DeltaMessages int `json:"deltaMessages"`
-}
-
-type CacheConfig struct {
-	Enabled    bool `json:"enabled"`
-	MaxEntries int  `json:"maxEntries"`
-}
-
-type LocalConfig struct {
-	RuntimePath         string `json:"runtimePath"`
-	ModelPath           string `json:"modelPath"`
-	ModelCacheDir       string `json:"modelCacheDir"`
-	QueryTimeoutSeconds int    `json:"queryTimeoutSeconds"`
-	BatchTimeoutSeconds int    `json:"batchTimeoutSeconds"`
 }
 
 type CronConfig struct {
@@ -249,13 +218,8 @@ func Default() Config {
 					Enabled:    false,
 					Sources:    []string{"memory"},
 					ExtraPaths: []string{},
-					Provider:   "auto",
-					Fallback:   "none",
 					Store: MemorySearchStoreConfig{
 						Path: "~/.localclaw/memory/{agentId}.sqlite",
-						Vector: MemorySearchVectorMode{
-							Enabled: true,
-						},
 					},
 					Chunking: ChunkingConfig{
 						Tokens:  400,
@@ -264,12 +228,6 @@ func Default() Config {
 					Query: QueryConfig{
 						MaxResults: 8,
 						MinScore:   0,
-						Hybrid: QueryHybridConfig{
-							Enabled:             true,
-							VectorWeight:        0.8,
-							KeywordWeight:       0.2,
-							CandidateMultiplier: 4,
-						},
 					},
 					Sync: SyncConfig{
 						OnSearch: false,
@@ -277,17 +235,6 @@ func Default() Config {
 							DeltaBytes:    32768,
 							DeltaMessages: 20,
 						},
-					},
-					Cache: CacheConfig{
-						Enabled:    true,
-						MaxEntries: 1000,
-					},
-					Local: LocalConfig{
-						RuntimePath:         "",
-						ModelPath:           "",
-						ModelCacheDir:       "",
-						QueryTimeoutSeconds: 0,
-						BatchTimeoutSeconds: 0,
 					},
 				},
 			},
@@ -413,14 +360,8 @@ func (c Config) Validate() error {
 		if err := validateMemoryFlushConfig(agent.Compaction.MemoryFlush, "agents.list[].compaction.memoryFlush"); err != nil {
 			return err
 		}
-		if err := validateLocalEmbeddingConfig(agent.MemorySearch.Local, "agents.list[].memorySearch.local"); err != nil {
-			return err
-		}
 	}
 	if err := validateMemoryFlushConfig(c.Agents.Defaults.Compaction.MemoryFlush, "agents.defaults.compaction.memoryFlush"); err != nil {
-		return err
-	}
-	if err := validateLocalEmbeddingConfig(c.Agents.Defaults.MemorySearch.Local, "agents.defaults.memorySearch.local"); err != nil {
 		return err
 	}
 	if c.Heartbeat.Enabled && c.Heartbeat.IntervalSeconds <= 0 {
@@ -447,19 +388,6 @@ func validateMemoryFlushConfig(cfg MemoryFlushConfig, fieldPrefix string) error 
 	}
 	if cfg.TimeoutSeconds < 0 {
 		return fmt.Errorf("%s.timeoutSeconds must be >= 0", fieldPrefix)
-	}
-	return nil
-}
-
-func validateLocalEmbeddingConfig(cfg LocalConfig, fieldPrefix string) error {
-	if strings.TrimSpace(cfg.RuntimePath) == "" && cfg.RuntimePath != "" {
-		return fmt.Errorf("%s.runtimePath cannot be blank", fieldPrefix)
-	}
-	if cfg.QueryTimeoutSeconds < 0 {
-		return fmt.Errorf("%s.queryTimeoutSeconds must be >= 0", fieldPrefix)
-	}
-	if cfg.BatchTimeoutSeconds < 0 {
-		return fmt.Errorf("%s.batchTimeoutSeconds must be >= 0", fieldPrefix)
 	}
 	return nil
 }

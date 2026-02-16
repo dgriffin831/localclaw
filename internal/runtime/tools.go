@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm"
@@ -571,18 +570,7 @@ func (a *App) newMemoryToolManager(ctx context.Context, agentID string, searchCf
 		ExtraPaths:           extraPaths,
 		ChunkTokens:          searchCfg.Chunking.Tokens,
 		ChunkOverlap:         searchCfg.Chunking.Overlap,
-		Provider:             searchCfg.Provider,
-		Model:                searchCfg.Model,
-		Fallback:             searchCfg.Fallback,
-		Local:                memoryLocalEmbeddingConfig(searchCfg.Local),
 		EnableFTS:            true,
-		EnableVector:         searchCfg.Store.Vector.Enabled,
-		EnableEmbeddingCache: searchCfg.Cache.Enabled,
-		EmbeddingCacheMax:    searchCfg.Cache.MaxEntries,
-		HybridEnabled:        searchCfg.Query.Hybrid.Enabled,
-		VectorWeight:         searchCfg.Query.Hybrid.VectorWeight,
-		KeywordWeight:        searchCfg.Query.Hybrid.KeywordWeight,
-		CandidateMultiplier:  searchCfg.Query.Hybrid.CandidateMultiplier,
 		SessionDeltaBytes:    searchCfg.Sync.Sessions.DeltaBytes,
 		SessionDeltaMessages: searchCfg.Sync.Sessions.DeltaMessages,
 	})
@@ -725,29 +713,14 @@ func hasMemorySearchOverride(cfg config.MemorySearchConfig) bool {
 	return cfg.Enabled ||
 		len(cfg.Sources) > 0 ||
 		len(cfg.ExtraPaths) > 0 ||
-		strings.TrimSpace(cfg.Provider) != "" ||
-		strings.TrimSpace(cfg.Fallback) != "" ||
-		strings.TrimSpace(cfg.Model) != "" ||
 		strings.TrimSpace(cfg.Store.Path) != "" ||
-		cfg.Store.Vector.Enabled ||
 		cfg.Chunking.Tokens > 0 ||
 		cfg.Chunking.Overlap > 0 ||
 		cfg.Query.MaxResults > 0 ||
 		cfg.Query.MinScore > 0 ||
-		cfg.Query.Hybrid.Enabled ||
-		cfg.Query.Hybrid.VectorWeight > 0 ||
-		cfg.Query.Hybrid.KeywordWeight > 0 ||
-		cfg.Query.Hybrid.CandidateMultiplier > 0 ||
 		cfg.Sync.OnSearch ||
 		cfg.Sync.Sessions.DeltaBytes > 0 ||
-		cfg.Sync.Sessions.DeltaMessages > 0 ||
-		cfg.Cache.Enabled ||
-		cfg.Cache.MaxEntries > 0 ||
-		strings.TrimSpace(cfg.Local.RuntimePath) != "" ||
-		strings.TrimSpace(cfg.Local.ModelPath) != "" ||
-		strings.TrimSpace(cfg.Local.ModelCacheDir) != "" ||
-		cfg.Local.QueryTimeoutSeconds > 0 ||
-		cfg.Local.BatchTimeoutSeconds > 0
+		cfg.Sync.Sessions.DeltaMessages > 0
 }
 
 func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.MemorySearchConfig {
@@ -761,20 +734,8 @@ func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.Me
 	if len(override.ExtraPaths) > 0 {
 		merged.ExtraPaths = append([]string{}, override.ExtraPaths...)
 	}
-	if strings.TrimSpace(override.Provider) != "" {
-		merged.Provider = override.Provider
-	}
-	if strings.TrimSpace(override.Fallback) != "" {
-		merged.Fallback = override.Fallback
-	}
-	if strings.TrimSpace(override.Model) != "" {
-		merged.Model = override.Model
-	}
 	if strings.TrimSpace(override.Store.Path) != "" {
 		merged.Store.Path = override.Store.Path
-	}
-	if override.Store.Vector.Enabled {
-		merged.Store.Vector.Enabled = true
 	}
 	if override.Chunking.Tokens > 0 {
 		merged.Chunking.Tokens = override.Chunking.Tokens
@@ -788,18 +749,6 @@ func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.Me
 	if override.Query.MinScore > 0 {
 		merged.Query.MinScore = override.Query.MinScore
 	}
-	if override.Query.Hybrid.Enabled {
-		merged.Query.Hybrid.Enabled = true
-	}
-	if override.Query.Hybrid.VectorWeight > 0 {
-		merged.Query.Hybrid.VectorWeight = override.Query.Hybrid.VectorWeight
-	}
-	if override.Query.Hybrid.KeywordWeight > 0 {
-		merged.Query.Hybrid.KeywordWeight = override.Query.Hybrid.KeywordWeight
-	}
-	if override.Query.Hybrid.CandidateMultiplier > 0 {
-		merged.Query.Hybrid.CandidateMultiplier = override.Query.Hybrid.CandidateMultiplier
-	}
 	if override.Sync.OnSearch {
 		merged.Sync.OnSearch = true
 	}
@@ -809,38 +758,7 @@ func mergeMemorySearchConfig(base, override config.MemorySearchConfig) config.Me
 	if override.Sync.Sessions.DeltaMessages > 0 {
 		merged.Sync.Sessions.DeltaMessages = override.Sync.Sessions.DeltaMessages
 	}
-	if override.Cache.Enabled {
-		merged.Cache.Enabled = true
-	}
-	if override.Cache.MaxEntries > 0 {
-		merged.Cache.MaxEntries = override.Cache.MaxEntries
-	}
-	if strings.TrimSpace(override.Local.ModelPath) != "" {
-		merged.Local.ModelPath = override.Local.ModelPath
-	}
-	if strings.TrimSpace(override.Local.ModelCacheDir) != "" {
-		merged.Local.ModelCacheDir = override.Local.ModelCacheDir
-	}
-	if strings.TrimSpace(override.Local.RuntimePath) != "" {
-		merged.Local.RuntimePath = override.Local.RuntimePath
-	}
-	if override.Local.QueryTimeoutSeconds > 0 {
-		merged.Local.QueryTimeoutSeconds = override.Local.QueryTimeoutSeconds
-	}
-	if override.Local.BatchTimeoutSeconds > 0 {
-		merged.Local.BatchTimeoutSeconds = override.Local.BatchTimeoutSeconds
-	}
 	return merged
-}
-
-func memoryLocalEmbeddingConfig(local config.LocalConfig) memory.LocalEmbeddingConfig {
-	return memory.LocalEmbeddingConfig{
-		RuntimePath:   local.RuntimePath,
-		ModelPath:     local.ModelPath,
-		ModelCacheDir: local.ModelCacheDir,
-		QueryTimeout:  time.Duration(local.QueryTimeoutSeconds) * time.Second,
-		BatchTimeout:  time.Duration(local.BatchTimeoutSeconds) * time.Second,
-	}
 }
 
 func argPresent(args map[string]interface{}, name string) bool {

@@ -21,7 +21,6 @@ func TestSearchKeywordOnlyReturnsSnippetsAndScores(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderNone,
 		EnableFTS:     true,
 	})
 	if err := m.Open(ctx); err != nil {
@@ -59,46 +58,6 @@ func TestSearchKeywordOnlyReturnsSnippetsAndScores(t *testing.T) {
 	}
 }
 
-func TestSearchKeywordRankingWinsEvenWhenVectorProviderConfigured(t *testing.T) {
-	ctx := context.Background()
-	workspace := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
-
-	mustWriteMemoryFile(t, filepath.Join(workspace, "MEMORY.md"), "FIRST shared shared shared")
-	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "SECOND shared")
-
-	m := NewSQLiteIndexManager(IndexManagerConfig{
-		DBPath:        dbPath,
-		WorkspaceRoot: workspace,
-		ChunkTokens:   64,
-		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderLocal,
-		EnableVector:  true,
-		EnableFTS:     false,
-	})
-	if err := m.Open(ctx); err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	defer m.Close()
-
-	if _, err := m.Sync(ctx, true); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-
-	m.embeddingProvider = fakeEmbeddingProvider{}
-
-	results, err := m.Search(ctx, "shared", SearchOptions{MaxResults: 2})
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	if len(results) < 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
-	}
-	if results[0].Path != "MEMORY.md" {
-		t.Fatalf("expected keyword-only top result path MEMORY.md, got %q", results[0].Path)
-	}
-}
-
 func TestSearchFallsBackToLikeWhenFTSReturnsNoRows(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
@@ -111,7 +70,6 @@ func TestSearchFallsBackToLikeWhenFTSReturnsNoRows(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderNone,
 		EnableFTS:     true,
 	})
 	if err := m.Open(ctx); err != nil {
@@ -149,7 +107,6 @@ func TestGetRestrictsPathScopeAndSupportsLineSlice(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderNone,
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)
@@ -178,120 +135,6 @@ func TestGetRestrictsPathScopeAndSupportsLineSlice(t *testing.T) {
 	}
 }
 
-func TestSearchDisableVectorSkipsVectorOnlyFallback(t *testing.T) {
-	ctx := context.Background()
-	workspace := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
-
-	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "SECOND shared")
-
-	m := NewSQLiteIndexManager(IndexManagerConfig{
-		DBPath:        dbPath,
-		WorkspaceRoot: workspace,
-		ChunkTokens:   64,
-		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderLocal,
-		EnableVector:  false,
-		EnableFTS:     false,
-	})
-	if err := m.Open(ctx); err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	defer m.Close()
-
-	if _, err := m.Sync(ctx, true); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-
-	m.embeddingProvider = fakeEmbeddingProvider{}
-
-	results, err := m.Search(ctx, "nomatch", SearchOptions{MaxResults: 5})
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("expected no results when vector is disabled and no keyword matches, got %d", len(results))
-	}
-}
-
-func TestSearchV2KeywordOnlyDoesNotUseVectorPromotion(t *testing.T) {
-	ctx := context.Background()
-	workspace := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
-
-	mustWriteMemoryFile(t, filepath.Join(workspace, "MEMORY.md"), "FIRST shared shared shared")
-	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "SECOND shared")
-
-	m := NewSQLiteIndexManager(IndexManagerConfig{
-		DBPath:        dbPath,
-		WorkspaceRoot: workspace,
-		ChunkTokens:   64,
-		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderLocal,
-		EnableVector:  true,
-		EnableFTS:     false,
-		HybridEnabled: false,
-	})
-	if err := m.Open(ctx); err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	defer m.Close()
-
-	if _, err := m.Sync(ctx, true); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-
-	m.embeddingProvider = fakeEmbeddingProvider{}
-
-	results, err := m.Search(ctx, "shared", SearchOptions{MaxResults: 2})
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	if len(results) < 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
-	}
-	if results[0].Path != "MEMORY.md" {
-		t.Fatalf("expected keyword-only top result path MEMORY.md, got %q", results[0].Path)
-	}
-}
-
-func TestSearchV2KeywordOnlyDoesNotReturnVectorOnlyFallbackCandidates(t *testing.T) {
-	ctx := context.Background()
-	workspace := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
-
-	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "SECOND shared")
-
-	m := NewSQLiteIndexManager(IndexManagerConfig{
-		DBPath:        dbPath,
-		WorkspaceRoot: workspace,
-		ChunkTokens:   64,
-		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderLocal,
-		EnableVector:  true,
-		EnableFTS:     false,
-		HybridEnabled: false,
-	})
-	if err := m.Open(ctx); err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	defer m.Close()
-
-	if _, err := m.Sync(ctx, true); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-
-	m.embeddingProvider = fakeEmbeddingProvider{}
-
-	results, err := m.Search(ctx, "nomatch", SearchOptions{MaxResults: 5})
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("expected no results when query has no keyword matches, got %d", len(results))
-	}
-}
-
 func TestSearchEmptyQueryReturnsError(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
@@ -303,7 +146,6 @@ func TestSearchEmptyQueryReturnsError(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderNone,
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)
@@ -330,7 +172,6 @@ func TestGetRejectsNonMarkdownPath(t *testing.T) {
 		WorkspaceRoot: workspace,
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
-		Provider:      EmbeddingProviderNone,
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)
@@ -340,33 +181,4 @@ func TestGetRejectsNonMarkdownPath(t *testing.T) {
 	if _, err := m.Get(ctx, "memory/notes.txt", GetOptions{}); !errors.Is(err, ErrMemoryPathNotMarkdown) {
 		t.Fatalf("expected ErrMemoryPathNotMarkdown, got %v", err)
 	}
-}
-
-type fakeEmbeddingProvider struct{}
-
-func (fakeEmbeddingProvider) ProviderName() string { return EmbeddingProviderLocal }
-func (fakeEmbeddingProvider) Model() string        { return "test-local" }
-func (fakeEmbeddingProvider) ProviderKey() string  { return "test-local" }
-
-func (fakeEmbeddingProvider) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
-	_ = ctx
-	if strings.Contains(strings.ToUpper(text), "SHARED") {
-		return []float32{0, 1}, nil
-	}
-	return []float32{1, 0}, nil
-}
-
-func (fakeEmbeddingProvider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	_ = ctx
-	out := make([][]float32, 0, len(texts))
-	for _, text := range texts {
-		upper := strings.ToUpper(text)
-		switch {
-		case strings.Contains(upper, "SECOND"):
-			out = append(out, []float32{0, 1})
-		default:
-			out = append(out, []float32{1, 0})
-		}
-	}
-	return out, nil
 }
