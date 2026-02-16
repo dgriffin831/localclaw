@@ -5,6 +5,9 @@
 - Scope finalized: memory retrieval v2 keyword-only stack (FTS/LIKE search + grep), embedding/vector path removal, schema compatibility/migration cleanup.
 
 ## Commits
+- `6405153` docs(memory): document retrieval v2 behavior and handoff
+  - Updates README/docs to match retrieval-v2 tooling and config shape.
+  - Replaces embeddings setup guide with deprecation note and migration direction.
 - `cf8e705` feat(memory): finalize retrieval v2 keyword-only memory stack
   - Removes embedding provider/runtime/cache implementation from memory indexing/search.
   - Simplifies `memorySearch` config surface to v2 fields (sources/path/chunking/query/sync).
