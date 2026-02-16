@@ -59,7 +59,7 @@ func TestSearchKeywordOnlyReturnsSnippetsAndScores(t *testing.T) {
 	}
 }
 
-func TestSearchLocalVectorMergeCanOutrankKeywordOnly(t *testing.T) {
+func TestSearchKeywordRankingWinsEvenWhenVectorProviderConfigured(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
@@ -94,8 +94,44 @@ func TestSearchLocalVectorMergeCanOutrankKeywordOnly(t *testing.T) {
 	if len(results) < 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
-	if results[0].Path != "memory/notes.md" {
-		t.Fatalf("expected vector-promoted top result path memory/notes.md, got %q", results[0].Path)
+	if results[0].Path != "MEMORY.md" {
+		t.Fatalf("expected keyword-only top result path MEMORY.md, got %q", results[0].Path)
+	}
+}
+
+func TestSearchFallsBackToLikeWhenFTSReturnsNoRows(t *testing.T) {
+	ctx := context.Background()
+	workspace := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
+
+	mustWriteMemoryFile(t, filepath.Join(workspace, "MEMORY.md"), "marker token")
+
+	m := NewSQLiteIndexManager(IndexManagerConfig{
+		DBPath:        dbPath,
+		WorkspaceRoot: workspace,
+		ChunkTokens:   64,
+		ChunkOverlap:  0,
+		Provider:      EmbeddingProviderNone,
+		EnableFTS:     true,
+	})
+	if err := m.Open(ctx); err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer m.Close()
+
+	if _, err := m.Sync(ctx, true); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	results, err := m.Search(ctx, "mark", SearchOptions{MaxResults: 5, MinScore: 0})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected LIKE fallback to return 1 result, got %d", len(results))
+	}
+	if results[0].Path != "MEMORY.md" {
+		t.Fatalf("unexpected path from LIKE fallback: %q", results[0].Path)
 	}
 }
 
@@ -178,12 +214,13 @@ func TestSearchDisableVectorSkipsVectorOnlyFallback(t *testing.T) {
 	}
 }
 
-func TestSearchLocalProviderRequiredReturnsErrorWhenRuntimeUnavailable(t *testing.T) {
+func TestSearchV2KeywordOnlyDoesNotUseVectorPromotion(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
 
-	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "alpha marker")
+	mustWriteMemoryFile(t, filepath.Join(workspace, "MEMORY.md"), "FIRST shared shared shared")
+	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "SECOND shared")
 
 	m := NewSQLiteIndexManager(IndexManagerConfig{
 		DBPath:        dbPath,
@@ -191,9 +228,9 @@ func TestSearchLocalProviderRequiredReturnsErrorWhenRuntimeUnavailable(t *testin
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
 		Provider:      EmbeddingProviderLocal,
-		Fallback:      EmbeddingProviderLocal,
 		EnableVector:  true,
 		EnableFTS:     false,
+		HybridEnabled: false,
 	})
 	if err := m.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)
@@ -204,12 +241,54 @@ func TestSearchLocalProviderRequiredReturnsErrorWhenRuntimeUnavailable(t *testin
 		t.Fatalf("sync: %v", err)
 	}
 
-	_, err := m.Search(ctx, "marker", SearchOptions{MaxResults: 5})
-	if err == nil {
-		t.Fatalf("expected local embedding runtime setup error")
+	m.embeddingProvider = fakeEmbeddingProvider{}
+
+	results, err := m.Search(ctx, "shared", SearchOptions{MaxResults: 2})
+	if err != nil {
+		t.Fatalf("search: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "runtime") {
-		t.Fatalf("expected runtime setup messaging, got %q", err.Error())
+	if len(results) < 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Path != "MEMORY.md" {
+		t.Fatalf("expected keyword-only top result path MEMORY.md, got %q", results[0].Path)
+	}
+}
+
+func TestSearchV2KeywordOnlyDoesNotReturnVectorOnlyFallbackCandidates(t *testing.T) {
+	ctx := context.Background()
+	workspace := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
+
+	mustWriteMemoryFile(t, filepath.Join(workspace, "memory", "notes.md"), "SECOND shared")
+
+	m := NewSQLiteIndexManager(IndexManagerConfig{
+		DBPath:        dbPath,
+		WorkspaceRoot: workspace,
+		ChunkTokens:   64,
+		ChunkOverlap:  0,
+		Provider:      EmbeddingProviderLocal,
+		EnableVector:  true,
+		EnableFTS:     false,
+		HybridEnabled: false,
+	})
+	if err := m.Open(ctx); err != nil {
+		t.Fatalf("open manager: %v", err)
+	}
+	defer m.Close()
+
+	if _, err := m.Sync(ctx, true); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	m.embeddingProvider = fakeEmbeddingProvider{}
+
+	results, err := m.Search(ctx, "nomatch", SearchOptions{MaxResults: 5})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results when query has no keyword matches, got %d", len(results))
 	}
 }
 
