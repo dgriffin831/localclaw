@@ -15,8 +15,8 @@
 - Command modes: `check` (default), `tui`, `memory`, `mcp`.
 - Agent-aware workspace resolution and bootstrap templates.
 - Per-agent session metadata + transcript files under the configured state root.
-- SQLite-backed memory indexing/search with CLI tooling (`memory status/index/search`).
-- Runtime memory tools (`memory_search`, `memory_get`) injected when memory tools are enabled.
+- SQLite-backed memory indexing/search/grep with CLI tooling (`memory status/index/search/grep`).
+- Runtime memory tools (`memory_search`, `memory_grep`, `memory_get`) injected when memory tools are enabled.
 - Session lifecycle hooks for `/reset` and `/new` snapshot behavior.
 
 ## Quick start
@@ -37,6 +37,7 @@ go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
+go run ./cmd/localclaw memory grep "incident-1234"
 go run ./cmd/localclaw mcp serve
 ```
 
@@ -111,7 +112,7 @@ Optional waiting-text customization:
 - `docs/ARCHITECTURE.md` - implementation-detail architecture map.
 - `docs/RUNTIME.md` - startup flow and command mode behavior.
 - `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
-- `docs/EMBEDDINGS.md` - local embedding runtime setup and Hugging Face model installation.
+- `docs/EMBEDDINGS.md` - deprecated embedding guide and memory retrieval v2 notes.
 - `docs/TUI.md` - terminal UX behavior and controls.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
 - `docs/TESTING.md` - package coverage and Red/Green command loops.

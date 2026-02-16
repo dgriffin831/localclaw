@@ -29,7 +29,7 @@ localclaw binary (single process)
   |- runtime wiring
   |   |- workspace manager (resolve + bootstrap templates)
   |   |- session store + transcript writer
-  |   |- runtime tool registry (memory_search/memory_get)
+  |   |- runtime tool registry (memory_search/memory_grep/memory_get)
   |   |- skills registry
   |   |- cron scheduler
   |   |- heartbeat monitor
@@ -38,7 +38,7 @@ localclaw binary (single process)
   `- command modes
       |- check
       |- tui
-      `- memory {status,index,search}
+      `- memory {status,index,search,grep}
 ```
 
 No server, gateway, or listener process exists.
@@ -66,7 +66,7 @@ Prompt flow:
 - Bootstrap context re-injects after compaction count increases.
 - When memory tools are enabled (`agents.*.memorySearch.enabled`), prompt assembly appends:
   - memory recall policy text
-  - runtime tool definitions (`memory_search`, `memory_get`)
+  - runtime tool definitions (`memory_search`, `memory_grep`, `memory_get`)
   - resolved `session_key`
 
 Session lifecycle:
@@ -78,7 +78,7 @@ Session lifecycle:
 
 Memory/runtime tool behavior:
 
-- Actual semantic index/search is backed by `memory.SQLiteIndexManager`.
+- Memory retrieval is keyword/FTS + grep based (`memory_search` and `memory_grep`).
 - Runtime and memory CLI construct managers on demand using resolved workspace + state paths.
 - Legacy `memory.Store` on `App` remains a minimal no-op compatibility surface.
 

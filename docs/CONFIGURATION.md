@@ -74,14 +74,8 @@
         "enabled": false,
         "sources": ["memory"],
         "extraPaths": [],
-        "provider": "auto",
-        "fallback": "none",
-        "model": "",
         "store": {
-          "path": "~/.localclaw/memory/{agentId}.sqlite",
-          "vector": {
-            "enabled": true
-          }
+          "path": "~/.localclaw/memory/{agentId}.sqlite"
         },
         "chunking": {
           "tokens": 400,
@@ -89,13 +83,7 @@
         },
         "query": {
           "maxResults": 8,
-          "minScore": 0,
-          "hybrid": {
-            "enabled": true,
-            "vectorWeight": 0.8,
-            "keywordWeight": 0.2,
-            "candidateMultiplier": 4
-          }
+          "minScore": 0
         },
         "sync": {
           "onSearch": false,
@@ -103,17 +91,6 @@
             "deltaBytes": 32768,
             "deltaMessages": 20
           }
-        },
-        "cache": {
-          "enabled": true,
-          "maxEntries": 1000
-        },
-        "local": {
-          "runtimePath": "",
-          "modelPath": "",
-          "modelCacheDir": "",
-          "queryTimeoutSeconds": 0,
-          "batchTimeoutSeconds": 0
         }
       },
       "compaction": {
@@ -171,11 +148,6 @@ General:
   - `thresholdTokens`
   - `triggerWindowTokens`
   - `timeoutSeconds`
-- local embedding timeouts must be non-negative:
-  - `agents.defaults.memorySearch.local.queryTimeoutSeconds`
-  - `agents.defaults.memorySearch.local.batchTimeoutSeconds`
-  - same constraint applies to `agents.list[].memorySearch.local.*` overrides
-- `memorySearch.local.runtimePath` cannot be whitespace-only when set.
 - if heartbeat is enabled, `heartbeat.interval_seconds` must be `> 0`.
 
 Local-only hard guardrails (`ValidateLocalOnlyPolicy`):
@@ -196,14 +168,11 @@ Implementation details to be aware of:
   - Fields are not currently "explicitly unset" per-agent (for example, setting a bool to false does not force-disable a true default).
 - Memory CLI (`internal/cli/memory.go`) currently uses `agents.defaults.memorySearch` settings for index/search behavior.
 
-Provider values:
+Compatibility behavior (v2):
 
-- Config accepts provider/fallback strings without strict validation.
-- Memory manager currently supports local-only embedding modes: `none` and `local`.
-- Unsupported provider values fail when memory manager resolves embedding provider.
-- When `provider=local` and fallback also requires local embeddings (for example `fallback=local`), `memorySearch.local.runtimePath` must point to an executable embedding runtime.
-- `memorySearch.local.modelPath` is currently validated as a file path (directory values are rejected).
-- See `docs/EMBEDDINGS.md` for local runtime + model setup.
+- Legacy `memorySearch` keys from embedding/vector versions are ignored when loading JSON config files.
+- Ignored keys do not cause startup validation failure.
+- Supported v2 keys continue to merge normally.
 
 ## Tool policy configuration notes
 
