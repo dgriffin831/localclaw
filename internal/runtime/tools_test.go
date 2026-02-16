@@ -140,6 +140,28 @@ func TestPromptStreamForSessionUsesRequestPathAndSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestPromptStreamForSessionWithOptionsPassesModelOverride(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
+
+	events, errs := app.PromptStreamForSessionWithOptions(ctx, "agent-2", "s-42", "hello", llm.PromptOptions{
+		ModelOverride: "gpt-5-mini",
+	})
+	for range events {
+	}
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+	}
+
+	if llmClient.lastRequest.Options.ModelOverride != "gpt-5-mini" {
+		t.Fatalf("expected model override in request options, got %q", llmClient.lastRequest.Options.ModelOverride)
+	}
+}
+
 func TestPromptStreamForSessionErrorsWhenRequestPathUnsupported(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)

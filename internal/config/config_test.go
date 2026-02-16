@@ -404,6 +404,33 @@ func TestValidateSupportsCodexProviderAndRequiresBinaryPath(t *testing.T) {
 	}
 }
 
+func TestLoadSupportsCodexExtraArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"llm": {
+			"provider": "codex",
+			"codex": {
+				"extra_args": ["--sandbox", "workspace-write"]
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.LLM.Codex.ExtraArgs) != 2 {
+		t.Fatalf("expected 2 codex extra args, got %d", len(cfg.LLM.Codex.ExtraArgs))
+	}
+	if cfg.LLM.Codex.ExtraArgs[0] != "--sandbox" || cfg.LLM.Codex.ExtraArgs[1] != "workspace-write" {
+		t.Fatalf("unexpected codex extra args: %v", cfg.LLM.Codex.ExtraArgs)
+	}
+}
+
 func TestValidateRejectsWhitespaceAgentWorkspaceOverride(t *testing.T) {
 	cfg := Default()
 	cfg.Agents.List = []AgentConfig{{ID: "agent-a", Workspace: "   "}}

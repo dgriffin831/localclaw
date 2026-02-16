@@ -6,7 +6,7 @@
 
 - Local-first operation with no network listeners.
 - Single-process Go runtime (no gateway/server mode).
-- Local Claude Code CLI subprocess integration for LLM execution.
+- Local Claude Code and OpenAI Codex CLI subprocess integrations for LLM execution.
 - Enterprise-safe boundaries: hard local-only runtime constraints.
 - In-process capabilities for workspace, sessions, memory, skills, cron, and heartbeat.
 
@@ -81,7 +81,7 @@ TUI slash commands:
 - `/thinking <on|off>`
 - `/verbose <on|off>`
 - `/mouse <on|off>`
-- `/model <name>` (currently a placeholder; override is not implemented)
+- `/model <name>` (`/model default` or `/model off` clears override)
 - `/exit`
 - `/quit`
 
@@ -115,6 +115,7 @@ Optional waiting-text customization:
 - `docs/MEMORY.md` - memory retrieval v2 model (`memory_search` + `memory_grep`) and implementation notes.
 - `docs/TUI.md` - terminal UX behavior and controls.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
+- `docs/CODEX.md` - local Codex CLI integration details.
 - `docs/TESTING.md` - package coverage and Red/Green command loops.
 - `docs/SECURITY.md` - local-only security boundary and controls.
 - `docs/specs/` - feature specs and design history.

@@ -39,6 +39,7 @@
       "binary_path": "codex",
       "profile": "",
       "model": "",
+      "extra_args": [],
       "mcp": {
         "config_path": "",
         "use_isolated_home": true,
@@ -114,7 +115,7 @@ General:
 - `app.root` is required.
 - `app.thinking_messages` entries must be non-blank when provided.
 - `llm.provider` must be `claudecode` or `codex`.
-- `llm.claude_code.binary_path` is required.
+- `llm.claude_code.binary_path` is required when `llm.provider` is `claudecode`.
 - `llm.codex.binary_path` is required when `llm.provider` is `codex`.
 - `channels.enabled` must contain at least one value.
 - `channels.enabled` allowlist: `slack`, `signal`.
@@ -133,6 +134,12 @@ Local-only boundary:
 - `localclaw` does not expose config flags for gateway/listener behavior.
 - Removed/deprecated config keys are rejected instead of silently accepted.
 - Runtime remains single-process and local-only by architecture.
+
+Codex-specific fields:
+
+- `llm.codex.profile` optionally sets Codex profile (`-p`).
+- `llm.codex.model` sets the default Codex model (`-m`) when no runtime override is present.
+- `llm.codex.extra_args` appends provider-specific flags directly to `codex exec` arguments.
 
 ## Memory configuration notes
 

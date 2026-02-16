@@ -105,6 +105,7 @@ type model struct {
 	activeThinkingMessage string
 	providerName          string
 	providerModel         string
+	modelOverride         string
 	providerTools         []string
 	toolCallOwnershipByID map[string]llm.ToolClass
 	toolCardIndexByCallID map[string]int

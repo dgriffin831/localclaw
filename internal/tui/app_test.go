@@ -618,3 +618,98 @@ func TestHandleSlashToolsShowsDiscoveredProviderTools(t *testing.T) {
 		t.Fatalf("expected discovered provider tools in /tools output, got %q", got)
 	}
 }
+
+func TestHandleSlashModelSetsOverrideForCodex(t *testing.T) {
+	cfg := config.Default()
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.Model = "gpt-5-codex"
+
+	m := newModel(context.Background(), nil, cfg)
+	_ = m.handleSlash("/model gpt-5-mini")
+
+	if m.modelOverride != "gpt-5-mini" {
+		t.Fatalf("expected model override to be set, got %q", m.modelOverride)
+	}
+	got := m.messages[len(m.messages)-1].Raw
+	if !strings.Contains(got, "model override set to gpt-5-mini") {
+		t.Fatalf("expected model set acknowledgement, got %q", got)
+	}
+}
+
+func TestHandleSlashModelClearsOverrideWithDefault(t *testing.T) {
+	cfg := config.Default()
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.Model = "gpt-5-codex"
+
+	m := newModel(context.Background(), nil, cfg)
+	_ = m.handleSlash("/model gpt-5-mini")
+	_ = m.handleSlash("/model default")
+
+	if m.modelOverride != "" {
+		t.Fatalf("expected model override to be cleared, got %q", m.modelOverride)
+	}
+	got := m.messages[len(m.messages)-1].Raw
+	if !strings.Contains(got, "model override cleared") {
+		t.Fatalf("expected model clear acknowledgement, got %q", got)
+	}
+}
+
+func TestHandleSlashModelRejectsUnsupportedProvider(t *testing.T) {
+	cfg := config.Default()
+	cfg.LLM.Provider = "claudecode"
+
+	m := newModel(context.Background(), nil, cfg)
+	_ = m.handleSlash("/model gpt-5-mini")
+
+	if m.modelOverride != "" {
+		t.Fatalf("expected model override to remain unset for unsupported provider, got %q", m.modelOverride)
+	}
+	got := m.messages[len(m.messages)-1].Raw
+	if !strings.Contains(got, "does not support model override") {
+		t.Fatalf("expected unsupported provider notice, got %q", got)
+	}
+}
+
+func TestHandleSlashStatusIncludesConfiguredAndEffectiveModel(t *testing.T) {
+	cfg := config.Default()
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.Model = "gpt-5-codex"
+
+	m := newModel(context.Background(), nil, cfg)
+	_ = m.handleSlash("/model gpt-5-mini")
+	_ = m.handleSlash("/status")
+
+	got := m.messages[len(m.messages)-1].Raw
+	if !strings.Contains(got, "provider=codex") {
+		t.Fatalf("expected status to include provider, got %q", got)
+	}
+	if !strings.Contains(got, "configured_model=gpt-5-codex") {
+		t.Fatalf("expected status to include configured model, got %q", got)
+	}
+	if !strings.Contains(got, "effective_model=gpt-5-mini") {
+		t.Fatalf("expected status to include effective model override, got %q", got)
+	}
+	if !strings.Contains(got, "model_override=gpt-5-mini") {
+		t.Fatalf("expected status to include active model override, got %q", got)
+	}
+}
+
+func TestRunSessionResetClearsModelOverride(t *testing.T) {
+	cfg := config.Default()
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.Model = "gpt-5-codex"
+
+	m := newModel(context.Background(), nil, cfg)
+	m.modelOverride = "gpt-5-mini"
+
+	m.runSessionReset(false, "/reset")
+	if m.modelOverride != "" {
+		t.Fatalf("expected /reset to clear model override, got %q", m.modelOverride)
+	}
+
+	m.modelOverride = "gpt-5-mini"
+	m.runSessionReset(true, "/new")
+	if m.modelOverride != "" {
+		t.Fatalf("expected /new to clear model override, got %q", m.modelOverride)
+	}
+}

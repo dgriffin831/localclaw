@@ -32,10 +32,11 @@ func (a *App) ToolDefinitions(agentID string) []skills.ToolDefinition {
 	return filtered
 }
 
-func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResolution, input string) llm.Request {
+func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResolution, input string, opts llm.PromptOptions) llm.Request {
 	trimmedInput := strings.TrimSpace(input)
 	bootstrapSection := a.buildBootstrapPromptSection(ctx, resolution)
 	skillsSection := a.buildSkillsPromptSection(ctx, resolution)
+	modelOverride := strings.TrimSpace(opts.ModelOverride)
 
 	var system strings.Builder
 	if bootstrapSection != "" {
@@ -50,6 +51,9 @@ func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResoluti
 			AgentID:    resolution.AgentID,
 			SessionID:  resolution.SessionID,
 			SessionKey: resolution.SessionKey,
+		},
+		Options: llm.PromptOptions{
+			ModelOverride: modelOverride,
 		},
 	}
 }
