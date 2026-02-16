@@ -79,12 +79,11 @@ Provider compatibility:
 - If provider supports request options (`llm.RequestClient`), runtime passes structured request fields (`system_context`, tool defs, skills block, session metadata).
 - If provider does not support request options, runtime composes one fallback prompt string and calls `Prompt` / `PromptStream`.
 
-Structured tool loop:
+MCP-first hard cutover:
 
-- If provider advertises `StructuredToolCalls=true`, runtime intercepts `tool_call` events.
-- Runtime executes policy checks + local/delegated routing, then emits `tool_result` events.
-- Tool results are sent back to provider callbacks when present.
-- Tool failures are non-fatal; stream continues unless run context is cancelled.
+- Runtime no longer intercepts or executes provider-emitted structured `tool_call` events in the prompt stream path.
+- `PromptStreamForSession` forwards provider stream events directly.
+- Provider-native and localclaw MCP execution happens provider-side; runtime remains local-only orchestrator and transcript/session manager.
 
 ## Runtime tools
 

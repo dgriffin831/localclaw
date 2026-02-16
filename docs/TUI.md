@@ -82,7 +82,9 @@ Implemented command set:
 Command behavior details:
 
 - `/status` prints one system line containing status, provider, agent, session, workspace, thinking, and verbose flags.
-- `/tools` prints provider plus provider-native tools (when discovered from stream metadata) and localclaw runtime tools for the active agent.
+- `/tools` prints provider plus explicit ownership sections:
+  - `provider_native` for provider-discovered native tools.
+  - `localclaw_mcp` for localclaw runtime tools for the active agent.
 - `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
 - `/verbose off` suppresses the additional `[verbose]` diagnostics.
 - `/clear` clears transcript messages without adding a confirmation line.
@@ -133,6 +135,7 @@ Completion behavior:
 - Final payload replaces assistant text when non-empty.
 - If final and delta are both empty, assistant message becomes `(no output)`.
 - Assistant final text is appended to transcript file and token accounting.
+- Tool call/result system messages include ownership source labels (`provider_native` or `localclaw_mcp`).
 
 ## Rendering
 
