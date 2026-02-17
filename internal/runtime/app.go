@@ -122,6 +122,7 @@ func New(cfg config.Config) (*App, error) {
 		claudeClient := claudecode.NewClient(claudecode.Settings{
 			BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
 			Profile:             cfg.LLM.ClaudeCode.Profile,
+			ExtraArgs:           cfg.LLM.ClaudeCode.ExtraArgs,
 			SessionMode:         cfg.LLM.ClaudeCode.SessionMode,
 			SessionArg:          cfg.LLM.ClaudeCode.SessionArg,
 			ResumeArgs:          cfg.LLM.ClaudeCode.ResumeArgs,

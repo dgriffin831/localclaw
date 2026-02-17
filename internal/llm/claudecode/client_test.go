@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -88,6 +89,24 @@ func TestBuildCommandArgsForRequestOmitsAllowedToolsWhenNoToolDefinitions(t *tes
 	}
 }
 
+func TestBuildCommandArgsForRequestIncludesConfiguredExtraArgs(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath: "claude",
+		ExtraArgs: []string{
+			"--dangerously-skip-permissions",
+			"--allowed-tools",
+			"mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get",
+		},
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{Input: "hello"}, "/tmp/mcp.json")
+	if !containsArgSequence(args, []string{"--dangerously-skip-permissions"}) {
+		t.Fatalf("expected --dangerously-skip-permissions in args, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--allowed-tools", "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get"}) {
+		t.Fatalf("expected configured --allowed-tools in args, got %v", args)
+	}
+}
+
 func TestBuildCommandArgsForRequestAddsStartSessionArgWhenNoPersistedSession(t *testing.T) {
 	client := NewClient(Settings{
 		BinaryPath:   "claude",
@@ -119,6 +138,14 @@ func TestBuildCommandArgsForRequestUsesResumeArgsWhenPersistedSessionExists(t *t
 	}, "/tmp/mcp.json")
 	if !containsArgSequence(args, []string{"--resume", "sess-42"}) {
 		t.Fatalf("expected resume args with provider session id, got %v", args)
+	}
+}
+
+func TestGenerateSessionIDProducesUUIDv4(t *testing.T) {
+	id := generateSessionID()
+	pattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	if !pattern.MatchString(id) {
+		t.Fatalf("expected UUIDv4 format, got %q", id)
 	}
 }
 
@@ -375,6 +402,96 @@ func TestParseStreamJSONLineResultError(t *testing.T) {
 	}
 	if resultErr != "max turns reached" {
 		t.Fatalf("expected result error text, got %q", resultErr)
+	}
+}
+
+func TestParseStreamJSONLineResultErrorUsesErrorsArray(t *testing.T) {
+	toolNames := map[string]string{}
+	line := `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: stale-id"]}`
+	events, resultErr, err := parseStreamJSONLine(line, toolNames)
+	if err != nil {
+		t.Fatalf("parse line: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no final events for empty result text, got %d", len(events))
+	}
+	if resultErr != "No conversation found with session ID: stale-id" {
+		t.Fatalf("expected provider error from errors array, got %q", resultErr)
+	}
+}
+
+func TestPromptStreamRequestSurfacesResultErrorWhenProcessExitsNonZero(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "fake-claude.sh")
+	script := `#!/usr/bin/env bash
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: stale-id"]}'
+exit 1
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
+	}
+
+	client := NewClient(Settings{
+		BinaryPath:          scriptPath,
+		MCPConfigDir:        tmpDir,
+		MCPServerBinaryPath: "localclaw",
+		MCPServerArgs:       []string{"mcp", "serve"},
+	})
+
+	events, errs := client.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for range events {
+	}
+	var gotErr error
+	for err := range errs {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if gotErr == nil {
+		t.Fatalf("expected error from non-zero fake claude command")
+	}
+	if !strings.Contains(gotErr.Error(), "No conversation found with session ID") {
+		t.Fatalf("expected surfaced result error text, got %v", gotErr)
+	}
+}
+
+func TestPromptStreamRequestDoesNotEmitProviderSessionMetadataAfterResultError(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "fake-claude-result-then-system.sh")
+	script := `#!/usr/bin/env bash
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: stale-id"]}'
+echo '{"type":"system","subtype":"init","session_id":"non-resumable-id","model":"claude-opus-4-6"}'
+exit 1
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
+	}
+
+	client := NewClient(Settings{
+		BinaryPath:          scriptPath,
+		MCPConfigDir:        tmpDir,
+		MCPServerBinaryPath: "localclaw",
+		MCPServerArgs:       []string{"mcp", "serve"},
+	})
+
+	events, errs := client.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	providerMetadataCount := 0
+	for evt := range events {
+		if evt.Type == llm.StreamEventProviderMetadata {
+			providerMetadataCount++
+		}
+	}
+	var gotErr error
+	for err := range errs {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if gotErr == nil {
+		t.Fatalf("expected error from non-zero fake claude command")
+	}
+	if providerMetadataCount != 0 {
+		t.Fatalf("expected no provider metadata events after result error, got %d", providerMetadataCount)
 	}
 }
 

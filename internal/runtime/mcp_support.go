@@ -15,7 +15,6 @@ import (
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/skills"
-	"github.com/dgriffin831/localclaw/internal/workspace"
 )
 
 var ErrMCPNotFound = errors.New("not found")
@@ -123,19 +122,6 @@ func (a *App) MCPWorkspaceStatus(ctx context.Context, agentID string) (MCPWorksp
 	return MCPWorkspaceStatus{AgentID: resolvedAgentID, WorkspacePath: workspacePath, Exists: exists}, nil
 }
 
-func (a *App) MCPWorkspaceBootstrapContext(ctx context.Context, agentID, sessionID string) (string, []workspace.BootstrapFile, error) {
-	resolution := ResolveSession(agentID, sessionID)
-	workspacePath, err := a.ResolveWorkspacePath(resolution.AgentID)
-	if err != nil {
-		return "", nil, err
-	}
-	files, err := a.workspace.LoadBootstrapFiles(ctx, resolution.AgentID, resolution.SessionKey)
-	if err != nil {
-		return "", nil, err
-	}
-	return workspacePath, files, nil
-}
-
 func (a *App) MCPCronList(ctx context.Context) ([]cron.Entry, error) {
 	return a.cron.List(ctx)
 }
@@ -191,6 +177,31 @@ func (a *App) MCPSessionStatus(ctx context.Context, agentID, sessionID string) (
 	return entry, nil
 }
 
+func (a *App) MCPSessionDelete(ctx context.Context, agentID, sessionID string) (bool, error) {
+	resolution := ResolveSession(agentID, sessionID)
+	removedSession, err := a.sessions.Delete(ctx, resolution.AgentID, resolution.SessionID)
+	if err != nil {
+		return false, err
+	}
+
+	removedTranscript := false
+	transcriptPath, err := a.ResolveTranscriptPath(resolution.AgentID, resolution.SessionID)
+	if err != nil {
+		return false, err
+	}
+	if err := os.Remove(transcriptPath); err == nil {
+		removedTranscript = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("remove transcript: %w", err)
+	}
+
+	removed := removedSession || removedTranscript
+	if removed {
+		a.clearSkillPromptSnapshot(resolution.SessionKey)
+	}
+	return removed, nil
+}
+
 func (a *App) MCPSessionsHistory(ctx context.Context, agentID, sessionID string, limit, offset int) (MCPSessionsHistory, error) {
 	resolution := ResolveSession(agentID, sessionID)
 	if _, err := a.MCPSessionStatus(ctx, resolution.AgentID, resolution.SessionID); err != nil {
@@ -211,35 +222,6 @@ func (a *App) MCPSessionsHistory(ctx context.Context, agentID, sessionID string,
 	start := clampRangeStart(offset, total)
 	end := clampRangeEnd(start, limit, total)
 	return MCPSessionsHistory{Items: items[start:end], Total: total}, nil
-}
-
-func (a *App) MCPSessionsSend(ctx context.Context, agentID, sessionID, input string) (string, error) {
-	resolution := ResolveSession(agentID, sessionID)
-	if _, err := a.MCPSessionStatus(ctx, resolution.AgentID, resolution.SessionID); err != nil {
-		return "", err
-	}
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return "", errors.New("input is required")
-	}
-	if err := a.AppendSessionTranscriptMessage(ctx, resolution.AgentID, resolution.SessionID, "user", trimmed); err != nil {
-		return "", err
-	}
-	response, err := a.PromptForSession(ctx, resolution.AgentID, resolution.SessionID, trimmed)
-	if err != nil {
-		return "", err
-	}
-	if err := a.AppendSessionTranscriptMessage(ctx, resolution.AgentID, resolution.SessionID, "assistant", response); err != nil {
-		return "", err
-	}
-	_, err = a.sessions.Update(ctx, resolution.AgentID, resolution.SessionID, func(entry *session.SessionEntry) error {
-		entry.Key = resolution.SessionKey
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return response, nil
 }
 
 func readTranscriptHistory(path string) ([]MCPHistoryItem, error) {

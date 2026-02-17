@@ -71,6 +71,12 @@ type streamErrMsg struct {
 
 type statusTickMsg time.Time
 type ctxDoneMsg struct{}
+type providerToolsDiscoveredMsg struct {
+	Provider string
+	Model    string
+	Tools    []string
+	Err      error
+}
 
 type model struct {
 	ctx context.Context
@@ -96,19 +102,19 @@ type model struct {
 	running         bool
 	hasStreamDelta  bool
 
-	showThinking          bool
-	verbose               bool
-	toolsExpanded         bool
-	mouseEnabled          bool
-	thinkingMessages      []string
-	thinkingMessageIdx    int
-	activeThinkingMessage string
-	providerName          string
-	providerModel         string
-	modelOverride         string
-	providerTools         []string
-	toolCallOwnershipByID map[string]llm.ToolClass
-	toolCardIndexByCallID map[string]int
+	verbose                        bool
+	toolsExpanded                  bool
+	mouseEnabled                   bool
+	thinkingMessages               []string
+	thinkingMessageIdx             int
+	activeThinkingMessage          string
+	providerName                   string
+	providerModel                  string
+	modelOverride                  string
+	providerTools                  []string
+	providerToolsDiscoveryInFlight bool
+	toolCallOwnershipByID          map[string]llm.ToolClass
+	toolCardIndexByCallID          map[string]int
 
 	streamDeltaEvents int
 	streamDeltaChars  int
@@ -178,10 +184,12 @@ var (
 			PaddingLeft(3)
 
 	statusIdleStyle = panelRowStyle.Copy().
-			Foreground(colorTextMuted)
+			Foreground(colorText).
+			Background(colorBackground)
 
 	statusBusyStyle = panelRowStyle.Copy().
-			Foreground(colorWarning)
+			Foreground(colorText).
+			Background(colorBackground)
 
 	statusErrStyle = panelRowStyle.Copy().
 			Foreground(colorError).
@@ -190,9 +198,6 @@ var (
 	inputStyle = panelRowStyle.Copy().
 			BorderForeground(colorBorderSubtle).
 			Background(colorBackgroundPane)
-
-	inputHintStyle = lipgloss.NewStyle().
-			Foreground(colorTextMuted)
 
 	slashMenuItemStyle = lipgloss.NewStyle().
 				Foreground(colorTextMuted)
@@ -242,7 +247,7 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(colorTextMuted)
+	sp.Style = lipgloss.NewStyle().Foreground(colorText)
 
 	vp := viewport.New(0, 0)
 	vp.MouseWheelEnabled = true
@@ -259,8 +264,9 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 		input:                 input,
 		spinner:               sp,
 		status:                statusIdle,
-		showThinking:          true,
-		mouseEnabled:          true,
+		verbose:               cfg.App.Default.Verbose,
+		toolsExpanded:         cfg.App.Default.Tools,
+		mouseEnabled:          cfg.App.Default.Mouse,
 		historyIdx:            -1,
 		activeAssistantIdx:    -1,
 		thinkingMessages:      resolveThinkingMessages(cfg.App.ThinkingMessages),

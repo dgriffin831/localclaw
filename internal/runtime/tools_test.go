@@ -166,6 +166,57 @@ func TestPromptStreamForSessionWithOptionsPassesModelOverride(t *testing.T) {
 	}
 }
 
+func TestDiscoverProviderMetadataReturnsProviderToolsWithoutPersistingProbeSession(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	llmClient := &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			events := make(chan llm.StreamEvent, 1)
+			errs := make(chan error)
+			events <- llm.StreamEvent{
+				Type: llm.StreamEventProviderMetadata,
+				ProviderMetadata: &llm.ProviderMetadata{
+					Provider: "claudecode",
+					Model:    "claude-opus-4-6",
+					Tools:    []string{"Bash", "mcp__localclaw__localclaw_memory_search", "Bash"},
+				},
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+	app.llm = llmClient
+
+	meta, err := app.DiscoverProviderMetadata(ctx, "agent-2", llm.PromptOptions{ModelOverride: "gpt-5-mini"})
+	if err != nil {
+		t.Fatalf("discover provider metadata: %v", err)
+	}
+	if meta.Provider != "claudecode" {
+		t.Fatalf("expected provider claudecode, got %q", meta.Provider)
+	}
+	if meta.Model != "claude-opus-4-6" {
+		t.Fatalf("expected discovered model, got %q", meta.Model)
+	}
+	if strings.Join(meta.Tools, ",") != "Bash,mcp__localclaw__localclaw_memory_search" {
+		t.Fatalf("expected normalized discovered tools, got %v", meta.Tools)
+	}
+	if llmClient.lastRequest.Options.ModelOverride != "gpt-5-mini" {
+		t.Fatalf("expected probe request to forward model override, got %q", llmClient.lastRequest.Options.ModelOverride)
+	}
+	if llmClient.lastRequest.Session.ProviderSessionID != "" {
+		t.Fatalf("expected probe request to avoid provider session resume id, got %q", llmClient.lastRequest.Session.ProviderSessionID)
+	}
+
+	_, exists, err := app.sessions.Get(ctx, "agent-2", ProviderToolsProbeSessionID)
+	if err != nil {
+		t.Fatalf("lookup probe session entry: %v", err)
+	}
+	if exists {
+		t.Fatalf("expected provider metadata probe not to persist probe session state")
+	}
+}
+
 func TestPromptStreamForSessionIncludesPersistedProviderSessionMetadata(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)
@@ -287,6 +338,72 @@ func TestPromptStreamPersistsProviderSessionIDAndRetriesAfterResumeFailure(t *te
 	}
 	if got := session.GetProviderSessionID(entry, "claudecode"); got != "fresh-session-id" {
 		t.Fatalf("expected persisted fresh provider session id, got %q", got)
+	}
+}
+
+func TestPromptStreamRetriesWhenResumeFailsWithNoConversationFound(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	attempt := 0
+	app.llm = &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			attempt++
+			events := make(chan llm.StreamEvent, 1)
+			errs := make(chan error, 1)
+			switch attempt {
+			case 1:
+				if req.Session.ProviderSessionID != "stale-id" {
+					errs <- fmt.Errorf("expected stale provider session id on first attempt, got %q", req.Session.ProviderSessionID)
+					close(events)
+					close(errs)
+					return events, errs
+				}
+				errs <- fmt.Errorf("claude code cli execution failed: exit status 1: No conversation found with session ID: stale-id")
+			case 2:
+				if req.Session.ProviderSessionID != "" {
+					errs <- fmt.Errorf("expected cleared provider session id on retry, got %q", req.Session.ProviderSessionID)
+					close(events)
+					close(errs)
+					return events, errs
+				}
+				events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "ok"}
+			default:
+				errs <- fmt.Errorf("unexpected attempt %d", attempt)
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+
+	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		session.SetProviderSessionID(entry, "claudecode", "stale-id")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed stale provider session id: %v", err)
+	}
+
+	events, errs := app.PromptStreamForSession(ctx, "default", "main", "hello")
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("unexpected stream error: %v", err)
+			}
+		}
+	}
+
+	if attempt != 2 {
+		t.Fatalf("expected one retry after no-conversation resume failure, got %d attempts", attempt)
 	}
 }
 

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,5 +89,80 @@ func TestMCPMemoryGrepRespectsPerToolFlag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "memory_grep is disabled") {
 		t.Fatalf("expected disabled-tool error, got %v", err)
+	}
+}
+
+func TestMCPSessionDeleteRemovesMetadataAndTranscript(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+
+	if err := app.AddSessionTokens(ctx, "default", "archive-1", 42); err != nil {
+		t.Fatalf("seed session metadata: %v", err)
+	}
+	if err := app.AppendSessionTranscriptMessage(ctx, "default", "archive-1", "user", "hello"); err != nil {
+		t.Fatalf("seed transcript: %v", err)
+	}
+
+	transcriptPath, err := app.ResolveTranscriptPath("default", "archive-1")
+	if err != nil {
+		t.Fatalf("resolve transcript path: %v", err)
+	}
+	if _, statErr := os.Stat(transcriptPath); statErr != nil {
+		t.Fatalf("expected seeded transcript to exist: %v", statErr)
+	}
+
+	removed, err := app.MCPSessionDelete(ctx, "default", "archive-1")
+	if err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+	if !removed {
+		t.Fatalf("expected removed=true")
+	}
+
+	if _, err := app.MCPSessionStatus(ctx, "default", "archive-1"); !errors.Is(err, ErrMCPNotFound) {
+		t.Fatalf("expected session status to return not found after delete, got %v", err)
+	}
+	if _, statErr := os.Stat(transcriptPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected transcript file to be removed, got %v", statErr)
+	}
+}
+
+func TestMCPSessionDeleteRemovesOrphanTranscript(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+
+	transcriptPath, err := app.ResolveTranscriptPath("default", "orphan")
+	if err != nil {
+		t.Fatalf("resolve transcript path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o700); err != nil {
+		t.Fatalf("mkdir transcript dir: %v", err)
+	}
+	if err := os.WriteFile(transcriptPath, []byte("{\"role\":\"user\",\"content\":\"orphan\"}\n"), 0o600); err != nil {
+		t.Fatalf("write orphan transcript: %v", err)
+	}
+
+	removed, err := app.MCPSessionDelete(ctx, "default", "orphan")
+	if err != nil {
+		t.Fatalf("delete orphan session: %v", err)
+	}
+	if !removed {
+		t.Fatalf("expected removed=true for orphan transcript cleanup")
+	}
+	if _, statErr := os.Stat(transcriptPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected orphan transcript removal, got %v", statErr)
+	}
+}
+
+func TestMCPSessionDeleteReturnsFalseWhenSessionIsMissing(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+
+	removed, err := app.MCPSessionDelete(ctx, "default", "missing")
+	if err != nil {
+		t.Fatalf("delete missing session: %v", err)
+	}
+	if removed {
+		t.Fatalf("expected removed=false for missing session")
 	}
 }

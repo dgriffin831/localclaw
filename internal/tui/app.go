@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -24,8 +25,12 @@ func Run(ctx context.Context, app *runtime.App, cfg config.Config) error {
 	return p.Start()
 }
 
-func newProgram(m tea.Model) *tea.Program {
-	return tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+func newProgram(m model) *tea.Program {
+	options := []tea.ProgramOption{tea.WithAltScreen()}
+	if m.mouseEnabled {
+		options = append(options, tea.WithMouseCellMotion())
+	}
+	return tea.NewProgram(m, options...)
 }
 
 func (m model) Init() tea.Cmd {
@@ -93,6 +98,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshViewport(true)
 			return m, nil
 		}
+
+	case providerToolsDiscoveredMsg:
+		m.providerToolsDiscoveryInFlight = false
+		if provider := strings.TrimSpace(msg.Provider); provider != "" {
+			m.providerName = provider
+		}
+		if model := strings.TrimSpace(msg.Model); model != "" {
+			m.providerModel = model
+		}
+		if msg.Err != nil {
+			m.addVerbose("provider tools discovery failed: %s", truncateVerboseText(msg.Err.Error()))
+			m.addSystem("provider tools discovery failed: " + msg.Err.Error())
+			m.addSystem(m.toolsSummary())
+			m.refreshViewport(true)
+			return m, nil
+		}
+		m.providerTools = normalizeProviderToolList(msg.Tools)
+		m.addSystem(m.toolsSummary())
+		m.refreshViewport(true)
+		return m, nil
 	}
 
 	var inputCmd tea.Cmd
@@ -123,9 +148,20 @@ func (m model) View() string {
 
 	header := m.headerView()
 	status := m.statusView()
+	gap := m.composerGapView()
 	input := m.inputView()
+	footer := m.composerFooterView()
 
-	content := lipgloss.JoinVertical(lipgloss.Left, header, m.viewport.View(), status, input)
+	parts := make([]string, 0, 6)
+	if header != "" {
+		parts = append(parts, header)
+	}
+	parts = append(parts, m.viewport.View(), gap)
+	if status != "" {
+		parts = append(parts, status)
+	}
+	parts = append(parts, input, footer)
+	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
 	return lipgloss.NewStyle().
 		Background(colorBackground).
 		Foreground(colorText).

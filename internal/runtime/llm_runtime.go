@@ -130,7 +130,8 @@ func isSessionResumeError(err error) bool {
 		strings.Contains(msg, "expired session") ||
 		strings.Contains(msg, "unknown session") ||
 		strings.Contains(msg, "missing session") ||
-		strings.Contains(msg, "session not found") {
+		strings.Contains(msg, "session not found") ||
+		strings.Contains(msg, "no conversation found") {
 		return true
 	}
 	if strings.Contains(msg, "resume") && (strings.Contains(msg, "invalid") || strings.Contains(msg, "expired") || strings.Contains(msg, "missing") || strings.Contains(msg, "not found")) {

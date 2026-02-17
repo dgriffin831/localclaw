@@ -27,13 +27,22 @@
 {
   "app": {
     "name": "localclaw",
-    "root": "~/.localclaw"
+    "root": "~/.localclaw",
+    "default": {
+      "verbose": false,
+      "mouse": false,
+      "tools": false
+    }
   },
   "llm": {
     "provider": "claudecode",
     "claude_code": {
       "binary_path": "claude",
       "profile": "default",
+      "extra_args": [
+        "--allowed-tools",
+        "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get,mcp__localclaw__localclaw_memory_grep,mcp__localclaw__localclaw_workspace_status,mcp__localclaw__localclaw_cron_list,mcp__localclaw__localclaw_cron_add,mcp__localclaw__localclaw_cron_remove,mcp__localclaw__localclaw_cron_run,mcp__localclaw__localclaw_sessions_list,mcp__localclaw__localclaw_sessions_history,mcp__localclaw__localclaw_sessions_delete,mcp__localclaw__localclaw_session_status"
+      ],
       "session_mode": "always",
       "session_arg": "--session-id",
       "resume_args": ["--resume", "{sessionId}"],
@@ -122,6 +131,10 @@ General:
 
 - `app.name` is required.
 - `app.root` is required.
+- `app.default` controls TUI startup flags:
+  - `verbose`: initial verbose diagnostics (`false` default)
+  - `mouse`: initial mouse capture (`false` default)
+  - `tools`: initial tool-card expansion (`false` default)
 - `app.thinking_messages` entries must be non-blank when provided.
 - `llm.provider` must be `claudecode` or `codex`.
 - `llm.claude_code.binary_path` is required when `llm.provider` is `claudecode`.
@@ -163,6 +176,8 @@ Codex-specific fields:
 
 Claude Code-specific continuation fields:
 
+- `llm.claude_code.extra_args` appends provider-specific flags directly to `claude` arguments.
+  - default includes `--allowed-tools` with LocalClaw MCP tools so memory/workspace/session/cron tools work without first-run permission prompts.
 - `llm.claude_code.session_mode` controls continuation behavior (`always` default).
 - `llm.claude_code.session_arg` controls new-session flag (default `--session-id`).
 - `llm.claude_code.resume_args` controls resume argument templates and supports `{sessionId}` placeholder.
@@ -195,6 +210,8 @@ Implementation details to be aware of:
 Compatibility behavior:
 
 - Removed/deprecated config keys are not supported.
+- Removed app defaults key:
+  - `app.default.thinking`
 - Removed runtime tool-policy keys:
   - top-level `tools`
   - top-level `skills`
@@ -215,6 +232,24 @@ Example:
 {
   "app": {
     "thinking_messages": ["thinking", "checking memory", "drafting response"]
+  }
+}
+```
+
+## Optional TUI startup defaults
+
+You can set startup defaults for common TUI toggles under `app.default`.
+
+Example:
+
+```json
+{
+  "app": {
+    "default": {
+      "verbose": false,
+      "mouse": false,
+      "tools": false
+    }
   }
 }
 ```

@@ -12,6 +12,21 @@ import (
 
 var allowedChannels = []string{"slack", "signal"}
 
+var defaultClaudeAllowedMCPTools = []string{
+	"mcp__localclaw__localclaw_memory_search",
+	"mcp__localclaw__localclaw_memory_get",
+	"mcp__localclaw__localclaw_memory_grep",
+	"mcp__localclaw__localclaw_workspace_status",
+	"mcp__localclaw__localclaw_cron_list",
+	"mcp__localclaw__localclaw_cron_add",
+	"mcp__localclaw__localclaw_cron_remove",
+	"mcp__localclaw__localclaw_cron_run",
+	"mcp__localclaw__localclaw_sessions_list",
+	"mcp__localclaw__localclaw_sessions_history",
+	"mcp__localclaw__localclaw_sessions_delete",
+	"mcp__localclaw__localclaw_session_status",
+}
+
 // Config contains all runtime configuration for localclaw.
 type Config struct {
 	App       AppConfig       `json:"app"`
@@ -24,9 +39,16 @@ type Config struct {
 }
 
 type AppConfig struct {
-	Name             string   `json:"name"`
-	Root             string   `json:"root"`
-	ThinkingMessages []string `json:"thinking_messages,omitempty"`
+	Name             string           `json:"name"`
+	Root             string           `json:"root"`
+	Default          AppDefaultConfig `json:"default"`
+	ThinkingMessages []string         `json:"thinking_messages,omitempty"`
+}
+
+type AppDefaultConfig struct {
+	Verbose bool `json:"verbose"`
+	Mouse   bool `json:"mouse"`
+	Tools   bool `json:"tools"`
 }
 
 type LLMConfig struct {
@@ -38,6 +60,7 @@ type LLMConfig struct {
 type ClaudeCodeConfig struct {
 	BinaryPath      string   `json:"binary_path"`
 	Profile         string   `json:"profile"`
+	ExtraArgs       []string `json:"extra_args"`
 	SessionMode     string   `json:"session_mode"`
 	SessionArg      string   `json:"session_arg"`
 	ResumeArgs      []string `json:"resume_args"`
@@ -171,12 +194,21 @@ type HeartbeatConfig struct {
 
 func Default() Config {
 	return Config{
-		App: AppConfig{Name: "localclaw", Root: "~/.localclaw"},
+		App: AppConfig{
+			Name: "localclaw",
+			Root: "~/.localclaw",
+			Default: AppDefaultConfig{
+				Verbose: false,
+				Mouse:   false,
+				Tools:   false,
+			},
+		},
 		LLM: LLMConfig{
 			Provider: "claudecode",
 			ClaudeCode: ClaudeCodeConfig{
 				BinaryPath:  "claude",
 				Profile:     "default",
+				ExtraArgs:   []string{"--allowed-tools", strings.Join(defaultClaudeAllowedMCPTools, ",")},
 				SessionMode: "always",
 				SessionArg:  "--session-id",
 				ResumeArgs:  []string{"--resume", "{sessionId}"},

@@ -20,6 +20,7 @@ import (
 type Settings struct {
 	BinaryPath           string
 	Profile              string
+	ExtraArgs            []string
 	SessionMode          string
 	SessionArg           string
 	ResumeArgs           []string
@@ -250,22 +251,6 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, c
 			if line == "" {
 				continue
 			}
-			sessionID := extractSessionIDFromJSONLine(line, c.settings.SessionIDFields)
-			if sessionID != "" && sessionID != lastSessionID {
-				lastSessionID = sessionID
-				if !emitEvent(ctx, events, llm.StreamEvent{
-					Type: llm.StreamEventProviderMetadata,
-					ProviderMetadata: &llm.ProviderMetadata{
-						Provider:  "claudecode",
-						SessionID: sessionID,
-					},
-				}) {
-					_ = cmd.Process.Kill()
-					_ = cmd.Wait()
-					return
-				}
-			}
-
 			parsedEvents, parseResultErr, parseErr := parseStreamJSONLine(line, toolNames)
 			if parseErr != nil {
 				// NOTE: Compatibility fallback is intentionally retained for now; unparseable provider lines are streamed as raw text deltas.
@@ -280,8 +265,27 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, c
 			}
 			if parseResultErr != "" {
 				resultErr = parseResultErr
+			} else if resultErr == "" {
+				sessionID := extractSessionIDFromJSONLine(line, c.settings.SessionIDFields)
+				if sessionID != "" && sessionID != lastSessionID {
+					lastSessionID = sessionID
+					if !emitEvent(ctx, events, llm.StreamEvent{
+						Type: llm.StreamEventProviderMetadata,
+						ProviderMetadata: &llm.ProviderMetadata{
+							Provider:  "claudecode",
+							SessionID: sessionID,
+						},
+					}) {
+						_ = cmd.Process.Kill()
+						_ = cmd.Wait()
+						return
+					}
+				}
 			}
 			for _, evt := range parsedEvents {
+				if resultErr != "" && evt.Type == llm.StreamEventProviderMetadata {
+					continue
+				}
 				if evt.Type == llm.StreamEventDelta {
 					deltaText.WriteString(evt.Text)
 				}
@@ -305,6 +309,10 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, c
 		waitErr := cmd.Wait()
 		stderrText := <-stderrTextCh
 		if waitErr != nil {
+			if resultErr != "" {
+				emitError(ctx, errs, fmt.Errorf("claude code cli execution failed: %w: %s", waitErr, resultErr))
+				return
+			}
 			if stderrText != "" {
 				emitError(ctx, errs, fmt.Errorf("claude code cli execution failed: %w: %s", waitErr, stderrText))
 				return
@@ -346,6 +354,7 @@ func (c *LocalClient) buildCommandArgsForRequest(req llm.Request, mcpConfigPath 
 	if allowedTools := buildAllowedToolsForRequest(req); len(allowedTools) > 0 {
 		args = append(args, "--allowed-tools", strings.Join(allowedTools, ","))
 	}
+	args = append(args, normalizeNonBlankArgs(c.settings.ExtraArgs)...)
 	if systemPrompt := buildAppendSystemPrompt(req); systemPrompt != "" {
 		args = append(args, "--append-system-prompt", systemPrompt)
 	}
@@ -394,10 +403,16 @@ func expandSessionArgs(args []string, sessionID string, defaults []string) []str
 
 func generateSessionID() string {
 	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err == nil {
-		return hex.EncodeToString(buf)
+	if _, err := rand.Read(buf); err != nil {
+		seed := uint32(os.Getpid())
+		for i := range buf {
+			buf[i] = byte(seed >> uint((i%4)*8))
+		}
 	}
-	return fmt.Sprintf("%d", os.Getpid())
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	encoded := hex.EncodeToString(buf)
+	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32]
 }
 
 func buildAllowedToolsForRequest(req llm.Request) []string {
@@ -559,6 +574,7 @@ type claudeStreamEnvelope struct {
 	Subtype           string                 `json:"subtype,omitempty"`
 	IsError           bool                   `json:"is_error,omitempty"`
 	Result            string                 `json:"result,omitempty"`
+	Errors            []string               `json:"errors,omitempty"`
 	Model             string                 `json:"model,omitempty"`
 	SessionID         string                 `json:"session_id,omitempty"`
 	SessionIDAlt      string                 `json:"sessionId,omitempty"`
@@ -614,6 +630,10 @@ func parseStreamJSONLine(line string, toolNames map[string]string) ([]llm.Stream
 		if env.IsError {
 			if result != "" {
 				return events, result, nil
+			}
+			providerErr := normalizeProviderErrors(env.Errors)
+			if providerErr != "" {
+				return events, providerErr, nil
 			}
 			subtype := strings.TrimSpace(env.Subtype)
 			if subtype == "" {
@@ -800,6 +820,21 @@ func normalizeProviderToolNames(raw []string) []string {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func normalizeProviderErrors(raw []string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(raw))
+	for _, value := range raw {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func extractSessionIDFromJSONLine(line string, fields []string) string {

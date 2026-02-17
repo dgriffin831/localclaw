@@ -64,7 +64,8 @@ go test ./internal/memory -run TestSQLiteIndexManagerSyncForceBuildsIndexAndStat
 
 ```bash
 go run ./cmd/localclaw
-go run ./cmd/localclaw check
+go run ./cmd/localclaw doctor
+go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw mcp serve

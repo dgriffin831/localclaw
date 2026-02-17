@@ -277,6 +277,89 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	}
 }
 
+func TestNewPassesClaudeExtraArgs(t *testing.T) {
+	stateRoot := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
+	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+`, argsPath)
+	if err := os.WriteFile(claudeScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.App.Root = stateRoot
+	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
+	cfg.LLM.ClaudeCode.ExtraArgs = []string{
+		"--dangerously-skip-permissions",
+		"--allowed-tools",
+		"mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get",
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	requestClient, ok := app.llm.(llm.RequestClient)
+	if !ok {
+		t.Fatalf("expected request-capable llm client")
+	}
+	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("prompt stream request error: %v", err)
+			}
+		}
+	}
+
+	argsFile, err := os.Open(argsPath)
+	if err != nil {
+		t.Fatalf("open captured args: %v", err)
+	}
+	defer argsFile.Close()
+
+	var args []string
+	scanner := bufio.NewScanner(argsFile)
+	for scanner.Scan() {
+		args = append(args, strings.TrimSpace(scanner.Text()))
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan captured args: %v", err)
+	}
+
+	hasDangerousSkip := false
+	hasAllowedTools := false
+	for i, arg := range args {
+		if arg == "--dangerously-skip-permissions" {
+			hasDangerousSkip = true
+		}
+		if arg == "--allowed-tools" && i+1 < len(args) &&
+			args[i+1] == "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get" {
+			hasAllowedTools = true
+		}
+	}
+	if !hasDangerousSkip {
+		t.Fatalf("expected --dangerously-skip-permissions in args: %v", args)
+	}
+	if !hasAllowedTools {
+		t.Fatalf("expected configured --allowed-tools in args: %v", args)
+	}
+}
+
 func TestNewConfiguresCodexMCPHomeUnderStateRoot(t *testing.T) {
 	stateRoot := t.TempDir()
 	tmpDir := t.TempDir()
@@ -336,7 +419,7 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	}
 }
 
-func TestPromptForSessionDoesNotSetAllowedToolsForClaude(t *testing.T) {
+func TestPromptForSessionIncludesDefaultAllowedToolsForClaude(t *testing.T) {
 	stateRoot := t.TempDir()
 	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
 	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
@@ -389,8 +472,11 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 			break
 		}
 	}
-	if allowedTools != "" {
-		t.Fatalf("did not expect --allowed-tools flag in args: %v", args)
+	if allowedTools == "" {
+		t.Fatalf("expected --allowed-tools flag in args: %v", args)
+	}
+	if allowedTools != cfg.LLM.ClaudeCode.ExtraArgs[1] {
+		t.Fatalf("expected default --allowed-tools value %q, got %q", cfg.LLM.ClaudeCode.ExtraArgs[1], allowedTools)
 	}
 }
 

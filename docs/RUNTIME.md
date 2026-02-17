@@ -8,7 +8,9 @@ Entrypoint: `cmd/localclaw/main.go`
 
 Supported command modes:
 
-- `check` (default): runs startup initialization checks, then verifies resolved workspace and session-store paths.
+- no command (default): renders detailed CLI help.
+- `doctor`: runs startup initialization checks and validates resolved workspace/session-store paths with detailed output.
+- `doctor --deep`: runs `doctor` checks plus deep checks (currently an LLM prompt probe).
 - `tui`: runs startup initialization, then starts Bubble Tea UI.
 - `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`, `grep`).
 - `mcp`: runs startup initialization, then serves stdio JSON-RPC MCP requests (`serve` subcommand).
@@ -17,7 +19,8 @@ Examples:
 
 ```bash
 go run ./cmd/localclaw
-go run ./cmd/localclaw check
+go run ./cmd/localclaw doctor
+go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force

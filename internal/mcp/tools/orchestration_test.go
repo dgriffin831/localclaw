@@ -11,7 +11,7 @@ import (
 type stubOrchestrationBackend struct {
 	listFn    func(ctx context.Context, req SessionsListRequest) (SessionsListResult, error)
 	historyFn func(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error)
-	sendFn    func(ctx context.Context, req SessionsSendRequest) (SessionsSendResult, error)
+	deleteFn  func(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error)
 	statusFn  func(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error)
 }
 
@@ -23,8 +23,8 @@ func (s stubOrchestrationBackend) SessionsHistory(ctx context.Context, req Sessi
 	return s.historyFn(ctx, req)
 }
 
-func (s stubOrchestrationBackend) SessionsSend(ctx context.Context, req SessionsSendRequest) (SessionsSendResult, error) {
-	return s.sendFn(ctx, req)
+func (s stubOrchestrationBackend) SessionsDelete(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
+	return s.deleteFn(ctx, req)
 }
 
 func (s stubOrchestrationBackend) SessionStatus(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error) {
@@ -56,17 +56,6 @@ func TestSessionStatusToolRequiresSessionID(t *testing.T) {
 	}
 }
 
-func TestSessionsSendToolMapsNotFound(t *testing.T) {
-	h := NewSessionsSendTool(stubOrchestrationBackend{sendFn: func(ctx context.Context, req SessionsSendRequest) (SessionsSendResult, error) {
-		return SessionsSendResult{}, ErrSessionNotFound
-	}})
-
-	res := h.Call(context.Background(), map[string]interface{}{"session_id": "main", "input": "hello"})
-	if !res.IsError {
-		t.Fatalf("expected not found error")
-	}
-}
-
 func TestSessionsHistoryToolMapsBackendErrors(t *testing.T) {
 	h := NewSessionsHistoryTool(stubOrchestrationBackend{historyFn: func(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
 		return SessionsHistoryResult{}, errors.New("boom")
@@ -95,17 +84,24 @@ func TestSessionsHistoryToolCapsLimitAndOffset(t *testing.T) {
 	}
 }
 
-func TestSessionsSendToolRejectsOversizeInput(t *testing.T) {
-	h := NewSessionsSendTool(stubOrchestrationBackend{sendFn: func(ctx context.Context, req SessionsSendRequest) (SessionsSendResult, error) {
-		return SessionsSendResult{Output: "ok"}, nil
+func TestSessionsDeleteToolRequiresSessionID(t *testing.T) {
+	h := NewSessionsDeleteTool(stubOrchestrationBackend{deleteFn: func(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
+		return SessionsDeleteResult{Deleted: true}, nil
 	}})
-	input := make([]byte, 8193)
-	for i := range input {
-		input[i] = 'a'
-	}
 
-	res := h.Call(context.Background(), map[string]interface{}{"session_id": "main", "input": string(input)})
+	res := h.Call(context.Background(), map[string]interface{}{})
 	if !res.IsError {
-		t.Fatalf("expected input size validation error")
+		t.Fatalf("expected validation error")
+	}
+}
+
+func TestSessionsDeleteToolMapsNotFound(t *testing.T) {
+	h := NewSessionsDeleteTool(stubOrchestrationBackend{deleteFn: func(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
+		return SessionsDeleteResult{}, ErrSessionNotFound
+	}})
+
+	res := h.Call(context.Background(), map[string]interface{}{"session_id": "main"})
+	if !res.IsError {
+		t.Fatalf("expected not found error")
 	}
 }

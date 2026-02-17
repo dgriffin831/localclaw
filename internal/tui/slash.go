@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/dgriffin831/localclaw/internal/llm"
+	"github.com/dgriffin831/localclaw/internal/runtime"
 )
 
 type slashCommandDef struct {
@@ -20,11 +22,13 @@ type slashCommandDef struct {
 var slashCommandDefs = []slashCommandDef{
 	{Name: "help", Description: "show this help"},
 	{Name: "status", Description: "show current status and session info"},
-	{Name: "tools", Description: "show provider and available localclaw tools", Shortcut: "Ctrl+O"},
+	{Name: "tools", Description: "show provider-reported tools", Shortcut: "Ctrl+O"},
 	{Name: "clear", Description: "clear the visible transcript"},
 	{Name: "reset", Description: "reset the current session"},
 	{Name: "new", Description: "start a new session"},
-	{Name: "thinking", Args: "<on|off>", Description: "toggle thinking visibility", Shortcut: "Ctrl+T"},
+	{Name: "sessions", Description: "list sessions for the current agent"},
+	{Name: "resume", Args: "<session_id>", Description: "resume a specific session"},
+	{Name: "delete", Args: "<session_id>", Description: "delete a non-active session"},
 	{Name: "verbose", Args: "<on|off>", Description: "toggle verbose mode"},
 	{Name: "mouse", Args: "<on|off>", Description: "toggle mouse capture (wheel/selection tradeoff)", Shortcut: "Ctrl+Y"},
 	{Name: "shortcuts", Description: "show keyboard shortcuts"},
@@ -35,6 +39,7 @@ var slashCommandDefs = []slashCommandDef{
 
 func (m *model) handleSlash(raw string) tea.Cmd {
 	name, arg := parseSlash(raw)
+	var followUp tea.Cmd
 	switch name {
 	case "help":
 		m.addSystem(slashHelpText())
@@ -45,8 +50,9 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 		if override == "" {
 			override = "none"
 		}
-		m.addSystem(fmt.Sprintf("status=%s provider=%s configured_model=%s effective_model=%s model_override=%s agent=%s session=%s workspace=%s thinking=%s verbose=%s mouse=%s", m.status, m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a"), valueOrDefault(m.effectiveModel(), "n/a"), override, m.agentID, m.sessionID, m.workspacePath, onOff(m.showThinking), onOff(m.verbose), onOff(m.mouseEnabled)))
+		m.addSystem(fmt.Sprintf("status=%s provider=%s configured_model=%s effective_model=%s model_override=%s agent=%s session=%s workspace=%s verbose=%s mouse=%s", m.status, m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a"), valueOrDefault(m.effectiveModel(), "n/a"), override, m.agentID, m.sessionID, m.workspacePath, onOff(m.verbose), onOff(m.mouseEnabled)))
 	case "tools":
+		followUp = m.startProviderToolsDiscoveryIfNeeded()
 		m.addSystem(m.toolsSummary())
 	case "clear":
 		m.messages = nil
@@ -55,19 +61,15 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 		m.runSessionReset(false, "/reset")
 	case "new":
 		m.runSessionReset(true, "/new")
+	case "sessions":
+		m.handleSessionsList()
+	case "resume":
+		m.handleSessionResume(arg)
+	case "delete":
+		m.handleSessionDelete(arg)
 	case "exit", "quit":
 		m.abortRun("exiting")
 		return tea.Quit
-	case "thinking":
-		if arg == "on" {
-			m.showThinking = true
-			m.addSystem("thinking visibility: on")
-		} else if arg == "off" {
-			m.showThinking = false
-			m.addSystem("thinking visibility: off")
-		} else {
-			m.addSystem("usage: /thinking <on|off>")
-		}
 	case "verbose":
 		if arg == "on" {
 			m.verbose = true
@@ -115,7 +117,124 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 		m.addSystem(fmt.Sprintf("unknown command: /%s", name))
 	}
 	m.refreshViewport(true)
-	return nil
+	return followUp
+}
+
+func (m *model) handleSessionsList() {
+	if m.app == nil {
+		m.addSystem("runtime unavailable")
+		return
+	}
+
+	result, err := m.app.MCPSessionsList(m.ctx, m.agentID, 100, 0)
+	if err != nil {
+		m.addSystem(fmt.Sprintf("sessions list failed: %v", err))
+		return
+	}
+
+	lines := []string{fmt.Sprintf("sessions (%d):", result.Total)}
+	for _, entry := range result.Sessions {
+		label := entry.ID
+		if strings.TrimSpace(label) == "" {
+			label = "(unknown)"
+		}
+		if entry.ID == m.sessionID {
+			label += " (current)"
+		}
+		updatedAt := strings.TrimSpace(entry.UpdatedAt)
+		if updatedAt == "" {
+			updatedAt = "n/a"
+		}
+		lines = append(lines, fmt.Sprintf("- %s updated=%s tokens=%d", label, updatedAt, entry.TotalTokens))
+	}
+	if len(result.Sessions) == 0 {
+		lines = append(lines, "- none")
+	}
+	m.addSystem(strings.Join(lines, "\n"))
+}
+
+func (m *model) handleSessionResume(rawSessionID string) {
+	sessionID := strings.TrimSpace(rawSessionID)
+	if sessionID == "" {
+		m.addSystem("usage: /resume <session_id>")
+		return
+	}
+	if m.app == nil {
+		m.addSystem("runtime unavailable")
+		return
+	}
+
+	resolution := runtime.ResolveSession(m.agentID, sessionID)
+	if _, err := m.app.MCPSessionStatus(m.ctx, resolution.AgentID, resolution.SessionID); err != nil {
+		if errors.Is(err, runtime.ErrMCPNotFound) {
+			m.addSystem(fmt.Sprintf("session %s not found", resolution.SessionID))
+			return
+		}
+		m.addSystem(fmt.Sprintf("resume failed: %v", err))
+		return
+	}
+
+	m.abortRun("")
+	m.agentID = resolution.AgentID
+	m.sessionID = resolution.SessionID
+	m.sessionKey = resolution.SessionKey
+	m.messages = nil
+	m.modelOverride = ""
+	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
+
+	history, err := m.app.MCPSessionsHistory(m.ctx, resolution.AgentID, resolution.SessionID, 0, 0)
+	if err != nil {
+		m.addSystem(fmt.Sprintf("resumed session %s (history unavailable: %v)", resolution.SessionID, err))
+		return
+	}
+
+	loaded := 0
+	for _, item := range history.Items {
+		content := strings.TrimSpace(item.Content)
+		if content == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(item.Role)) {
+		case "user":
+			m.messages = append(m.messages, chatMessage{Role: roleUser, Raw: content})
+		case "assistant":
+			m.messages = append(m.messages, chatMessage{Role: roleAssistant, Raw: content})
+		case "system":
+			m.messages = append(m.messages, chatMessage{Role: roleSystem, Raw: content})
+		default:
+			m.messages = append(m.messages, chatMessage{Role: roleSystem, Raw: content})
+		}
+		loaded++
+	}
+	m.addSystem(fmt.Sprintf("resumed session %s (%d transcript messages loaded)", resolution.SessionID, loaded))
+}
+
+func (m *model) handleSessionDelete(rawSessionID string) {
+	sessionID := strings.TrimSpace(rawSessionID)
+	if sessionID == "" {
+		m.addSystem("usage: /delete <session_id>")
+		return
+	}
+	resolution := runtime.ResolveSession(m.agentID, sessionID)
+	if resolution.SessionID == m.sessionID {
+		m.addSystem(fmt.Sprintf("cannot delete active session %s; resume a different session first", resolution.SessionID))
+		return
+	}
+	if m.app == nil {
+		m.addSystem("runtime unavailable")
+		return
+	}
+
+	removed, err := m.app.MCPSessionDelete(m.ctx, resolution.AgentID, resolution.SessionID)
+	if err != nil {
+		m.addSystem(fmt.Sprintf("delete failed: %v", err))
+		return
+	}
+	if !removed {
+		m.addSystem(fmt.Sprintf("session %s not found", resolution.SessionID))
+		return
+	}
+	m.addSystem(fmt.Sprintf("deleted session %s", resolution.SessionID))
 }
 
 func (m *model) toolsSummary() string {
@@ -132,32 +251,47 @@ func (m *model) toolsSummary() string {
 		lines = append(lines, "model override: "+override)
 	}
 
-	lines = append(lines, "provider_native:")
+	lines = append(lines, "tools:")
 	if len(m.providerTools) == 0 {
-		lines = append(lines, "- not discovered yet")
-	} else {
-		lines = append(lines, "- "+strings.Join(m.providerTools, ", "))
-	}
-
-	lines = append(lines, "localclaw_mcp:")
-
-	if m.app == nil {
-		lines = append(lines, "- runtime unavailable")
+		if m.app == nil {
+			lines = append(lines, "- runtime unavailable")
+		} else if m.providerToolsDiscoveryInFlight {
+			lines = append(lines, "- discovering...")
+		} else {
+			lines = append(lines, "- not discovered yet")
+		}
 		return strings.Join(lines, "\n")
 	}
-
-	tools := m.app.ToolDefinitions(m.agentID)
-	if len(tools) == 0 {
-		lines = append(lines, "- none enabled")
-		return strings.Join(lines, "\n")
+	for _, name := range m.providerTools {
+		lines = append(lines, "- "+name)
 	}
-
-	parts := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		parts = append(parts, tool.Name)
-	}
-	lines = append(lines, "- "+strings.Join(parts, ", "))
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) startProviderToolsDiscoveryIfNeeded() tea.Cmd {
+	if m.app == nil {
+		return nil
+	}
+	if m.providerToolsDiscoveryInFlight || len(m.providerTools) > 0 {
+		return nil
+	}
+	m.providerToolsDiscoveryInFlight = true
+	opts := llm.PromptOptions{}
+	if m.providerSupportsModelOverride() {
+		opts.ModelOverride = strings.TrimSpace(m.modelOverride)
+	}
+	app := m.app
+	ctx := m.ctx
+	agentID := m.agentID
+	return func() tea.Msg {
+		meta, err := app.DiscoverProviderMetadata(ctx, agentID, opts)
+		return providerToolsDiscoveredMsg{
+			Provider: strings.TrimSpace(meta.Provider),
+			Model:    strings.TrimSpace(meta.Model),
+			Tools:    append([]string{}, meta.Tools...),
+			Err:      err,
+		}
+	}
 }
 
 func (m *model) activeProvider() string {
@@ -423,7 +557,6 @@ func keyboardShortcutsText() string {
 		"Alt+Up / Alt+Down      history navigation aliases",
 		"Mouse wheel            scroll transcript viewport",
 		"Esc                    abort active run",
-		"Ctrl+T                 toggle thinking visibility",
 		"Ctrl+O                 toggle tool-card expansion",
 		"Ctrl+Y                 toggle mouse capture",
 		"Ctrl+C                 clear input (press twice quickly to exit)",

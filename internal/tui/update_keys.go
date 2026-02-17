@@ -43,13 +43,6 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 	}
 
-	if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+t"))) {
-		m.showThinking = !m.showThinking
-		m.addSystem(fmt.Sprintf("thinking visibility: %s", onOff(m.showThinking)))
-		m.refreshViewport(true)
-		return true, nil
-	}
-
 	if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+o"))) {
 		m.toolsExpanded = !m.toolsExpanded
 		m.addSystem(fmt.Sprintf("tool cards: %s", mapBool(m.toolsExpanded, "expanded", "collapsed")))

@@ -22,7 +22,8 @@
 
 ## Command modes
 
-- `check`
+- default (no command): CLI help
+- `doctor`
 - `tui`
 - `memory`
 - `mcp`

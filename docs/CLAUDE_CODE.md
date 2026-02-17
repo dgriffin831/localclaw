@@ -51,6 +51,7 @@ Client appends environment values when configured:
 - `llm.provider` supports `claudecode` and `codex`.
 - `localclaw` does not implement direct network model clients.
 - session continuation config:
+  - `llm.claude_code.extra_args` for provider flags (defaults to a LocalClaw MCP `--allowed-tools` list so first-run memory/workspace/session/cron calls do not prompt for permission)
   - `llm.claude_code.session_mode` (`always | existing | none`)
   - `llm.claude_code.session_arg` for start mode (default `--session-id`)
   - `llm.claude_code.resume_args` with `{sessionId}` placeholder
