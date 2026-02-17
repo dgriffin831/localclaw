@@ -397,7 +397,7 @@ Slash command session controls:
   - rejects deleting active session
   - deletes target metadata and transcript
 
-### 10.3 MCP orchestration session tools (`internal/mcp/tools/orchestration.go`)
+### 10.3 MCP session tools (`internal/mcp/tools/session.go`)
 
 Exposed tools:
 

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/dgriffin831/localclaw/internal/channels/signal"
 	"github.com/dgriffin831/localclaw/internal/config"
@@ -105,6 +106,98 @@ func TestRunSignalInboundRoutesSenderToMappedAgent(t *testing.T) {
 	}
 	if outbound.Text != "ack from agent" {
 		t.Fatalf("expected reply text from llm, got %q", outbound.Text)
+	}
+}
+
+func TestRunSignalInboundSendsReadReceiptForAcceptedDirectMessage(t *testing.T) {
+	app := newSignalInboundTestApp(t)
+	app.cfg.Channels.Signal.Inbound.SendReadReceipts = true
+
+	llmClient := &captureRequestLLMClient{streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+		events := make(chan llm.StreamEvent, 1)
+		errs := make(chan error)
+		events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "ack"}
+		close(events)
+		close(errs)
+		return events, errs
+	}}
+	app.llm = llmClient
+	app.signalReceive = func(ctx context.Context, settings signal.ReceiveSettings) ([]signal.ReceiveMessage, error) {
+		return []signal.ReceiveMessage{
+			{Sender: "+15550000001", Text: "hello", Timestamp: 1700000000000},
+		}, nil
+	}
+
+	var receipts []signal.ReceiptRequest
+	app.signal = stubSignalClient{
+		sendFn: func(ctx context.Context, req signal.SendRequest) (signal.SendResult, error) {
+			return signal.SendResult{OK: true, Recipient: req.Recipient}, nil
+		},
+		sendReceiptFn: func(ctx context.Context, req signal.ReceiptRequest) error {
+			receipts = append(receipts, req)
+			return nil
+		},
+	}
+
+	if err := app.RunSignalInbound(context.Background(), SignalInboundRunOptions{Once: true}); err != nil {
+		t.Fatalf("run signal inbound: %v", err)
+	}
+	if len(receipts) != 1 {
+		t.Fatalf("expected one receipt, got %d", len(receipts))
+	}
+	if receipts[0].Recipient != "+15550000001" {
+		t.Fatalf("expected receipt recipient +15550000001, got %q", receipts[0].Recipient)
+	}
+	if receipts[0].TargetTimestamp != 1700000000000 {
+		t.Fatalf("expected receipt timestamp 1700000000000, got %d", receipts[0].TargetTimestamp)
+	}
+}
+
+func TestRunSignalInboundStartsAndStopsTypingDuringReply(t *testing.T) {
+	app := newSignalInboundTestApp(t)
+	app.cfg.Channels.Signal.Inbound.SendTyping = true
+	app.cfg.Channels.Signal.Inbound.TypingIntervalSeconds = 1
+
+	llmClient := &captureRequestLLMClient{streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+		events := make(chan llm.StreamEvent, 1)
+		errs := make(chan error, 1)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "done"}
+			close(events)
+			close(errs)
+		}()
+		return events, errs
+	}}
+	app.llm = llmClient
+	app.signalReceive = func(ctx context.Context, settings signal.ReceiveSettings) ([]signal.ReceiveMessage, error) {
+		return []signal.ReceiveMessage{
+			{Sender: "+15550000001", Text: "typing please", Timestamp: 1700000000001},
+		}, nil
+	}
+
+	var typing []signal.TypingRequest
+	app.signal = stubSignalClient{
+		sendFn: func(ctx context.Context, req signal.SendRequest) (signal.SendResult, error) {
+			return signal.SendResult{OK: true, Recipient: req.Recipient}, nil
+		},
+		sendTypingFn: func(ctx context.Context, req signal.TypingRequest) error {
+			typing = append(typing, req)
+			return nil
+		},
+	}
+
+	if err := app.RunSignalInbound(context.Background(), SignalInboundRunOptions{Once: true}); err != nil {
+		t.Fatalf("run signal inbound: %v", err)
+	}
+	if len(typing) < 2 {
+		t.Fatalf("expected at least typing start+stop calls, got %d", len(typing))
+	}
+	if typing[0].Stop {
+		t.Fatalf("expected first typing call to be start, got stop")
+	}
+	if typing[len(typing)-1].Stop == false {
+		t.Fatalf("expected final typing call to be stop")
 	}
 }
 

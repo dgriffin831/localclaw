@@ -596,6 +596,17 @@ func TestValidateAllowsSignalInboundWithAllowlistAndAgentMapping(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsSignalInboundNonPositiveTypingInterval(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{"signal"}
+	cfg.Channels.Signal.Inbound.Enabled = true
+	cfg.Channels.Signal.Inbound.AllowFrom = []string{"+15557654321"}
+	cfg.Channels.Signal.Inbound.TypingIntervalSeconds = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected typing interval validation error")
+	}
+}
+
 func TestValidateSupportsCodexProviderAndRequiresBinaryPath(t *testing.T) {
 	cfg := Default()
 	cfg.LLM.Provider = "codex"

@@ -54,7 +54,7 @@ Heartbeats only run while runtime is alive.
 
 Practical implications:
 
-- Long-running modes (for example `tui`, `mcp serve`) can execute recurring heartbeats.
+- Long-running modes (for example `tui`, `mcp serve`, `channels serve`) can execute recurring heartbeats.
 - Short-lived modes (for example `doctor`) usually exit before interval ticks fire.
 
 ## Authoring `HEARTBEAT.md`

@@ -77,11 +77,11 @@ func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Serv
 	cronRemoveTool := mcpTools.NewCronRemoveTool(cronBackend)
 	cronRunTool := mcpTools.NewCronRunTool(cronBackend)
 
-	orchestrationBackend := mcpTools.RuntimeOrchestrationBackend{App: app}
-	sessionsListTool := mcpTools.NewSessionsListTool(orchestrationBackend)
-	sessionsHistoryTool := mcpTools.NewSessionsHistoryTool(orchestrationBackend)
-	sessionsDeleteTool := mcpTools.NewSessionsDeleteTool(orchestrationBackend)
-	sessionStatusTool := mcpTools.NewSessionStatusTool(orchestrationBackend)
+	sessionsBackend := mcpTools.RuntimeSessionsBackend{App: app}
+	sessionsListTool := mcpTools.NewSessionsListTool(sessionsBackend)
+	sessionsHistoryTool := mcpTools.NewSessionsHistoryTool(sessionsBackend)
+	sessionsDeleteTool := mcpTools.NewSessionsDeleteTool(sessionsBackend)
+	sessionStatusTool := mcpTools.NewSessionStatusTool(sessionsBackend)
 
 	channelsBackend := mcpTools.RuntimeChannelsBackend{App: app}
 	slackSendTool := mcpTools.NewSlackSendTool(channelsBackend)

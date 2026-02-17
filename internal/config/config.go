@@ -117,12 +117,15 @@ type SignalChannelsConfig struct {
 }
 
 type SignalInboundConfig struct {
-	Enabled            bool              `json:"enabled"`
-	AllowFrom          []string          `json:"allow_from"`
-	AgentBySender      map[string]string `json:"agent_by_sender"`
-	DefaultAgent       string            `json:"default_agent"`
-	PollTimeoutSeconds int               `json:"poll_timeout_seconds"`
-	MaxMessagesPerPoll int               `json:"max_messages_per_poll"`
+	Enabled               bool              `json:"enabled"`
+	AllowFrom             []string          `json:"allow_from"`
+	AgentBySender         map[string]string `json:"agent_by_sender"`
+	DefaultAgent          string            `json:"default_agent"`
+	SendTyping            bool              `json:"send_typing"`
+	TypingIntervalSeconds int               `json:"typing_interval_seconds"`
+	SendReadReceipts      bool              `json:"send_read_receipts"`
+	PollTimeoutSeconds    int               `json:"poll_timeout_seconds"`
+	MaxMessagesPerPoll    int               `json:"max_messages_per_poll"`
 }
 
 type AgentsConfig struct {
@@ -285,12 +288,15 @@ func Default() Config {
 				DefaultRecipient: "",
 				TimeoutSeconds:   10,
 				Inbound: SignalInboundConfig{
-					Enabled:            false,
-					AllowFrom:          []string{},
-					AgentBySender:      map[string]string{},
-					DefaultAgent:       "default",
-					PollTimeoutSeconds: 5,
-					MaxMessagesPerPoll: 10,
+					Enabled:               false,
+					AllowFrom:             []string{},
+					AgentBySender:         map[string]string{},
+					DefaultAgent:          "default",
+					SendTyping:            true,
+					TypingIntervalSeconds: 5,
+					SendReadReceipts:      true,
+					PollTimeoutSeconds:    5,
+					MaxMessagesPerPoll:    10,
 				},
 			},
 		},
@@ -508,6 +514,9 @@ func (c Config) Validate() error {
 		}
 		if c.Channels.Signal.Inbound.MaxMessagesPerPoll <= 0 {
 			return errors.New("channels.signal.inbound.max_messages_per_poll must be > 0")
+		}
+		if c.Channels.Signal.Inbound.TypingIntervalSeconds <= 0 {
+			return errors.New("channels.signal.inbound.typing_interval_seconds must be > 0")
 		}
 		defaultAgent := strings.TrimSpace(c.Channels.Signal.Inbound.DefaultAgent)
 		if defaultAgent == "" {

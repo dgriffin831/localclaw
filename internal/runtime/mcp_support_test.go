@@ -24,11 +24,27 @@ func (s stubSlackClient) Send(ctx context.Context, req slack.SendRequest) (slack
 }
 
 type stubSignalClient struct {
-	sendFn func(ctx context.Context, req signal.SendRequest) (signal.SendResult, error)
+	sendFn        func(ctx context.Context, req signal.SendRequest) (signal.SendResult, error)
+	sendTypingFn  func(ctx context.Context, req signal.TypingRequest) error
+	sendReceiptFn func(ctx context.Context, req signal.ReceiptRequest) error
 }
 
 func (s stubSignalClient) Send(ctx context.Context, req signal.SendRequest) (signal.SendResult, error) {
 	return s.sendFn(ctx, req)
+}
+
+func (s stubSignalClient) SendTyping(ctx context.Context, req signal.TypingRequest) error {
+	if s.sendTypingFn == nil {
+		return nil
+	}
+	return s.sendTypingFn(ctx, req)
+}
+
+func (s stubSignalClient) SendReceipt(ctx context.Context, req signal.ReceiptRequest) error {
+	if s.sendReceiptFn == nil {
+		return nil
+	}
+	return s.sendReceiptFn(ctx, req)
 }
 
 func TestReadTranscriptHistoryAcceptsLargeLines(t *testing.T) {

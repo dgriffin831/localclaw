@@ -17,7 +17,7 @@
 - Per-agent session metadata + transcript files under the configured `app.root`.
 - SQLite-backed memory indexing/search/grep with CLI tooling (`memory status/index/search/grep`).
 - Runtime memory tools (`memory_search`, `memory_grep`, `memory_get`) injected when `agents.*.memory` enables them.
-- Runtime cron tools (`localclaw_cron_list`, `localclaw_cron_add`, `localclaw_cron_remove`, `localclaw_cron_run`) with recurring local command execution while runtime is active.
+- Runtime cron tools (`localclaw_cron_list`, `localclaw_cron_add`, `localclaw_cron_remove`, `localclaw_cron_run`) with recurring local prompt execution while runtime is active.
 - Outbound channel delivery tools for Slack (`localclaw_slack_send`) and Signal (`localclaw_signal_send`).
 - Inbound Signal worker mode with sender allowlist policy and sender-to-agent routing (`channels serve`).
 - Session lifecycle hooks for `/reset` and `/new` snapshot behavior.

@@ -99,15 +99,26 @@ MCP-first hard cutover:
 
 ## Runtime tools
 
-Supported tools:
+Runtime-defined tool registry entries:
 
 - `memory_search`
 - `memory_grep`
 - `memory_get`
+
+MCP server tools (`localclaw mcp serve`):
+
+- `localclaw_memory_search`
+- `localclaw_memory_grep`
+- `localclaw_memory_get`
+- `localclaw_workspace_status`
 - `localclaw_cron_list`
 - `localclaw_cron_add`
 - `localclaw_cron_remove`
 - `localclaw_cron_run`
+- `localclaw_sessions_list`
+- `localclaw_sessions_history`
+- `localclaw_sessions_delete`
+- `localclaw_session_status`
 - `localclaw_slack_send`
 - `localclaw_signal_send`
 
@@ -137,15 +148,19 @@ Signal inbound behavior:
 - Accepted direct messages are routed to agent sessions using:
   - `channels.signal.inbound.agent_by_sender`
   - fallback `channels.signal.inbound.default_agent`
+- Optional read receipts are sent for accepted direct messages when `channels.signal.inbound.send_read_receipts=true`.
+- Optional typing indicators are sent/refreshed while reply generation runs when `channels.signal.inbound.send_typing=true`.
 - Session ids are derived per sender (`signal-<digits>`) to keep per-sender thread continuity.
 
 Cron behavior:
 
 - `cron.enabled=false` disables scheduler startup and all MCP cron methods (`cron scheduler is disabled`).
 - schedules support 5-field cron expressions plus macros: `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@hourly`, `@reboot`.
-- job metadata persists latest run outcome fields (`lastRunAt`, `lastRunStatus`, `lastRunExitCode`, `lastRunError`, `lastRunDurationMs`).
-- commands execute locally via subprocess (`/bin/sh -lc <command>`).
-- `localclaw_cron_run` uses the same execution/status path as scheduled runs.
+- job metadata persists latest run outcome fields (`lastRunAt`, `lastRunStatus`, `lastRunError`, `lastRunDurationMs`).
+- jobs execute runtime prompts using `agent_id`, `message`, `timeout_seconds`, and `session_target`.
+- `wake_mode` is normalized/persisted (`next-heartbeat` or `now`) and currently does not change execution path.
+- `session_target` values are `default` and `isolated` (defaulting to `isolated` when omitted).
+- `localclaw_cron_run` uses the same prompt execution/status path as scheduled runs.
 - `@reboot` jobs run once per scheduler start.
 - missed schedules while runtime is offline are not backfilled.
 

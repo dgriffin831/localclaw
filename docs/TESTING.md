@@ -14,13 +14,14 @@ This document describes test coverage, commands, and Red/Green workflow for `loc
 | Layer | Primary Locations | What It Validates |
 | --- | --- | --- |
 | Config and policy | `internal/config/config_test.go` | defaults, strict config parsing, validation allowlists, local-only guardrails |
-| Runtime lifecycle and hooks | `internal/runtime/local_only_test.go`, `internal/runtime/tools_test.go` | startup boundaries, request-path prompt assembly, reset/session behavior |
+| Runtime lifecycle and hooks | `internal/runtime/local_only_test.go`, `internal/runtime/tools_test.go`, `internal/runtime/cron_runtime_test.go` | startup boundaries, request-path prompt assembly, reset/session behavior, cron runtime session-target mapping |
 | LLM contract/adapter compatibility | `internal/runtime/tools_test.go` | request-stream-only runtime path and provider tool-event pass-through behavior |
 | Skills loader/snapshot prompts | `internal/skills/registry_test.go`, `internal/runtime/tools_test.go` | workspace skill discovery, eligibility filtering, prompt-block injection/cache refresh |
 | TUI behavior | `internal/tui/app_test.go` | slash commands, autocomplete, waiting/status UX, welcome rendering, history/keybindings |
 | Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, bootstrap loading/filtering, subagent allowlist |
 | Session store/transcripts | `internal/session/store_test.go` | path resolution, lock behavior, metadata preservation, write safety |
 | Cron scheduler | `internal/cron/scheduler_test.go` | schedule validation, recurring execution, persistence/reload, manual run/remove/error paths |
+| Cron runtime executor | `internal/runtime/cron_runtime_test.go` | cron entry execution mapping (`default` vs `isolated`) and skipped invalid targets |
 | Heartbeat monitor | `internal/heartbeat/monitor_test.go` | enabled/disabled start, interval ticks, cancellation lifecycle, overlap guard, non-fatal errors |
 | Channel adapters | `internal/channels/slack/adapter_test.go`, `internal/channels/signal/adapter_test.go` | outbound delivery behavior, timeout/cancellation, and failure-path error mapping |
 | Signal inbound receive/runtime | `internal/channels/signal/receive_test.go`, `internal/runtime/channels_inbound_test.go` | `signal-cli receive` parsing, allowlist enforcement, group-message denial, sender-to-agent routing |
@@ -67,6 +68,7 @@ go test ./internal/channels/signal -run TestReceiveBatchParsesDirectAndGroupMess
 go test ./internal/runtime -run TestPromptIncludesBootstrapContextOnFirstMessageOnly -v
 go test ./internal/runtime -run TestPromptStreamForSessionPassesThroughProviderToolEvents -v
 go test ./internal/runtime -run TestRunSignalInboundRoutesSenderToMappedAgent -v
+go test ./internal/runtime -run TestRunCronEntryDefaultUsesDefaultSessionPrompt -v
 go test ./internal/skills -run TestSnapshotContainsEligibleSkillsOnly -v
 go test ./internal/tui -run TestParseSlash -v
 go test ./internal/workspace -run TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles -v

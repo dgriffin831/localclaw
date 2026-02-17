@@ -60,15 +60,15 @@ func NewSignalSendTool(backend ChannelsBackend) SignalSendTool {
 func SlackSendDefinition() protocol.Tool {
 	return protocol.Tool{
 		Name:        ToolLocalclawSlackSend,
-		Description: "Send a message to Slack via configured local channel adapter",
+		Description: "Send a message to Slack through the local adapter. Use when notifying or replying in Slack from an agent run.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"text":       map[string]interface{}{"type": "string"},
-				"channel":    map[string]interface{}{"type": "string"},
-				"thread_id":  map[string]interface{}{"type": "string"},
-				"agent_id":   map[string]interface{}{"type": "string"},
-				"session_id": map[string]interface{}{"type": "string"},
+				"text":       schemaStringField("Message body to send; must be non-blank.", "Build finished. All checks are green."),
+				"channel":    schemaStringField("Optional Slack channel ID override; omit to use configured default.", "C0123ABCDEF"),
+				"thread_id":  schemaStringField("Optional Slack thread timestamp for reply threading.", "1700000000.000100"),
+				"agent_id":   schemaStringField("Optional agent ID for session metadata persistence.", "default"),
+				"session_id": schemaStringField("Optional session ID for delivery metadata persistence.", "incident-review"),
 			},
 			"required": []string{"text"},
 		},
@@ -78,14 +78,14 @@ func SlackSendDefinition() protocol.Tool {
 func SignalSendDefinition() protocol.Tool {
 	return protocol.Tool{
 		Name:        ToolLocalclawSignalSend,
-		Description: "Send a message to Signal via configured local signal-cli adapter",
+		Description: "Send a message to Signal through local signal-cli integration. Use when delivering outbound alerts to Signal recipients.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"text":       map[string]interface{}{"type": "string"},
-				"recipient":  map[string]interface{}{"type": "string"},
-				"agent_id":   map[string]interface{}{"type": "string"},
-				"session_id": map[string]interface{}{"type": "string"},
+				"text":       schemaStringField("Message body to send; must be non-blank.", "Incident resolved. Monitoring remains active."),
+				"recipient":  schemaStringField("Optional recipient override (for example E.164 phone number).", "+15557654321"),
+				"agent_id":   schemaStringField("Optional agent ID for session metadata persistence.", "default"),
+				"session_id": schemaStringField("Optional session ID for delivery metadata persistence.", "incident-review"),
 			},
 			"required": []string{"text"},
 		},

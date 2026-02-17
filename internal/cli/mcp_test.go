@@ -141,6 +141,7 @@ func TestMCPServerDispatchesPhase4ToolsByName(t *testing.T) {
 		{name: "localclaw_workspace_status", args: "{}"},
 		{name: "localclaw_cron_list", args: "{}"},
 		{name: "localclaw_sessions_list", args: "{}"},
+		{name: "localclaw_memory_search", args: "{\"query\":\"mcp smoke\"}"},
 	}
 	for _, tc := range cases {
 		input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" + tc.name + "\",\"arguments\":" + tc.args + "}}\n")

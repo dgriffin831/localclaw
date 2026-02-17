@@ -206,7 +206,7 @@ func New(cfg config.Config) (*App, error) {
 		})
 	}
 
-	return &App{
+	app := &App{
 		cfg:             cfg,
 		enabledChannels: enabledChannels,
 		tools:           skills.DefaultToolRegistry(),
@@ -222,10 +222,6 @@ func New(cfg config.Config) (*App, error) {
 				return workspaceManager.ResolveWorkspace(agentID)
 			},
 		}),
-		cron: cron.NewInProcessSchedulerWithSettings(cron.Settings{
-			Enabled:   cfg.Cron.Enabled,
-			StateRoot: resolvedStateRoot,
-		}),
 		heartbeat:     heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
 		slack:         slackAdapter,
 		signal:        signalAdapter,
@@ -237,7 +233,13 @@ func New(cfg config.Config) (*App, error) {
 		now:                 time.Now,
 		skillPromptSnapshot: map[string]skillsSessionSnapshot{},
 		providerModelsCache: map[string]llm.ProviderModelCatalog{},
-	}, nil
+	}
+	app.cron = cron.NewInProcessSchedulerWithSettings(cron.Settings{
+		Enabled:   cfg.Cron.Enabled,
+		StateRoot: resolvedStateRoot,
+		Executor:  app.runCronEntry,
+	})
+	return app, nil
 }
 
 func resolveAbsolutePath(path string) (string, error) {

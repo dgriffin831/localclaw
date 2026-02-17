@@ -2,7 +2,6 @@ package cron
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -13,18 +12,17 @@ func TestInProcessSchedulerRecurringExecutionFiresForDueJobs(t *testing.T) {
 	stateRoot := t.TempDir()
 
 	s := NewInProcessSchedulerWithSettings(Settings{
-		Enabled:        true,
-		StateRoot:      stateRoot,
-		CommandTimeout: 2 * time.Second,
+		Enabled:    true,
+		StateRoot:  stateRoot,
+		RunTimeout: 2 * time.Second,
 	})
 	var runMu sync.Mutex
 	runCount := 0
-	s.commandRunner = func(ctx context.Context, command string) commandRunOutcome {
+	s.executor = func(ctx context.Context, entry Entry) RunOutcome {
 		runMu.Lock()
 		runCount++
 		runMu.Unlock()
-		zero := 0
-		return commandRunOutcome{status: RunStatusSuccess, exitCode: &zero}
+		return RunOutcome{Status: RunStatusSuccess}
 	}
 
 	var nowMu sync.Mutex
@@ -35,7 +33,7 @@ func TestInProcessSchedulerRecurringExecutionFiresForDueJobs(t *testing.T) {
 		return nowValue
 	}
 
-	if _, err := s.Add(context.Background(), AddRequest{ID: "job-1", Schedule: "* * * * *", Command: "job-1"}); err != nil {
+	if _, err := s.Add(context.Background(), AddRequest{ID: "job-1", Schedule: "* * * * *", Message: "job-1"}); err != nil {
 		t.Fatalf("add job: %v", err)
 	}
 
@@ -82,7 +80,7 @@ func TestInProcessSchedulerRecurringExecutionFiresForDueJobs(t *testing.T) {
 	}
 
 	nowMu.Lock()
-	nowValue = nowValue.Add(time.Minute)
+	nowValue = nowValue.Add(2 * time.Minute)
 	nowMu.Unlock()
 	waitForCondition(t, 3*time.Second, func() bool {
 		s.notifyLoop()
@@ -96,7 +94,7 @@ func TestInProcessSchedulerPersistenceReloadsJobsAcrossRestart(t *testing.T) {
 	stateRoot := t.TempDir()
 
 	s1 := NewInProcessSchedulerWithSettings(Settings{Enabled: true, StateRoot: stateRoot})
-	if _, err := s1.Add(context.Background(), AddRequest{ID: "job-1", Schedule: "*/5 * * * *", Command: "echo hi"}); err != nil {
+	if _, err := s1.Add(context.Background(), AddRequest{ID: "job-1", Schedule: "*/5 * * * *", Message: "hello"}); err != nil {
 		t.Fatalf("add job: %v", err)
 	}
 
@@ -116,6 +114,9 @@ func TestInProcessSchedulerPersistenceReloadsJobsAcrossRestart(t *testing.T) {
 	}
 	if items[0].ID != "job-1" {
 		t.Fatalf("expected job-1, got %+v", items[0])
+	}
+	if items[0].Message != "hello" {
+		t.Fatalf("expected message to persist, got %+v", items[0])
 	}
 }
 
@@ -138,34 +139,29 @@ func TestInProcessSchedulerRunRemoveValidationAndNotFound(t *testing.T) {
 
 func TestInProcessSchedulerRunRecordsFailureAndTimeoutMetadata(t *testing.T) {
 	s := NewInProcessSchedulerWithSettings(Settings{
-		Enabled:        true,
-		StateRoot:      t.TempDir(),
-		CommandTimeout: 500 * time.Millisecond,
-	})
-	s.commandRunner = func(ctx context.Context, command string) commandRunOutcome {
-		switch command {
-		case "fail":
-			code := 7
-			return commandRunOutcome{status: RunStatusError, exitCode: &code, errorMessage: "command exited with code 7"}
-		case "slow":
-			<-ctx.Done()
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return commandRunOutcome{status: RunStatusTimeout, errorMessage: "command timed out"}
+		Enabled:    true,
+		StateRoot:  t.TempDir(),
+		RunTimeout: 500 * time.Millisecond,
+		Executor: func(ctx context.Context, entry Entry) RunOutcome {
+			switch entry.ID {
+			case "fail":
+				return RunOutcome{Status: RunStatusError, Error: "run failed"}
+			case "slow":
+				<-ctx.Done()
+				return RunOutcome{}
+			default:
+				return RunOutcome{Status: RunStatusSuccess}
 			}
-			return commandRunOutcome{status: RunStatusCanceled, errorMessage: "command canceled"}
-		default:
-			zero := 0
-			return commandRunOutcome{status: RunStatusSuccess, exitCode: &zero}
-		}
-	}
+		},
+	})
 
-	if _, err := s.Add(context.Background(), AddRequest{ID: "fail", Schedule: "*/5 * * * *", Command: "fail"}); err != nil {
+	if _, err := s.Add(context.Background(), AddRequest{ID: "fail", Schedule: "*/5 * * * *", Message: "fail"}); err != nil {
 		t.Fatalf("add fail job: %v", err)
 	}
-	if _, err := s.Add(context.Background(), AddRequest{ID: "slow", Schedule: "*/5 * * * *", Command: "slow"}); err != nil {
+	if _, err := s.Add(context.Background(), AddRequest{ID: "slow", Schedule: "*/5 * * * *", Message: "slow"}); err != nil {
 		t.Fatalf("add slow job: %v", err)
 	}
-	if _, err := s.Add(context.Background(), AddRequest{ID: "ok", Schedule: "*/5 * * * *", Command: "ok"}); err != nil {
+	if _, err := s.Add(context.Background(), AddRequest{ID: "ok", Schedule: "*/5 * * * *", Message: "ok"}); err != nil {
 		t.Fatalf("add ok job: %v", err)
 	}
 
@@ -175,9 +171,6 @@ func TestInProcessSchedulerRunRecordsFailureAndTimeoutMetadata(t *testing.T) {
 	}
 	if failResult.Status != RunStatusError {
 		t.Fatalf("expected fail status=%q, got %+v", RunStatusError, failResult)
-	}
-	if failResult.ExitCode == nil || *failResult.ExitCode != 7 {
-		t.Fatalf("expected exit code 7, got %+v", failResult)
 	}
 
 	timeoutResult, err := s.Run(context.Background(), "slow")
@@ -207,8 +200,8 @@ func TestInProcessSchedulerRunRecordsFailureAndTimeoutMetadata(t *testing.T) {
 	if indexed["fail"].LastRunStatus != RunStatusError {
 		t.Fatalf("expected fail metadata status=%q, got %+v", RunStatusError, indexed["fail"])
 	}
-	if indexed["fail"].LastRunExitCode == nil || *indexed["fail"].LastRunExitCode != 7 {
-		t.Fatalf("expected fail metadata exit code=7, got %+v", indexed["fail"])
+	if indexed["fail"].LastRunError != "run failed" {
+		t.Fatalf("expected fail metadata error, got %+v", indexed["fail"])
 	}
 	if indexed["slow"].LastRunStatus != RunStatusTimeout {
 		t.Fatalf("expected slow metadata status=%q, got %+v", RunStatusTimeout, indexed["slow"])
@@ -217,22 +210,16 @@ func TestInProcessSchedulerRunRecordsFailureAndTimeoutMetadata(t *testing.T) {
 
 func TestInProcessSchedulerRemoveWhileRunningCancelsAndUnschedules(t *testing.T) {
 	s := NewInProcessSchedulerWithSettings(Settings{
-		Enabled:        true,
-		StateRoot:      t.TempDir(),
-		CommandTimeout: 5 * time.Second,
+		Enabled:    true,
+		StateRoot:  t.TempDir(),
+		RunTimeout: 5 * time.Second,
+		Executor: func(ctx context.Context, entry Entry) RunOutcome {
+			<-ctx.Done()
+			return RunOutcome{}
+		},
 	})
-	s.commandRunner = func(ctx context.Context, command string) commandRunOutcome {
-		<-ctx.Done()
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return commandRunOutcome{status: RunStatusCanceled, errorMessage: "command canceled"}
-		}
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return commandRunOutcome{status: RunStatusTimeout, errorMessage: "command timed out"}
-		}
-		return commandRunOutcome{status: RunStatusSuccess}
-	}
 
-	if _, err := s.Add(context.Background(), AddRequest{ID: "job-1", Schedule: "*/5 * * * *", Command: "block"}); err != nil {
+	if _, err := s.Add(context.Background(), AddRequest{ID: "job-1", Schedule: "*/5 * * * *", Message: "block"}); err != nil {
 		t.Fatalf("add job: %v", err)
 	}
 
@@ -291,14 +278,13 @@ func TestInProcessSchedulerRebootRunsOncePerStartForPersistedJobs(t *testing.T) 
 	runCount := 0
 
 	s1 := NewInProcessSchedulerWithSettings(Settings{Enabled: true, StateRoot: stateRoot})
-	s1.commandRunner = func(ctx context.Context, command string) commandRunOutcome {
+	s1.executor = func(ctx context.Context, entry Entry) RunOutcome {
 		runMu.Lock()
 		runCount++
 		runMu.Unlock()
-		zero := 0
-		return commandRunOutcome{status: RunStatusSuccess, exitCode: &zero}
+		return RunOutcome{Status: RunStatusSuccess}
 	}
-	if _, err := s1.Add(context.Background(), AddRequest{ID: "boot", Schedule: "@reboot", Command: "reboot"}); err != nil {
+	if _, err := s1.Add(context.Background(), AddRequest{ID: "boot", Schedule: "@reboot", Message: "reboot"}); err != nil {
 		t.Fatalf("add reboot job: %v", err)
 	}
 
@@ -324,7 +310,7 @@ func TestInProcessSchedulerRebootRunsOncePerStartForPersistedJobs(t *testing.T) 
 	cancel1()
 
 	s2 := NewInProcessSchedulerWithSettings(Settings{Enabled: true, StateRoot: stateRoot})
-	s2.commandRunner = s1.commandRunner
+	s2.executor = s1.executor
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	if err := s2.Start(ctx2); err != nil {
@@ -336,6 +322,25 @@ func TestInProcessSchedulerRebootRunsOncePerStartForPersistedJobs(t *testing.T) 
 		defer runMu.Unlock()
 		return runCount >= 2
 	})
+}
+
+func TestInProcessSchedulerSessionTargetDefaultsToIsolated(t *testing.T) {
+	s := NewInProcessSchedulerWithSettings(Settings{Enabled: true, StateRoot: t.TempDir()})
+	entry, err := s.Add(context.Background(), AddRequest{ID: "job-1", Schedule: "*/5 * * * *", Message: "hello"})
+	if err != nil {
+		t.Fatalf("add job: %v", err)
+	}
+	if entry.SessionTarget != SessionTargetIsolated {
+		t.Fatalf("expected default session target %q, got %q", SessionTargetIsolated, entry.SessionTarget)
+	}
+}
+
+func TestInProcessSchedulerValidateSessionTarget(t *testing.T) {
+	s := NewInProcessSchedulerWithSettings(Settings{Enabled: true, StateRoot: t.TempDir()})
+	_, err := s.Add(context.Background(), AddRequest{ID: "job-1", Schedule: "*/5 * * * *", SessionTarget: "unknown", Message: "hello"})
+	if err == nil || !strings.Contains(err.Error(), "sessionTarget must be one of") {
+		t.Fatalf("expected sessionTarget validation error, got %v", err)
+	}
 }
 
 func TestValidateSchedule(t *testing.T) {

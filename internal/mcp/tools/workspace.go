@@ -37,11 +37,11 @@ func NewWorkspaceStatusTool(backend WorkspaceBackend) WorkspaceStatusTool {
 func WorkspaceStatusDefinition() protocol.Tool {
 	return protocol.Tool{
 		Name:        ToolLocalclawWorkspaceStatus,
-		Description: "Return local workspace path and availability for an agent",
+		Description: "Return resolved workspace path and availability for an agent. Use when you need to confirm filesystem routing before file work.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"agent_id": map[string]interface{}{"type": "string"},
+				"agent_id": schemaStringField("Optional agent ID to resolve workspace path; omit to use current/default agent.", "default"),
 			},
 		},
 	}

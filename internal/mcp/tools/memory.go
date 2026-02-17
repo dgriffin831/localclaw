@@ -84,16 +84,16 @@ func MemorySearchDefinition() protocol.Tool {
 func memorySearchDefinition(name string) protocol.Tool {
 	return protocol.Tool{
 		Name:        name,
-		Description: "Search indexed localclaw memory chunks using keyword ranking (FTS/LIKE fallback)",
+		Description: "Search indexed memory chunks with keyword ranking. Use when you need relevant prior context before deeper reads.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"query":       map[string]interface{}{"type": "string"},
-				"max_results": map[string]interface{}{"type": "integer"},
-				"min_score":   map[string]interface{}{"type": "number"},
-				"agent_id":    map[string]interface{}{"type": "string"},
-				"session_id":  map[string]interface{}{"type": "string"},
-				"session_key": map[string]interface{}{"type": "string"},
+				"query":       schemaStringField("Keyword query text; must be non-blank.", "incident timeout heartbeat"),
+				"max_results": schemaIntegerField("Maximum number of results; use >0 or omit for the agent default.", 8),
+				"min_score":   schemaNumberField("Minimum score threshold; higher values return fewer results.", 0.25),
+				"agent_id":    schemaStringField("Optional agent ID for memory scope; omit to use current/default agent.", "default"),
+				"session_id":  schemaStringField("Optional session ID to resolve session context.", "incident-review"),
+				"session_key": schemaStringField("Optional explicit session key in '<agent>/<session>' form.", "default/incident-review"),
 			},
 			"required": []string{"query"},
 		},
@@ -107,15 +107,15 @@ func MemoryGetDefinition() protocol.Tool {
 func memoryGetDefinition(name string) protocol.Tool {
 	return protocol.Tool{
 		Name:        name,
-		Description: "Read a markdown memory file slice from the local index scope",
+		Description: "Read a markdown memory file, optionally by line range. Use when you already know the exact file path.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path":       map[string]interface{}{"type": "string"},
-				"from_line":  map[string]interface{}{"type": "integer"},
-				"lines":      map[string]interface{}{"type": "integer"},
-				"agent_id":   map[string]interface{}{"type": "string"},
-				"session_id": map[string]interface{}{"type": "string"},
+				"path":       schemaStringField("Workspace-relative markdown path in memory scope.", "memory/incidents.md"),
+				"from_line":  schemaIntegerField("1-based starting line; omit to start at line 1.", 25),
+				"lines":      schemaIntegerField("Number of lines to return from from_line; omit for the rest of file.", 40),
+				"agent_id":   schemaStringField("Optional agent ID for memory scope; omit to use current/default agent.", "default"),
+				"session_id": schemaStringField("Optional session ID for request routing context.", "incident-review"),
 			},
 			"required": []string{"path"},
 		},
@@ -129,25 +129,30 @@ func MemoryGrepDefinition() protocol.Tool {
 func memoryGrepDefinition(name string) protocol.Tool {
 	return protocol.Tool{
 		Name:        name,
-		Description: "Find exact literals or regex matches across allowed memory/session files",
+		Description: "Find literal or regex matches across memory/session files. Use when you need exact lines, not ranked chunks.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"query":          map[string]interface{}{"type": "string"},
-				"mode":           map[string]interface{}{"type": "string", "enum": []string{"literal", "regex"}},
-				"case_sensitive": map[string]interface{}{"type": "boolean"},
-				"word":           map[string]interface{}{"type": "boolean"},
-				"max_matches":    map[string]interface{}{"type": "integer"},
-				"context_lines":  map[string]interface{}{"type": "integer"},
+				"query":          schemaStringField("Literal text or regex pattern to match; must be non-blank.", "token-123"),
+				"mode":           schemaEnumStringField("Match mode; defaults to literal when omitted.", []string{"literal", "regex"}, "literal"),
+				"case_sensitive": schemaBooleanField("Set true for case-sensitive matching.", false),
+				"word":           schemaBooleanField("Literal mode only: true requires whole-word matches.", true),
+				"max_matches":    schemaIntegerField("Maximum matches to return; defaults to 50 and caps at 500.", 100),
+				"context_lines":  schemaIntegerField("Context lines before/after each match; values are capped to 0-5.", 2),
 				"path_glob": map[string]interface{}{
+					"description": "Optional path filter(s), as one glob string or an array of globs; paths must stay in memory/session scope.",
+					"examples": []interface{}{
+						"memory/incidents/*.md",
+						[]interface{}{"memory/**/*.md", "sessions/default/*.jsonl"},
+					},
 					"anyOf": []map[string]interface{}{
 						{"type": "string"},
 						{"type": "array", "items": map[string]interface{}{"type": "string"}},
 					},
 				},
-				"source":     map[string]interface{}{"type": "string", "enum": []string{"memory", "sessions", "all"}},
-				"agent_id":   map[string]interface{}{"type": "string"},
-				"session_id": map[string]interface{}{"type": "string"},
+				"source":     schemaEnumStringField("Source filter; defaults to all when omitted.", []string{"memory", "sessions", "all"}, "all"),
+				"agent_id":   schemaStringField("Optional agent ID for memory scope; omit to use current/default agent.", "default"),
+				"session_id": schemaStringField("Optional session ID for request routing context.", "incident-review"),
 			},
 			"required": []string{"query"},
 		},

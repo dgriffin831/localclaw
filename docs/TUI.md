@@ -1,6 +1,6 @@
 # TUI Implementation Guide
 
-This document describes current terminal UI behavior in `internal/tui/app.go`.
+This document describes current terminal UI behavior in `internal/tui`.
 
 ## Runtime model
 
@@ -12,13 +12,13 @@ This document describes current terminal UI behavior in `internal/tui/app.go`.
 - bordered multiline composer with slash-command menu
 - footer line with left-aligned keyboard shortcuts and right-aligned runtime settings
 
-Streaming output comes from `app.PromptStreamForSession`.
+Streaming output comes from `app.PromptStreamForSessionWithOptions`.
 
 ## Header and status
 
 Header currently shows:
 
-- app label (`# localclaw`)
+- app label from config (`app.name`, default `localclaw`)
 - session/token tuple (`session:<session_id>  tokens:<total_tokens>`)
 - resolved workspace path
 

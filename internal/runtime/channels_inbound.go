@@ -37,6 +37,12 @@ func (a *App) RunSignalInbound(ctx context.Context, opts SignalInboundRunOptions
 	if defaultAgent == "" {
 		defaultAgent = DefaultAgentID
 	}
+	sendTyping := inboundCfg.SendTyping
+	typingInterval := time.Duration(inboundCfg.TypingIntervalSeconds) * time.Second
+	if typingInterval <= 0 {
+		typingInterval = 5 * time.Second
+	}
+	sendReadReceipts := inboundCfg.SendReadReceipts
 
 	receiveSettings := signal.ReceiveSettings{
 		CLIPath:            a.cfg.Channels.Signal.CLIPath,
@@ -77,7 +83,7 @@ func (a *App) RunSignalInbound(ctx context.Context, opts SignalInboundRunOptions
 			continue
 		}
 		for _, message := range messages {
-			if err := a.processSignalInboundMessage(ctx, message, allowFrom, agentBySender, defaultAgent, opts.Logf); err != nil {
+			if err := a.processSignalInboundMessage(ctx, message, allowFrom, agentBySender, defaultAgent, sendTyping, typingInterval, sendReadReceipts, opts.Logf); err != nil {
 				inboundLogf(opts.Logf, "signal inbound processing error: %v", err)
 			}
 		}
@@ -87,7 +93,7 @@ func (a *App) RunSignalInbound(ctx context.Context, opts SignalInboundRunOptions
 	}
 }
 
-func (a *App) processSignalInboundMessage(ctx context.Context, message signal.ReceiveMessage, allowFrom map[string]struct{}, agentBySender map[string]string, defaultAgent string, logf func(format string, args ...interface{})) error {
+func (a *App) processSignalInboundMessage(ctx context.Context, message signal.ReceiveMessage, allowFrom map[string]struct{}, agentBySender map[string]string, defaultAgent string, sendTyping bool, typingInterval time.Duration, sendReadReceipts bool, logf func(format string, args ...interface{})) error {
 	sender := normalizeSignalSenderForInbound(message.Sender)
 	if sender == "" {
 		return nil
@@ -117,6 +123,9 @@ func (a *App) processSignalInboundMessage(ctx context.Context, message signal.Re
 		agentID = DefaultAgentID
 	}
 	sessionID := signalSessionIDForSender(sender)
+	a.sendSignalInboundReadReceipt(ctx, sender, message.Timestamp, sendReadReceipts, logf)
+	stopTyping := a.startSignalInboundTypingLoop(ctx, sender, sendTyping, typingInterval, logf)
+	defer stopTyping()
 
 	inboundLogf(logf, "signal inbound accepted sender=%s agent=%s session=%s", sender, agentID, sessionID)
 	response, err := a.PromptForSession(ctx, agentID, sessionID, body)
@@ -134,6 +143,76 @@ func (a *App) processSignalInboundMessage(ctx context.Context, message signal.Re
 	}
 	inboundLogf(logf, "signal inbound replied sender=%s agent=%s", sender, agentID)
 	return nil
+}
+
+func (a *App) sendSignalInboundReadReceipt(ctx context.Context, sender string, targetTimestamp int64, enabled bool, logf func(format string, args ...interface{})) {
+	if !enabled {
+		return
+	}
+	receiptClient, ok := a.signal.(signal.ReceiptClient)
+	if !ok {
+		return
+	}
+	if targetTimestamp <= 0 {
+		inboundLogf(logf, "signal inbound skipped read receipt sender=%s reason=missing_timestamp", sender)
+		return
+	}
+	if err := receiptClient.SendReceipt(ctx, signal.ReceiptRequest{
+		Recipient:       sender,
+		TargetTimestamp: targetTimestamp,
+		Type:            signal.ReceiptTypeRead,
+	}); err != nil {
+		inboundLogf(logf, "signal inbound read receipt failed sender=%s: %v", sender, err)
+	}
+}
+
+func (a *App) startSignalInboundTypingLoop(ctx context.Context, sender string, enabled bool, interval time.Duration, logf func(format string, args ...interface{})) func() {
+	if !enabled {
+		return func() {}
+	}
+	typingClient, ok := a.signal.(signal.TypingClient)
+	if !ok {
+		return func() {}
+	}
+	if strings.TrimSpace(sender) == "" {
+		return func() {}
+	}
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+
+	typingCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := typingClient.SendTyping(typingCtx, signal.TypingRequest{Recipient: sender}); err != nil {
+			inboundLogf(logf, "signal inbound typing start failed sender=%s: %v", sender, err)
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-typingCtx.Done():
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer stopCancel()
+				if err := typingClient.SendTyping(stopCtx, signal.TypingRequest{Recipient: sender, Stop: true}); err != nil &&
+					!errors.Is(err, context.DeadlineExceeded) &&
+					!errors.Is(err, context.Canceled) {
+					inboundLogf(logf, "signal inbound typing stop failed sender=%s: %v", sender, err)
+				}
+				return
+			case <-ticker.C:
+				if err := typingClient.SendTyping(typingCtx, signal.TypingRequest{Recipient: sender}); err != nil {
+					inboundLogf(logf, "signal inbound typing refresh failed sender=%s: %v", sender, err)
+				}
+			}
+		}
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func normalizeInboundAllowList(values []string) map[string]struct{} {

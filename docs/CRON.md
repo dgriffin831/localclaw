@@ -11,7 +11,7 @@ This guide explains `localclaw` cron scheduling behavior, implementation details
 - `localclaw_cron_remove`
 - `localclaw_cron_run`
 
-These tools manage local recurring jobs that execute shell commands on the same machine as the `localclaw` process.
+These tools manage local recurring jobs that run agent prompts (not shell commands) inside the same `localclaw` process.
 
 ## Runtime Model
 
@@ -19,8 +19,23 @@ These tools manage local recurring jobs that execute shell commands on the same 
 - In practice, recurring execution is useful in long-running modes like:
   - `go run ./cmd/localclaw tui`
   - `go run ./cmd/localclaw mcp serve`
+  - `go run ./cmd/localclaw channels serve`
 - `doctor` and `memory` do call `App.Run`, but typically exit quickly, so they are not intended as recurring schedulers.
 - No daemon/background service is started outside the `localclaw` process.
+
+## Job Model
+
+Cron jobs are intentionally simple:
+
+- `schedule` (required)
+- `message` (required)
+- `timeout_seconds` (optional)
+- `session_target` (optional; defaults to `isolated`)
+
+Session targets:
+
+- `default`: sends prompt to the default session (`default/default`)
+- `isolated`: sends prompt to per-job isolated session (`default/cron-<job-id>` unless `agent_id` overrides agent)
 
 ## How To Use It
 
@@ -35,19 +50,35 @@ go run ./cmd/localclaw mcp serve
 Required fields:
 
 - `schedule`
-- `command`
+- `message`
 
-Optional field:
+Optional fields:
 
-- `id` (auto-generated when omitted)
+- `id`
+- `agent_id`
+- `session_target` (defaults to `isolated`)
+- `wake_mode` (defaults to `next-heartbeat`; currently normalized/persisted only)
+- `timeout_seconds`
 
-Example tool call arguments:
+Example: isolated job (default behavior)
 
 ```json
 {
-  "id": "hourly-report",
+  "id": "hourly-review",
   "schedule": "0 * * * *",
-  "command": "echo report >> /tmp/localclaw-report.log"
+  "message": "Run an hourly workspace review and report blockers.",
+  "timeout_seconds": 60
+}
+```
+
+Example: default-session job
+
+```json
+{
+  "id": "default-session-reminder",
+  "schedule": "*/5 * * * *",
+  "session_target": "default",
+  "message": "Check for urgent follow-ups and reply if needed."
 }
 ```
 
@@ -56,13 +87,16 @@ Example tool call arguments:
 `localclaw_cron_list` returns jobs sorted by `id` and includes:
 
 - `id`
+- `agentId`
 - `schedule`
-- `command`
+- `sessionTarget`
+- `wakeMode`
+- `message`
+- `timeoutSeconds`
 - `createdAt`
 - `updatedAt`
 - `lastRunAt`
 - `lastRunStatus`
-- `lastRunExitCode`
 - `lastRunError`
 - `lastRunDurationMs`
 
@@ -74,8 +108,7 @@ Manual and scheduled runs share the same execution path and result contract:
 
 - `id`
 - `triggeredAt`
-- `status` (`success`, `error`, `timeout`, `canceled`)
-- `exitCode` (when available)
+- `status` (`success`, `error`, `timeout`, `canceled`, `skipped`)
 - `error` (when present)
 
 ### 5. Remove a job
@@ -119,25 +152,22 @@ Persistence characteristics:
 
 ## Execution Details
 
-Commands execute locally via:
-
-- `/bin/sh -lc <command>`
-
-Current execution defaults:
-
-- per-run timeout defaults to 5 minutes
-- non-zero exit records `status=error` and `exitCode`
-- timeout records `status=timeout`
-- cancellation records `status=canceled`
-- execution failures do not stop the scheduler loop
+- Cron execution is prompt-based through runtime agent APIs.
+- `session_target=default` runs in `default/default` (or `<agent_id>/default`).
+- `session_target=isolated` runs in `cron-<job-id>` session for the resolved agent.
+- `wake_mode` is currently metadata-only (`next-heartbeat` / `now`) and does not change run scheduling behavior.
+- default per-run timeout is 5 minutes.
+- `timeout_seconds` overrides per-job timeout when set.
+- one job failing does not stop scheduler progress for other jobs.
 
 ## Error Contract
 
 Common validation and runtime errors:
 
 - scheduler disabled: `cron scheduler is disabled`
-- missing fields: `schedule is required`, `command is required`, `id is required`
+- missing fields: `schedule is required`, `message is required`, `id is required`
 - invalid schedule: field-level parser errors
+- invalid target: `sessionTarget must be one of: default, isolated`
 - duplicate add id: `cron job "<id>" already exists`
 - run/remove unknown id: `cron job "<id>" not found`
 
@@ -146,13 +176,13 @@ Common validation and runtime errors:
 Primary files:
 
 - `internal/cron/scheduler.go`
-  - scheduler loop, job lifecycle, run/remove/add/list behavior
+  - scheduler loop, validation, job lifecycle, run/remove/add/list behavior
 - `internal/cron/schedule.go`
   - shared schedule parser + validator
 - `internal/cron/store.go`
   - persistent store load/save + atomic writes
-- `internal/cron/executor.go`
-  - shell command execution and result normalization
+- `internal/runtime/cron_runtime.go`
+  - runtime cron executor mapping entries to prompt calls
 - `internal/mcp/tools/cron.go`
   - MCP tool schema + argument handling + runtime backend mapping
 - `internal/runtime/app.go`

@@ -141,8 +141,8 @@ func (a *App) MCPCronList(ctx context.Context) ([]cron.Entry, error) {
 	return a.cron.List(ctx)
 }
 
-func (a *App) MCPCronAdd(ctx context.Context, id, schedule, command string) (cron.Entry, error) {
-	return a.cron.Add(ctx, cron.AddRequest{ID: id, Schedule: schedule, Command: command})
+func (a *App) MCPCronAdd(ctx context.Context, req cron.AddRequest) (cron.Entry, error) {
+	return a.cron.Add(ctx, req)
 }
 
 func (a *App) MCPCronRemove(ctx context.Context, id string) (bool, error) {

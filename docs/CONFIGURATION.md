@@ -84,6 +84,9 @@
         "allow_from": [],
         "agent_by_sender": {},
         "default_agent": "default",
+        "send_typing": true,
+        "typing_interval_seconds": 5,
+        "send_read_receipts": true,
         "poll_timeout_seconds": 5,
         "max_messages_per_poll": 10
       }
@@ -179,6 +182,7 @@ General:
   - `channels.signal.inbound.default_agent` must be `default` or a configured `agents.list[].id`.
   - `channels.signal.inbound.agent_by_sender` senders must also appear in `allow_from`.
   - `channels.signal.inbound.agent_by_sender` agents must be valid agent ids.
+  - `channels.signal.inbound.typing_interval_seconds` must be `> 0`.
   - `channels.signal.inbound.poll_timeout_seconds` must be `> 0`.
   - `channels.signal.inbound.max_messages_per_poll` must be `> 0`.
 - `agents.defaults.workspace` and `session.store` are required.
@@ -242,6 +246,9 @@ Signal (`channels.signal`):
 - `inbound.allow_from`: allowlist of direct sender numbers permitted to trigger agent runs.
 - `inbound.agent_by_sender`: optional sender -> agent routing map.
 - `inbound.default_agent`: fallback agent for allowlisted senders without explicit mapping.
+- `inbound.send_typing`: send Signal typing indicators while localclaw prepares a reply.
+- `inbound.typing_interval_seconds`: typing refresh cadence while a reply is running.
+- `inbound.send_read_receipts`: send Signal read receipts for accepted inbound direct messages.
 - `inbound.poll_timeout_seconds`: `signal-cli receive` timeout per poll.
 - `inbound.max_messages_per_poll`: max messages consumed per receive poll.
 - group messages are always dropped in inbound mode.
@@ -258,7 +265,8 @@ MCP channel tools:
 - supported schedules:
   - 5-field cron (`minute hour day-of-month month day-of-week`) with `*`, `,`, `-`, `/`, and integer values
   - macros: `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@hourly`, `@reboot`
-- commands run locally using `/bin/sh -lc <command>`.
+- jobs run local agent prompts using `message` + optional `timeout_seconds`.
+- cron `session_target` values are `default` and `isolated` (default is `isolated`).
 - jobs run only while runtime is active; missed windows while offline are not backfilled.
 
 ## Heartbeat configuration notes

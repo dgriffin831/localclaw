@@ -35,7 +35,7 @@ func TestCronAddToolRejectsInvalidSchedule(t *testing.T) {
 		return CronJob{}, nil
 	}})
 
-	res := h.Call(context.Background(), map[string]interface{}{"schedule": "not cron", "command": "echo hi"})
+	res := h.Call(context.Background(), map[string]interface{}{"schedule": "not cron", "message": "hello"})
 	if !res.IsError {
 		t.Fatalf("expected schedule validation error")
 	}
@@ -46,7 +46,7 @@ func TestCronAddToolReturnsNormalizedBackendErrors(t *testing.T) {
 		return CronJob{}, errors.New("boom")
 	}})
 
-	res := h.Call(context.Background(), map[string]interface{}{"schedule": "*/5 * * * *", "command": "echo hi"})
+	res := h.Call(context.Background(), map[string]interface{}{"schedule": "*/5 * * * *", "message": "hello"})
 	if !res.IsError {
 		t.Fatalf("expected error")
 	}
@@ -68,10 +68,15 @@ func TestCronRunToolRequiresID(t *testing.T) {
 
 func TestCronAddToolSuccess(t *testing.T) {
 	h := NewCronAddTool(stubCronBackend{addFn: func(ctx context.Context, req CronAddRequest) (CronJob, error) {
-		return CronJob{ID: "job-1", Schedule: req.Schedule, Command: req.Command}, nil
+		return CronJob{ID: "job-1", Schedule: req.Schedule, SessionTarget: req.SessionTarget, Message: req.Message, TimeoutSeconds: req.TimeoutSeconds}, nil
 	}})
 
-	res := h.Call(context.Background(), map[string]interface{}{"schedule": "*/5 * * * *", "command": "echo hi"})
+	res := h.Call(context.Background(), map[string]interface{}{
+		"schedule":        "*/5 * * * *",
+		"session_target":  "default",
+		"message":         "hello",
+		"timeout_seconds": 30,
+	})
 	if res.IsError {
 		t.Fatalf("expected success, got error: %v", res.StructuredContent["error"])
 	}
@@ -84,7 +89,7 @@ func TestCronAddToolRejectsOutOfRangeScheduleField(t *testing.T) {
 	h := NewCronAddTool(stubCronBackend{addFn: func(ctx context.Context, req CronAddRequest) (CronJob, error) {
 		return CronJob{}, nil
 	}})
-	res := h.Call(context.Background(), map[string]interface{}{"schedule": "60 * * * *", "command": "echo hi"})
+	res := h.Call(context.Background(), map[string]interface{}{"schedule": "60 * * * *", "message": "hello"})
 	if !res.IsError {
 		t.Fatalf("expected schedule validation error")
 	}
@@ -97,7 +102,7 @@ func TestCronAddToolRejectsZeroStep(t *testing.T) {
 	h := NewCronAddTool(stubCronBackend{addFn: func(ctx context.Context, req CronAddRequest) (CronJob, error) {
 		return CronJob{}, nil
 	}})
-	res := h.Call(context.Background(), map[string]interface{}{"schedule": "*/0 * * * *", "command": "echo hi"})
+	res := h.Call(context.Background(), map[string]interface{}{"schedule": "*/0 * * * *", "message": "hello"})
 	if !res.IsError {
 		t.Fatalf("expected step validation error")
 	}
@@ -113,11 +118,61 @@ func TestCronAddToolAcceptsRebootMacro(t *testing.T) {
 		if req.Schedule != "@reboot" {
 			t.Fatalf("expected @reboot schedule, got %q", req.Schedule)
 		}
-		return CronJob{ID: "job-1", Schedule: req.Schedule, Command: req.Command}, nil
+		return CronJob{ID: "job-1", Schedule: req.Schedule, Message: req.Message}, nil
 	}})
-	res := h.Call(context.Background(), map[string]interface{}{"schedule": "@reboot", "command": "echo hi"})
+	res := h.Call(context.Background(), map[string]interface{}{"schedule": "@reboot", "message": "hello"})
 	if res.IsError {
 		t.Fatalf("expected @reboot macro to be accepted: %v", res.StructuredContent["error"])
+	}
+	if !called {
+		t.Fatalf("expected backend add to be called")
+	}
+}
+
+func TestCronAddToolRequiresMessage(t *testing.T) {
+	h := NewCronAddTool(stubCronBackend{addFn: func(ctx context.Context, req CronAddRequest) (CronJob, error) {
+		return CronJob{}, nil
+	}})
+	res := h.Call(context.Background(), map[string]interface{}{"schedule": "*/5 * * * *"})
+	if !res.IsError {
+		t.Fatalf("expected message validation error")
+	}
+	if !strings.Contains(res.StructuredContent["error"].(string), "message is required") {
+		t.Fatalf("unexpected error: %v", res.StructuredContent["error"])
+	}
+}
+
+func TestCronAddToolRejectsNegativeTimeout(t *testing.T) {
+	h := NewCronAddTool(stubCronBackend{addFn: func(ctx context.Context, req CronAddRequest) (CronJob, error) {
+		return CronJob{}, nil
+	}})
+	res := h.Call(context.Background(), map[string]interface{}{"schedule": "*/5 * * * *", "message": "hello", "timeout_seconds": -1})
+	if !res.IsError {
+		t.Fatalf("expected timeout validation error")
+	}
+	if !strings.Contains(res.StructuredContent["error"].(string), "timeout_seconds must be >= 0") {
+		t.Fatalf("unexpected error: %v", res.StructuredContent["error"])
+	}
+}
+
+func TestCronAddToolAcceptsLegacyPayloadMessage(t *testing.T) {
+	called := false
+	h := NewCronAddTool(stubCronBackend{addFn: func(ctx context.Context, req CronAddRequest) (CronJob, error) {
+		called = true
+		if req.Message != "test from cron" {
+			t.Fatalf("expected legacy payload text mapped to message, got %q", req.Message)
+		}
+		return CronJob{ID: "job-1", Schedule: req.Schedule, Message: req.Message}, nil
+	}})
+	res := h.Call(context.Background(), map[string]interface{}{
+		"schedule": "*/5 * * * *",
+		"payload": map[string]interface{}{
+			"kind": "signal",
+			"text": "test from cron",
+		},
+	})
+	if res.IsError {
+		t.Fatalf("expected legacy payload call to succeed: %v", res.StructuredContent["error"])
 	}
 	if !called {
 		t.Fatalf("expected backend add to be called")

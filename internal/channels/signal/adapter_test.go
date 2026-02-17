@@ -142,6 +142,103 @@ func TestLocalAdapterSendHonorsTimeout(t *testing.T) {
 	}
 }
 
+func TestLocalAdapterSendTypingBuildsExpectedCommand(t *testing.T) {
+	tempDir := t.TempDir()
+	argsPath := filepath.Join(tempDir, "args.txt")
+	scriptPath := filepath.Join(tempDir, "signal-cli")
+	script := "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" > \"" + argsPath + "\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake signal-cli: %v", err)
+	}
+
+	adapter := NewLocalAdapter(Settings{
+		CLIPath: scriptPath,
+		Account: "+15551234567",
+		Timeout: time.Second,
+	})
+
+	if err := adapter.SendTyping(context.Background(), TypingRequest{
+		Recipient: "+15557654321",
+	}); err != nil {
+		t.Fatalf("send typing: %v", err)
+	}
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	args := splitArgsLines(data)
+	want := []string{"-a", "+15551234567", "sendTyping", "+15557654321"}
+	if len(args) != len(want) {
+		t.Fatalf("unexpected arg count\nwant=%v\ngot=%v", want, args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("unexpected args\nwant=%v\ngot=%v", want, args)
+		}
+	}
+
+	if err := adapter.SendTyping(context.Background(), TypingRequest{
+		Recipient: "+15557654321",
+		Stop:      true,
+	}); err != nil {
+		t.Fatalf("send typing stop: %v", err)
+	}
+	data, err = os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	args = splitArgsLines(data)
+	want = []string{"-a", "+15551234567", "sendTyping", "-s", "+15557654321"}
+	if len(args) != len(want) {
+		t.Fatalf("unexpected stop arg count\nwant=%v\ngot=%v", want, args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("unexpected stop args\nwant=%v\ngot=%v", want, args)
+		}
+	}
+}
+
+func TestLocalAdapterSendReceiptBuildsExpectedCommand(t *testing.T) {
+	tempDir := t.TempDir()
+	argsPath := filepath.Join(tempDir, "args.txt")
+	scriptPath := filepath.Join(tempDir, "signal-cli")
+	script := "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" > \"" + argsPath + "\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake signal-cli: %v", err)
+	}
+
+	adapter := NewLocalAdapter(Settings{
+		CLIPath: scriptPath,
+		Account: "+15551234567",
+		Timeout: time.Second,
+	})
+
+	if err := adapter.SendReceipt(context.Background(), ReceiptRequest{
+		Recipient:       "+15557654321",
+		TargetTimestamp: 1700000000000,
+		Type:            ReceiptTypeRead,
+	}); err != nil {
+		t.Fatalf("send receipt: %v", err)
+	}
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read args file: %v", err)
+	}
+	args := splitArgsLines(data)
+	want := []string{"-a", "+15551234567", "sendReceipt", "-t", "1700000000000", "--type", "read", "+15557654321"}
+	if len(args) != len(want) {
+		t.Fatalf("unexpected arg count\nwant=%v\ngot=%v", want, args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("unexpected args\nwant=%v\ngot=%v", want, args)
+		}
+	}
+}
+
 func splitArgsLines(data []byte) []string {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {

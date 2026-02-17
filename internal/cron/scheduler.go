@@ -15,9 +15,20 @@ const (
 	RunStatusError    = "error"
 	RunStatusTimeout  = "timeout"
 	RunStatusCanceled = "canceled"
+	RunStatusSkipped  = "skipped"
 )
 
-const defaultCommandTimeout = 5 * time.Minute
+const (
+	SessionTargetDefault  = "default"
+	SessionTargetIsolated = "isolated"
+)
+
+const (
+	WakeModeNextHeartbeat = "next-heartbeat"
+	WakeModeNow           = "now"
+)
+
+const defaultRunTimeout = 5 * time.Minute
 
 var errSchedulerDisabled = errors.New("cron scheduler is disabled")
 
@@ -31,45 +42,66 @@ type Scheduler interface {
 }
 
 type Entry struct {
-	ID                string `json:"id"`
-	Schedule          string `json:"schedule"`
-	Command           string `json:"command"`
-	CreatedAt         string `json:"createdAt,omitempty"`
-	UpdatedAt         string `json:"updatedAt,omitempty"`
-	LastRunAt         string `json:"lastRunAt,omitempty"`
-	LastRunStatus     string `json:"lastRunStatus,omitempty"`
-	LastRunExitCode   *int   `json:"lastRunExitCode,omitempty"`
-	LastRunError      string `json:"lastRunError,omitempty"`
-	LastRunDurationMs int64  `json:"lastRunDurationMs,omitempty"`
+	ID                string               `json:"id"`
+	AgentID           string               `json:"agentId,omitempty"`
+	Schedule          string               `json:"schedule"`
+	SessionTarget     string               `json:"sessionTarget"`
+	WakeMode          string               `json:"wakeMode"`
+	Message           string               `json:"message"`
+	TimeoutSeconds    int                  `json:"timeoutSeconds,omitempty"`
+	LegacyPayload     *LegacyPayloadCompat `json:"payload,omitempty"`
+	CreatedAt         string               `json:"createdAt,omitempty"`
+	UpdatedAt         string               `json:"updatedAt,omitempty"`
+	LastRunAt         string               `json:"lastRunAt,omitempty"`
+	LastRunStatus     string               `json:"lastRunStatus,omitempty"`
+	LastRunError      string               `json:"lastRunError,omitempty"`
+	LastRunDurationMs int64                `json:"lastRunDurationMs,omitempty"`
+}
+
+type LegacyPayloadCompat struct {
+	Message        string `json:"message,omitempty"`
+	Text           string `json:"text,omitempty"`
+	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
 }
 
 type AddRequest struct {
-	ID       string
-	Schedule string
-	Command  string
+	ID             string
+	AgentID        string
+	Schedule       string
+	SessionTarget  string
+	WakeMode       string
+	Message        string
+	TimeoutSeconds int
 }
 
 type RunResult struct {
 	ID          string `json:"id"`
 	TriggeredAt string `json:"triggeredAt"`
 	Status      string `json:"status"`
-	ExitCode    *int   `json:"exitCode,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 
+type RunOutcome struct {
+	Status string
+	Error  string
+}
+
+type EntryExecutor func(ctx context.Context, entry Entry) RunOutcome
+
 type Settings struct {
-	Enabled        bool
-	StateRoot      string
-	CommandTimeout time.Duration
+	Enabled    bool
+	StateRoot  string
+	RunTimeout time.Duration
+	Executor   EntryExecutor
 }
 
 type InProcessScheduler struct {
-	enabled        bool
-	storePath      string
-	commandTimeout time.Duration
+	enabled    bool
+	storePath  string
+	runTimeout time.Duration
 
-	now           func() time.Time
-	commandRunner func(ctx context.Context, command string) commandRunOutcome
+	now      func() time.Time
+	executor EntryExecutor
 
 	mu      sync.RWMutex
 	jobs    map[string]*scheduledJob
@@ -91,7 +123,7 @@ type runInvocation struct {
 	runSeq    uint64
 	ctx       context.Context
 	cancel    context.CancelFunc
-	command   string
+	entry     Entry
 	triggered time.Time
 }
 
@@ -100,18 +132,28 @@ func NewInProcessScheduler(enabled bool) *InProcessScheduler {
 }
 
 func NewInProcessSchedulerWithSettings(settings Settings) *InProcessScheduler {
-	timeout := settings.CommandTimeout
+	timeout := settings.RunTimeout
 	if timeout <= 0 {
-		timeout = defaultCommandTimeout
+		timeout = defaultRunTimeout
+	}
+	executor := settings.Executor
+	if executor == nil {
+		executor = defaultEntryExecutor
 	}
 	return &InProcessScheduler{
-		enabled:        settings.Enabled,
-		storePath:      resolveStorePath(settings.StateRoot),
-		commandTimeout: timeout,
-		now:            time.Now,
-		commandRunner:  runLocalCommand,
-		jobs:           map[string]*scheduledJob{},
+		enabled:    settings.Enabled,
+		storePath:  resolveStorePath(settings.StateRoot),
+		runTimeout: timeout,
+		now:        time.Now,
+		executor:   executor,
+		jobs:       map[string]*scheduledJob{},
 	}
+}
+
+func defaultEntryExecutor(ctx context.Context, entry Entry) RunOutcome {
+	_ = ctx
+	_ = entry
+	return RunOutcome{Status: RunStatusError, Error: "cron executor is not configured"}
 }
 
 func (s *InProcessScheduler) Start(ctx context.Context) error {
@@ -164,9 +206,7 @@ func (s *InProcessScheduler) List(ctx context.Context) ([]Entry, error) {
 
 	items := make([]Entry, 0, len(s.jobs))
 	for _, job := range s.jobs {
-		entry := job.entry
-		entry.LastRunExitCode = cloneIntPtr(job.entry.LastRunExitCode)
-		items = append(items, entry)
+		items = append(items, job.entry)
 	}
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].ID < items[j].ID
@@ -182,20 +222,20 @@ func (s *InProcessScheduler) Add(ctx context.Context, req AddRequest) (Entry, er
 	if err != nil {
 		return Entry{}, err
 	}
-	command := strings.TrimSpace(req.Command)
-	if command == "" {
-		return Entry{}, errors.New("command is required")
-	}
 
 	now := s.now().UTC()
 	nowStamp := now.Format(time.RFC3339Nano)
 
 	entry := Entry{
-		ID:        strings.TrimSpace(req.ID),
-		Schedule:  normalizedSchedule,
-		Command:   command,
-		CreatedAt: nowStamp,
-		UpdatedAt: nowStamp,
+		ID:             strings.TrimSpace(req.ID),
+		AgentID:        strings.TrimSpace(req.AgentID),
+		Schedule:       normalizedSchedule,
+		SessionTarget:  req.SessionTarget,
+		WakeMode:       req.WakeMode,
+		Message:        req.Message,
+		TimeoutSeconds: req.TimeoutSeconds,
+		CreatedAt:      nowStamp,
+		UpdatedAt:      nowStamp,
 	}
 
 	s.mu.Lock()
@@ -212,16 +252,16 @@ func (s *InProcessScheduler) Add(ctx context.Context, req AddRequest) (Entry, er
 		s.mu.Unlock()
 		return Entry{}, err
 	}
-	s.jobs[entry.ID] = job
+	s.jobs[job.entry.ID] = job
 	if persistErr := s.persistLocked(); persistErr != nil {
-		delete(s.jobs, entry.ID)
+		delete(s.jobs, job.entry.ID)
 		s.mu.Unlock()
 		return Entry{}, persistErr
 	}
 	s.mu.Unlock()
 
 	s.notifyLoop()
-	return entry, nil
+	return job.entry, nil
 }
 
 func (s *InProcessScheduler) Remove(ctx context.Context, id string) (bool, error) {
@@ -384,7 +424,15 @@ func (s *InProcessScheduler) prepareInvocationLocked(parent context.Context, id 
 	if parent == nil {
 		parent = context.Background()
 	}
-	runCtx, cancel := context.WithTimeout(parent, s.commandTimeout)
+
+	timeout := s.runTimeout
+	if job.entry.TimeoutSeconds > 0 {
+		timeout = time.Duration(job.entry.TimeoutSeconds) * time.Second
+	}
+	if timeout <= 0 {
+		timeout = defaultRunTimeout
+	}
+	runCtx, cancel := context.WithTimeout(parent, timeout)
 	now := s.now().UTC()
 	job.running = true
 	job.cancel = cancel
@@ -399,22 +447,15 @@ func (s *InProcessScheduler) prepareInvocationLocked(parent context.Context, id 
 		runSeq:    job.runSeq,
 		ctx:       runCtx,
 		cancel:    cancel,
-		command:   job.entry.Command,
+		entry:     job.entry,
 		triggered: now,
 	}, nil
 }
 
 func (s *InProcessScheduler) executeInvocation(invocation runInvocation) (RunResult, error) {
-	outcome := s.commandRunner(invocation.ctx, invocation.command)
+	outcome := s.executor(invocation.ctx, invocation.entry)
 	invocation.cancel()
-
-	if outcome.status == "" {
-		outcome.status = RunStatusError
-	}
-	if outcome.status == RunStatusSuccess && outcome.exitCode == nil {
-		zero := 0
-		outcome.exitCode = &zero
-	}
+	outcome = normalizeRunOutcome(invocation.ctx, outcome)
 
 	finished := s.now().UTC()
 	duration := finished.Sub(invocation.triggered)
@@ -425,9 +466,8 @@ func (s *InProcessScheduler) executeInvocation(invocation runInvocation) (RunRes
 	result := RunResult{
 		ID:          invocation.jobID,
 		TriggeredAt: invocation.triggered.Format(time.RFC3339Nano),
-		Status:      outcome.status,
-		ExitCode:    cloneIntPtr(outcome.exitCode),
-		Error:       strings.TrimSpace(outcome.errorMessage),
+		Status:      outcome.Status,
+		Error:       strings.TrimSpace(outcome.Error),
 	}
 
 	var persistErr error
@@ -439,7 +479,6 @@ func (s *InProcessScheduler) executeInvocation(invocation runInvocation) (RunRes
 		job.entry.LastRunAt = result.TriggeredAt
 		job.entry.UpdatedAt = finished.Format(time.RFC3339Nano)
 		job.entry.LastRunStatus = result.Status
-		job.entry.LastRunExitCode = cloneIntPtr(result.ExitCode)
 		job.entry.LastRunError = result.Error
 		job.entry.LastRunDurationMs = duration.Milliseconds()
 		if job.schedule.kind == scheduleKindReboot {
@@ -457,6 +496,44 @@ func (s *InProcessScheduler) executeInvocation(invocation runInvocation) (RunRes
 	return result, persistErr
 }
 
+func normalizeRunOutcome(ctx context.Context, outcome RunOutcome) RunOutcome {
+	status := strings.TrimSpace(outcome.Status)
+	errorText := strings.TrimSpace(outcome.Error)
+
+	if status == "" {
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			status = RunStatusTimeout
+			if errorText == "" {
+				errorText = "cron run timed out"
+			}
+		case errors.Is(ctx.Err(), context.Canceled):
+			status = RunStatusCanceled
+			if errorText == "" {
+				errorText = "cron run canceled"
+			}
+		default:
+			status = RunStatusError
+		}
+	}
+
+	switch status {
+	case RunStatusSuccess:
+		errorText = ""
+	case RunStatusError, RunStatusTimeout, RunStatusCanceled, RunStatusSkipped:
+		if errorText == "" && status == RunStatusError {
+			errorText = "cron run failed"
+		}
+	default:
+		status = RunStatusError
+		if errorText == "" {
+			errorText = "cron run failed"
+		}
+	}
+
+	return RunOutcome{Status: status, Error: errorText}
+}
+
 func (s *InProcessScheduler) buildJob(entry Entry, now time.Time, activateReboot bool) (*scheduledJob, error) {
 	id := strings.TrimSpace(entry.ID)
 	if id == "" {
@@ -466,10 +543,32 @@ func (s *InProcessScheduler) buildJob(entry Entry, now time.Time, activateReboot
 	if err != nil {
 		return nil, err
 	}
-	command := strings.TrimSpace(entry.Command)
-	if command == "" {
-		return nil, errors.New("command is required")
+	sessionTarget, err := normalizeSessionTarget(entry.SessionTarget)
+	if err != nil {
+		return nil, err
 	}
+	wakeMode, err := normalizeWakeMode(entry.WakeMode)
+	if err != nil {
+		return nil, err
+	}
+	message := strings.TrimSpace(entry.Message)
+	if message == "" && entry.LegacyPayload != nil {
+		message = strings.TrimSpace(entry.LegacyPayload.Message)
+	}
+	if message == "" && entry.LegacyPayload != nil {
+		message = strings.TrimSpace(entry.LegacyPayload.Text)
+	}
+	if message == "" {
+		return nil, errors.New("message is required")
+	}
+	timeoutSeconds := entry.TimeoutSeconds
+	if timeoutSeconds == 0 && entry.LegacyPayload != nil {
+		timeoutSeconds = entry.LegacyPayload.TimeoutSeconds
+	}
+	if timeoutSeconds < 0 {
+		return nil, errors.New("timeoutSeconds must be >= 0")
+	}
+
 	createdAt := strings.TrimSpace(entry.CreatedAt)
 	updatedAt := strings.TrimSpace(entry.UpdatedAt)
 	nowStamp := now.Format(time.RFC3339Nano)
@@ -482,13 +581,16 @@ func (s *InProcessScheduler) buildJob(entry Entry, now time.Time, activateReboot
 
 	normalized := Entry{
 		ID:                id,
+		AgentID:           strings.TrimSpace(entry.AgentID),
 		Schedule:          normalizedSchedule,
-		Command:           command,
+		SessionTarget:     sessionTarget,
+		WakeMode:          wakeMode,
+		Message:           message,
+		TimeoutSeconds:    timeoutSeconds,
 		CreatedAt:         createdAt,
 		UpdatedAt:         updatedAt,
 		LastRunAt:         strings.TrimSpace(entry.LastRunAt),
 		LastRunStatus:     strings.TrimSpace(entry.LastRunStatus),
-		LastRunExitCode:   cloneIntPtr(entry.LastRunExitCode),
 		LastRunError:      strings.TrimSpace(entry.LastRunError),
 		LastRunDurationMs: entry.LastRunDurationMs,
 	}
@@ -506,12 +608,42 @@ func (s *InProcessScheduler) buildJob(entry Entry, now time.Time, activateReboot
 	return job, nil
 }
 
+func normalizeSessionTarget(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return SessionTargetIsolated, nil
+	}
+	switch normalized {
+	case SessionTargetDefault:
+		return SessionTargetDefault, nil
+	case "main":
+		return SessionTargetDefault, nil
+	case SessionTargetIsolated:
+		return SessionTargetIsolated, nil
+	default:
+		return "", fmt.Errorf("sessionTarget must be one of: %s, %s", SessionTargetDefault, SessionTargetIsolated)
+	}
+}
+
+func normalizeWakeMode(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return WakeModeNextHeartbeat, nil
+	}
+	switch normalized {
+	case WakeModeNextHeartbeat:
+		return WakeModeNextHeartbeat, nil
+	case WakeModeNow:
+		return WakeModeNow, nil
+	default:
+		return "", fmt.Errorf("wakeMode must be one of: %s, %s", WakeModeNextHeartbeat, WakeModeNow)
+	}
+}
+
 func (s *InProcessScheduler) persistLocked() error {
 	entries := make([]Entry, 0, len(s.jobs))
 	for _, job := range s.jobs {
-		entry := job.entry
-		entry.LastRunExitCode = cloneIntPtr(job.entry.LastRunExitCode)
-		entries = append(entries, entry)
+		entries = append(entries, job.entry)
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].ID < entries[j].ID
@@ -548,12 +680,4 @@ func (s *InProcessScheduler) loopWakeChannel() chan struct{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.wakeCh
-}
-
-func cloneIntPtr(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }

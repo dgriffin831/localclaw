@@ -95,6 +95,9 @@ Configure inbound policy under `channels.signal.inbound`.
           "+15559876543": "agent-ops"
         },
         "default_agent": "default",
+        "send_typing": true,
+        "typing_interval_seconds": 5,
+        "send_read_receipts": true,
         "poll_timeout_seconds": 5,
         "max_messages_per_poll": 10
       }
@@ -119,6 +122,8 @@ Inbound policy behavior:
 - sender must be in `inbound.allow_from`
 - sender routes to `inbound.agent_by_sender[sender]` when present
 - otherwise sender routes to `inbound.default_agent` (or `default` when unset)
+- when `inbound.send_typing=true`, typing indicators are sent while the reply is running and stopped when done
+- when `inbound.send_read_receipts=true`, read receipts are sent for accepted direct messages with valid timestamps
 - group messages are always dropped
 
 ## MCP Tool
@@ -152,12 +157,17 @@ Inbound path:
 1. `channels serve` calls `signal-cli -o json -a <account> receive ...` in a loop.
 2. Runtime parses inbound envelopes and drops sync/group payloads.
 3. Runtime enforces `inbound.allow_from`.
-4. Runtime resolves sender -> agent -> session and runs prompt flow.
-5. Runtime sends reply through Signal adapter.
+4. Runtime optionally sends a read receipt (`sendReceipt`) for accepted direct messages.
+5. Runtime optionally starts a typing loop (`sendTyping`) while generating a response.
+6. Runtime resolves sender -> agent -> session and runs prompt flow.
+7. Runtime sends reply through Signal adapter and sends typing stop.
 
 Command shape:
 - Direct recipient: `signal-cli -a <account> send -m <text> <recipient>`
 - Group recipient: `signal-cli -a <account> send -m <text> -g <group-id>`
+- Typing start/refresh: `signal-cli -a <account> sendTyping <recipient>`
+- Typing stop: `signal-cli -a <account> sendTyping -s <recipient>`
+- Read receipt: `signal-cli -a <account> sendReceipt -t <timestamp> --type read <recipient>`
 
 ## Failure Modes
 
@@ -167,6 +177,7 @@ Command shape:
 - Timeout/cancellation: subprocess is canceled through `exec.CommandContext`
 - Inbound non-allowlisted senders are ignored.
 - Inbound group messages are ignored.
+- Inbound typing/receipt failures are logged and do not block normal reply delivery.
 
 ## Session Metadata Persistence
 

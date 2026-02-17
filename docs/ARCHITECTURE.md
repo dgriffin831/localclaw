@@ -31,7 +31,7 @@ localclaw binary (single process)
   |- runtime wiring
   |   |- workspace manager (resolve + bootstrap templates)
   |   |- session store + transcript writer
-  |   |- runtime tool registry (memory + cron + channel MCP tools)
+  |   |- runtime tool registry (memory tools + workspace/session/cron/channel MCP tools)
   |   |- skills registry
   |   |- cron scheduler
   |   |- heartbeat monitor
@@ -43,6 +43,7 @@ localclaw binary (single process)
       |- doctor
       |- tui
       |- memory {status,index,search,grep}
+      |- channels {serve}
       `- mcp {serve}
 ```
 
@@ -58,6 +59,7 @@ No server, gateway, or listener process exists.
 4. `skills.Load`
 5. `cron.Start` (load persisted cron jobs + start in-process scheduling loop)
 6. `heartbeat.Ping("localclaw startup heartbeat")`
+7. `heartbeat.Start` (background ticker loop; overlapping ticks are skipped)
 
 Any failure aborts startup.
 
@@ -81,7 +83,7 @@ Memory/runtime tool behavior:
 
 - Memory retrieval is keyword/FTS + grep/file-read based (`memory_search`, `memory_grep`, `memory_get`).
 - Runtime and memory CLI construct managers on demand using resolved workspace + `app.root`-based paths.
-- Cron scheduler stores jobs under `app.root` and executes local commands while runtime modes are active.
+- Cron scheduler stores jobs under `app.root` and executes local prompt messages while runtime modes are active.
 
 ## 5. Storage model
 
