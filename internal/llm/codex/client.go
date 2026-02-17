@@ -32,8 +32,6 @@ type Settings struct {
 
 type MCPSettings struct {
 	ConfigPath       string
-	UseIsolatedHome  bool
-	HomePath         string
 	ServerName       string
 	ServerBinaryPath string
 	ServerArgs       []string
@@ -184,9 +182,11 @@ func (c *LocalClient) buildCommandArgsForRequest(req llm.Request) []string {
 	if !resume || c.resumeOutputMode() == "json" || c.resumeOutputMode() == "jsonl" {
 		args = append(args, "--json")
 	}
-	args = append(args, "-C", c.settings.WorkingDirectory)
-	if profile := strings.TrimSpace(c.settings.Profile); profile != "" {
-		args = append(args, "-p", profile)
+	if !resume {
+		args = append(args, "-C", c.settings.WorkingDirectory)
+		if profile := strings.TrimSpace(c.settings.Profile); profile != "" {
+			args = append(args, "-p", profile)
+		}
 	}
 	if model := c.resolveModelForRequest(req); model != "" {
 		args = append(args, "-m", model)
@@ -211,22 +211,6 @@ func (c *LocalClient) resolveEffectiveMCPConfigPath() (string, map[string]string
 			return "", nil, fmt.Errorf("resolve mcp config path: %w", err)
 		}
 		return resolved, extraEnv, nil
-	}
-	if c.settings.MCP.UseIsolatedHome {
-		home := strings.TrimSpace(c.settings.MCP.HomePath)
-		if home == "" {
-			userHome, err := os.UserHomeDir()
-			if err != nil {
-				return "", nil, fmt.Errorf("resolve home dir: %w", err)
-			}
-			home = filepath.Join(userHome, ".localclaw", "runtime", "codex", "home")
-		}
-		home, err := normalizePath(home)
-		if err != nil {
-			return "", nil, fmt.Errorf("resolve isolated codex home: %w", err)
-		}
-		extraEnv["CODEX_HOME"] = home
-		return filepath.Join(home, "config.toml"), extraEnv, nil
 	}
 	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); codexHome != "" {
 		resolvedHome, err := normalizePath(codexHome)
@@ -488,11 +472,15 @@ func parseStreamJSONLine(line string, sessionIDFields []string) ([]llm.StreamEve
 	if lineType == "item.started" {
 		if evt := parseCommandExecutionStarted(payload); evt != nil {
 			events = append(events, *evt)
+		} else if evt := parseDelegatedToolStarted(payload); evt != nil {
+			events = append(events, *evt)
 		}
 	}
 
 	if lineType == "item.completed" {
 		if evt := parseCommandExecutionCompleted(payload); evt != nil {
+			events = append(events, *evt)
+		} else if evt := parseDelegatedToolCompleted(payload); evt != nil {
 			events = append(events, *evt)
 		}
 	}
@@ -581,6 +569,30 @@ func parseCommandExecutionStarted(payload map[string]interface{}) *llm.StreamEve
 	}
 }
 
+func parseDelegatedToolStarted(payload map[string]interface{}) *llm.StreamEvent {
+	item, _ := payload["item"].(map[string]interface{})
+	itemType := strings.ToLower(strings.TrimSpace(asString(item["type"])))
+	if itemType == "" || itemType == "command_execution" || itemType == "agent_message" || itemType == "reasoning" {
+		return nil
+	}
+
+	callID := firstNonBlankString(asString(item["id"]), asString(payload["id"]))
+	toolName := deriveDelegatedToolName(item)
+	if toolName == "" {
+		toolName = itemType
+	}
+
+	return &llm.StreamEvent{
+		Type: llm.StreamEventToolCall,
+		ToolCall: &llm.ToolCall{
+			ID:    callID,
+			Name:  toolName,
+			Args:  extractDelegatedToolArgs(item),
+			Class: llm.ToolClassDelegated,
+		},
+	}
+}
+
 func parseCommandExecutionCompleted(payload map[string]interface{}) *llm.StreamEvent {
 	item, _ := payload["item"].(map[string]interface{})
 	if strings.ToLower(strings.TrimSpace(asString(item["type"]))) != "command_execution" {
@@ -650,6 +662,95 @@ func parseCommandExecutionCompleted(payload map[string]interface{}) *llm.StreamE
 	}
 }
 
+func parseDelegatedToolCompleted(payload map[string]interface{}) *llm.StreamEvent {
+	item, _ := payload["item"].(map[string]interface{})
+	itemType := strings.ToLower(strings.TrimSpace(asString(item["type"])))
+	if itemType == "" || itemType == "command_execution" || itemType == "agent_message" || itemType == "reasoning" {
+		return nil
+	}
+
+	callID := firstNonBlankString(asString(item["id"]), asString(payload["id"]))
+	toolName := deriveDelegatedToolName(item)
+	if toolName == "" {
+		toolName = itemType
+	}
+	status := firstNonBlankString(asString(item["status"]), asString(payload["status"]), "completed")
+	errText := firstNonBlankString(
+		asLooseString(item["error"]),
+		asLooseString(lookupMap(item, "result", "error")),
+		asLooseString(payload["error"]),
+	)
+	ok := isSuccessfulCommandStatus(status) && strings.TrimSpace(errText) == ""
+	if !ok && errText == "" {
+		errText = fmt.Sprintf("%s status %s", toolName, status)
+	}
+
+	data := extractDelegatedToolResultData(item)
+
+	return &llm.StreamEvent{
+		Type: llm.StreamEventToolResult,
+		ToolResult: &llm.ToolResult{
+			CallID: callID,
+			Tool:   toolName,
+			Class:  llm.ToolClassDelegated,
+			OK:     ok,
+			Status: status,
+			Error:  errText,
+			Data:   data,
+		},
+	}
+}
+
+func deriveDelegatedToolName(item map[string]interface{}) string {
+	itemType := strings.ToLower(strings.TrimSpace(asString(item["type"])))
+	if itemType == "mcp_tool_call" {
+		if tool := firstNonBlankString(
+			asString(item["tool"]),
+			asString(item["name"]),
+			asString(lookupMap(item, "input", "tool")),
+		); tool != "" {
+			return tool
+		}
+	}
+	if tool := firstNonBlankString(asString(item["tool"]), asString(item["name"])); tool != "" {
+		return tool
+	}
+	return itemType
+}
+
+func extractDelegatedToolArgs(item map[string]interface{}) map[string]interface{} {
+	args := map[string]interface{}{}
+	for _, key := range []string{"server", "tool", "query", "action", "arguments"} {
+		value, ok := item[key]
+		if !ok || value == nil {
+			continue
+		}
+		args[key] = value
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	return args
+}
+
+func extractDelegatedToolResultData(item map[string]interface{}) map[string]interface{} {
+	data := map[string]interface{}{}
+	for key, value := range item {
+		switch key {
+		case "id", "type", "status", "error":
+			continue
+		}
+		if value == nil {
+			continue
+		}
+		data[key] = value
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	return data
+}
+
 func extractCommandText(item map[string]interface{}) string {
 	return firstNonBlankString(
 		asString(item["command"]),
@@ -705,6 +806,20 @@ func asString(value interface{}) string {
 	default:
 		return ""
 	}
+}
+
+func asLooseString(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	if text := asString(value); text != "" {
+		return text
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || text == "<nil>" {
+		return ""
+	}
+	return text
 }
 
 func firstNonBlankString(values ...string) string {

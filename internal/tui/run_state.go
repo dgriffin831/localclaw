@@ -68,6 +68,8 @@ func (m *model) startRun(input string) {
 	if m.app != nil {
 		if err := m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, userTokenDelta); err != nil {
 			m.addVerbose("transcript write: role=user token_update_error=%s", truncateVerboseText(err.Error()))
+		} else {
+			m.sessionTokens += userTokenDelta
 		}
 		if err := m.app.AppendSessionTranscriptMessage(m.ctx, m.agentID, m.sessionID, "user", input); err != nil {
 			m.addVerbose("transcript write: role=user append_error=%s", truncateVerboseText(err.Error()))
@@ -153,6 +155,8 @@ func (m *model) applyFinal(final string) {
 		assistantTokenDelta := memory.EstimateTokensFromText(msg.Raw)
 		if err := m.app.AddSessionTokens(m.ctx, m.agentID, m.sessionID, assistantTokenDelta); err != nil {
 			m.addVerbose("transcript write: role=assistant token_update_error=%s", truncateVerboseText(err.Error()))
+		} else {
+			m.sessionTokens += assistantTokenDelta
 		}
 		if err := m.app.AppendSessionTranscriptMessage(m.ctx, m.agentID, m.sessionID, "assistant", msg.Raw); err != nil {
 			m.addVerbose("transcript write: role=assistant append_error=%s", truncateVerboseText(err.Error()))
@@ -176,6 +180,9 @@ func (m *model) runSessionReset(startNew bool, source string) {
 		m.agentID = next.AgentID
 		m.sessionID = next.SessionID
 		m.sessionKey = next.SessionKey
+		m.syncSessionMetadata()
+	} else if startNew {
+		m.sessionTokens = 0
 	}
 	m.messages = nil
 	m.modelOverride = ""

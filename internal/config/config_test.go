@@ -440,6 +440,29 @@ func TestLoadRejectsLegacyGovCloudFields(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsRemovedCodexMCPIsolatedHomeFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"llm": {
+			"provider": "codex",
+			"codex": {
+				"mcp": {
+					"use_isolated_home": true,
+					"home_path": "~/.localclaw/runtime/codex/home"
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected removed codex mcp isolated-home fields to be rejected")
+	}
+}
+
 func TestValidateRejectsUnsupportedChannel(t *testing.T) {
 	cfg := Default()
 	cfg.Channels.Enabled = []string{"slack", "teams"}
@@ -560,6 +583,23 @@ func TestDefaultConfigIncludesProviderSessionContinuationDefaults(t *testing.T) 
 	}
 	if cfg.LLM.Codex.SessionMode != "existing" {
 		t.Fatalf("expected codex.session_mode=existing, got %q", cfg.LLM.Codex.SessionMode)
+	}
+}
+
+func TestDefaultConfigIncludesCodexSkipGitRepoCheckArg(t *testing.T) {
+	cfg := Default()
+	if len(cfg.LLM.Codex.ExtraArgs) == 0 {
+		t.Fatalf("expected default codex extra args to include --skip-git-repo-check")
+	}
+	if cfg.LLM.Codex.ExtraArgs[0] != "--skip-git-repo-check" {
+		t.Fatalf("expected default codex extra args to start with --skip-git-repo-check, got %q", cfg.LLM.Codex.ExtraArgs[0])
+	}
+}
+
+func TestDefaultConfigUsesJSONResumeOutputForCodex(t *testing.T) {
+	cfg := Default()
+	if cfg.LLM.Codex.ResumeOutput != "json" {
+		t.Fatalf("expected default codex.resume_output=json, got %q", cfg.LLM.Codex.ResumeOutput)
 	}
 }
 

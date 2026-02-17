@@ -4,6 +4,10 @@
 
 Draft
 
+## V1 Build Policy
+
+`localclaw` is still in v1 build-out. This spec intentionally avoids rollback plans, fallback execution paths, and legacy compatibility requirements. Implementation should be clean and forward-only.
+
 ## Problem
 
 `localclaw` currently wires heartbeat as a startup-only no-op (`heartbeat.Ping("localclaw startup heartbeat")`), and does not execute any periodic heartbeat workflow.
@@ -91,12 +95,3 @@ Define expected behavior in concrete terms:
 - [ ] Overlapping heartbeat executions are prevented.
 - [ ] Context cancellation cleanly stops heartbeat activity.
 - [ ] Runtime/local-only architecture constraints remain unchanged.
-
-## Rollback / Risk Notes
-
-- Primary risk: periodic prompts may introduce background load or noisy failures if misconfigured.
-- Mitigations:
-  - disable quickly via `heartbeat.enabled=false`.
-  - keep per-tick failures isolated and non-fatal.
-  - skip overlapping ticks rather than queueing unbounded work.
-- Rollback path: revert to current startup-only heartbeat ping behavior.

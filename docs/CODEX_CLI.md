@@ -13,12 +13,16 @@ Implementation location:
   - optional `-p <profile>` from `llm.codex.profile`
   - optional `-m <model>` from `llm.codex.model` or runtime override
   - optional passthrough args from `llm.codex.extra_args`
+    - default config includes `--skip-git-repo-check`
 - prompt text is written to stdin (`-` argument) using `exec.CommandContext`.
 - stdout JSONL events are parsed into provider-agnostic stream events:
   - `item.completed` with `agent_message` -> `StreamEventDelta`
   - `item.started` with `command_execution` -> `StreamEventToolCall` (`provider_native`)
   - `item.completed` with `command_execution` -> `StreamEventToolResult` (`provider_native`)
+  - `item.started`/`item.completed` for delegated non-message tool types (for example `web_search`, `mcp_tool_call`) -> `StreamEventToolCall`/`StreamEventToolResult` (`provider_native`)
   - `session.configured` -> `StreamEventProviderMetadata` (provider/model/tools when available)
+  - `thread.started` -> provider session ID metadata
+- Note: some Codex CLI builds do not emit tool lists in stream metadata; runtime `/tools` discovery then uses a Codex JSON self-report probe fallback.
 - if no explicit final event appears, adapter emits `StreamEventFinal` from aggregated deltas.
 
 `Prompt`/`PromptRequest` are synchronous wrappers over streaming:
@@ -42,9 +46,8 @@ Implementation location:
   - args: `["mcp","serve"]`
 - config path resolution precedence:
   1. explicit `llm.codex.mcp.config_path`
-  2. isolated home (`llm.codex.mcp.use_isolated_home` + optional `home_path`)
-  3. `CODEX_HOME` env fallback
-  4. `~/.codex/config.toml`
+  2. `CODEX_HOME` env fallback
+  3. `~/.codex/config.toml`
 
 ## Input validation and cancellation
 

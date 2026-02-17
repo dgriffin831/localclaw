@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -86,6 +87,7 @@ type model struct {
 	agentID       string
 	sessionID     string
 	sessionKey    string
+	sessionTokens int
 	workspacePath string
 
 	width  int
@@ -274,9 +276,28 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 		toolCallOwnershipByID: map[string]llm.ToolClass{},
 		toolCardIndexByCallID: map[string]int{},
 	}
+	m.syncSessionMetadata()
 	m.addSystem("localclaw ready. Type /help for commands.")
 	if welcome := m.loadWelcomeMessage(); welcome != "" {
 		m.addSystemMarkdown(welcome)
 	}
 	return m
+}
+
+func (m *model) syncSessionMetadata() {
+	if m.app == nil {
+		return
+	}
+	entry, err := m.app.MCPSessionStatus(m.ctx, m.agentID, m.sessionID)
+	if err != nil {
+		if errors.Is(err, runtime.ErrMCPNotFound) {
+			m.sessionTokens = 0
+		}
+		return
+	}
+	if entry.TotalTokens < 0 {
+		m.sessionTokens = 0
+		return
+	}
+	m.sessionTokens = entry.TotalTokens
 }

@@ -360,12 +360,14 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	}
 }
 
-func TestNewConfiguresCodexMCPHomeUnderStateRoot(t *testing.T) {
+func TestNewDoesNotOverrideCodexHomeFromEnvironment(t *testing.T) {
 	stateRoot := t.TempDir()
 	tmpDir := t.TempDir()
 	argsPath := filepath.Join(tmpDir, "codex-args.txt")
 	envPath := filepath.Join(tmpDir, "codex-env.txt")
 	codexScriptPath := filepath.Join(tmpDir, "codex")
+	expectedHome := filepath.Join(tmpDir, "codex-home")
+	t.Setenv("CODEX_HOME", expectedHome)
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 printf "%%s\n" "$@" > %q
@@ -413,9 +415,8 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	if err != nil {
 		t.Fatalf("read captured env: %v", err)
 	}
-	expectedHome := filepath.Join(stateRoot, "runtime", "codex", "home")
 	if !strings.Contains(string(envPayload), "CODEX_HOME="+expectedHome) {
-		t.Fatalf("expected CODEX_HOME under state root, got %q", strings.TrimSpace(string(envPayload)))
+		t.Fatalf("expected CODEX_HOME pass-through from environment, got %q", strings.TrimSpace(string(envPayload)))
 	}
 }
 

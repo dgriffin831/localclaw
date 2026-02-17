@@ -137,10 +137,6 @@ func New(cfg config.Config) (*App, error) {
 		}
 		llmClient = claudeClient
 	case "codex":
-		codexHomePath := strings.TrimSpace(cfg.LLM.Codex.MCP.HomePath)
-		if cfg.LLM.Codex.MCP.UseIsolatedHome && codexHomePath == "" {
-			codexHomePath = filepath.Join(resolvedStateRoot, "runtime", "codex", "home")
-		}
 		codexClient := codex.NewClient(codex.Settings{
 			BinaryPath:       cfg.LLM.Codex.BinaryPath,
 			Profile:          cfg.LLM.Codex.Profile,
@@ -154,8 +150,6 @@ func New(cfg config.Config) (*App, error) {
 			WorkingDirectory: cfg.Agents.Defaults.Workspace,
 			MCP: codex.MCPSettings{
 				ConfigPath:       cfg.LLM.Codex.MCP.ConfigPath,
-				UseIsolatedHome:  cfg.LLM.Codex.MCP.UseIsolatedHome,
-				HomePath:         codexHomePath,
 				ServerName:       cfg.LLM.Codex.MCP.ServerName,
 				ServerBinaryPath: "localclaw",
 				ServerArgs:       []string{"mcp", "serve"},

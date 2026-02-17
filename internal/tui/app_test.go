@@ -140,8 +140,11 @@ func TestHeaderViewShownWhenMouseOn(t *testing.T) {
 	m.mouseEnabled = true
 
 	got := ansiEscapePattern.ReplaceAllString(m.headerView(), "")
-	if !strings.Contains(got, "# localclaw") || !strings.Contains(got, "workspace:") {
+	if !strings.Contains(got, "# localclaw") || !strings.Contains(got, "session:") || !strings.Contains(got, "tokens:0") || !strings.Contains(got, "workspace:") {
 		t.Fatalf("expected header to be shown when mouse capture is on, got %q", got)
+	}
+	if strings.Contains(got, "provider:") || strings.Contains(got, "model:") {
+		t.Fatalf("expected header to omit provider/model metadata when mouse capture is on, got %q", got)
 	}
 }
 
@@ -304,11 +307,15 @@ func TestHeaderUsesResolvedWorkspacePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new runtime app: %v", err)
 	}
-	if err := app.Run(context.Background()); err != nil {
+	ctx := context.Background()
+	if err := app.Run(ctx); err != nil {
 		t.Fatalf("run runtime app: %v", err)
 	}
+	if err := app.AddSessionTokens(ctx, "default", "main", 12); err != nil {
+		t.Fatalf("seed main session tokens: %v", err)
+	}
 
-	m := newModel(context.Background(), app, cfg)
+	m := newModel(ctx, app, cfg)
 	m.mouseEnabled = true
 	m.width = 180
 	header := m.headerView()
@@ -319,6 +326,9 @@ func TestHeaderUsesResolvedWorkspacePath(t *testing.T) {
 	resolvedWorkspacePath := formatWorkspacePath(resolvedWorkspace)
 	if !strings.Contains(header, resolvedWorkspacePath) {
 		t.Fatalf("expected header to include resolved workspace %q", resolvedWorkspacePath)
+	}
+	if !strings.Contains(header, "tokens:12") {
+		t.Fatalf("expected header to include persisted token count, got %q", header)
 	}
 }
 

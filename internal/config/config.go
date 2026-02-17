@@ -81,10 +81,8 @@ type CodexConfig struct {
 }
 
 type CodexMCPConfig struct {
-	ConfigPath      string `json:"config_path"`
-	UseIsolatedHome bool   `json:"use_isolated_home"`
-	HomePath        string `json:"home_path"`
-	ServerName      string `json:"server_name"`
+	ConfigPath string `json:"config_path"`
+	ServerName string `json:"server_name"`
 }
 
 type ChannelsConfig struct {
@@ -221,7 +219,7 @@ func Default() Config {
 			},
 			Codex: CodexConfig{
 				BinaryPath:  "codex",
-				ExtraArgs:   []string{},
+				ExtraArgs:   []string{"--skip-git-repo-check"},
 				SessionMode: "existing",
 				ResumeArgs:  []string{"resume", "{sessionId}"},
 				SessionIDFields: []string{
@@ -230,12 +228,10 @@ func Default() Config {
 					"session_id",
 					"sessionId",
 				},
-				ResumeOutput: "text",
+				ResumeOutput: "json",
 				MCP: CodexMCPConfig{
-					ConfigPath:      "",
-					UseIsolatedHome: true,
-					HomePath:        "",
-					ServerName:      "localclaw",
+					ConfigPath: "",
+					ServerName: "localclaw",
 				},
 			},
 		},

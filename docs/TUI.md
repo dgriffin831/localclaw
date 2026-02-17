@@ -19,7 +19,7 @@ Streaming output comes from `app.PromptStreamForSession`.
 Header currently shows:
 
 - app label (`# localclaw`)
-- provider/effective-model tuple (`provider:<provider>  model:<effective_model>`)
+- session/token tuple (`session:<session_id>  tokens:<total_tokens>`)
 - resolved workspace path
 
 When mouse capture is off (`mouse:off`), the header row is hidden.
@@ -96,6 +96,7 @@ Command behavior details:
 - `/status` prints one system line containing status, provider, configured model/profile, effective model, model override state, agent, session, workspace, verbose, and mouse-capture flags.
 - `/tools` prints provider plus provider-reported `tools` only (no runtime fallback list).
 - when provider tools are not yet discovered, `/tools` starts a background probe and refreshes the summary when metadata arrives.
+- for providers that do not emit a tool list in metadata events (for example Codex), localclaw uses a provider-side JSON self-report probe as fallback.
 - `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
 - `/verbose off` suppresses the additional `[verbose]` diagnostics.
 - `/mouse off` disables mouse capture so the terminal can highlight/select text normally.

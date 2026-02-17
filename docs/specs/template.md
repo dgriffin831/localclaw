@@ -4,6 +4,13 @@
 
 Draft | In Review | Accepted | Implemented
 
+## V1 Build Policy
+
+`localclaw` is still pre-v1. Favor clean implementations only:
+- no rollback plans
+- no fallback execution paths unless explicitly requested
+- no legacy compatibility shims
+
 ## Problem
 
 Describe the user/operator or engineering problem this change solves.
@@ -22,7 +29,6 @@ Define expected behavior in concrete terms:
 - inputs
 - outputs
 - error paths
-- unchanged behavior
 
 ## Implementation Notes
 
@@ -39,7 +45,3 @@ Call out touched packages/files and key design decisions.
 - [ ] criterion 1
 - [ ] criterion 2
 - [ ] criterion 3
-
-## Rollback / Risk Notes
-
-Describe fallback or rollback strategy if needed.

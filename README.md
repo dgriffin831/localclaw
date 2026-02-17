@@ -92,7 +92,8 @@ TUI slash commands:
 - `/quit`
 
 `/tools` shows provider-reported tools only (source of truth for current session).
-If tools are not yet discovered, `/tools` triggers a background probe and refreshes once provider metadata arrives.
+If tools are not yet discovered, `/tools` triggers a background probe and refreshes once metadata arrives.
+For providers that omit explicit tool metadata in stream events (for example Codex), localclaw runs a provider-side JSON self-report probe as a fallback.
 
 `/verbose on` adds `[verbose]` system diagnostics to the transcript, including:
 - prompt/session summary at run start

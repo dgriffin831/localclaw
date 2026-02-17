@@ -52,16 +52,14 @@
       "binary_path": "codex",
       "profile": "",
       "model": "",
-      "extra_args": [],
+      "extra_args": ["--skip-git-repo-check"],
       "session_mode": "existing",
       "session_arg": "",
       "resume_args": ["resume", "{sessionId}"],
       "session_id_fields": ["thread_id", "threadId", "session_id", "sessionId"],
-      "resume_output": "text",
+      "resume_output": "json",
       "mcp": {
         "config_path": "",
-        "use_isolated_home": true,
-        "home_path": "",
         "server_name": "localclaw"
       }
     }
@@ -166,13 +164,16 @@ Codex-specific fields:
 - `llm.codex.profile` optionally sets Codex profile (`-p`).
 - `llm.codex.model` sets the default Codex model (`-m`) when no runtime override is present.
 - `llm.codex.extra_args` appends provider-specific flags directly to `codex exec` arguments.
+  - default includes `--skip-git-repo-check` so Codex runs in non-git/trust-unregistered directories.
 - `llm.codex.session_mode` controls continuation behavior:
   - `existing`: resume when a persisted provider session exists
   - `always`: same as `existing` for resume, otherwise start new
   - `none`: disable provider session continuation flags
 - `llm.codex.resume_args` controls resume argument templates and supports `{sessionId}` placeholder.
 - `llm.codex.session_id_fields` controls JSON fields scanned for provider session IDs.
-- `llm.codex.resume_output` controls resume parsing mode (`text` default to tolerate plain-text fallback).
+- `llm.codex.resume_output` controls resume parsing mode (`json` default).
+  - use `text` only as a compatibility fallback when your Codex CLI/version cannot stream JSON on resume; note this disables structured tool-call/result events on resumed turns.
+- `llm.codex.mcp.config_path` optionally points to a specific Codex `config.toml`; otherwise Codex defaults are used (`$CODEX_HOME/config.toml` when set, else `~/.codex/config.toml`).
 
 Claude Code-specific continuation fields:
 
@@ -212,6 +213,9 @@ Compatibility behavior:
 - Removed/deprecated config keys are not supported.
 - Removed app defaults key:
   - `app.default.thinking`
+- Removed Codex MCP isolated-home keys:
+  - `llm.codex.mcp.use_isolated_home`
+  - `llm.codex.mcp.home_path`
 - Removed runtime tool-policy keys:
   - top-level `tools`
   - top-level `skills`

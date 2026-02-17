@@ -4,6 +4,10 @@
 
 Draft
 
+## V1 Build Policy
+
+`localclaw` is still in v1 build-out. This spec intentionally avoids rollback plans, fallback execution paths, and legacy compatibility requirements. Implementation should be clean and forward-only.
+
 ## Problem
 
 `localclaw` exposes MCP cron tools (`localclaw_cron_list`, `localclaw_cron_add`, `localclaw_cron_remove`, `localclaw_cron_run`) and an in-process scheduler interface, but recurring execution is not implemented:
@@ -19,7 +23,7 @@ As a result, users can register cron jobs but `localclaw` cannot actually run re
 - Persist cron job definitions and runtime metadata under `app.root` so jobs survive restarts.
 - Execute commands locally in-process using subprocesses (no new service/listener).
 - Keep scheduler lifecycle tied to `App.Run(ctx)` and root context cancellation.
-- Keep existing MCP tool names and argument shapes; extend responses only with additive fields if needed.
+- Define MCP cron request/response contracts directly in current runtime/tool code.
 - Unify schedule validation and schedule parsing in `internal/cron` so MCP validation and runtime execution use the same rules.
 - Add targeted tests and update docs (`README.md`, `docs/RUNTIME.md`, `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md`, `docs/TESTING.md`).
 
@@ -36,7 +40,7 @@ As a result, users can register cron jobs but `localclaw` cannot actually run re
 
 Define expected behavior in concrete terms:
 - inputs:
-  - `cron.enabled` gates the entire feature. When `false`, list/add/remove/run return `cron scheduler is disabled` (current behavior remains).
+  - `cron.enabled` gates the entire feature. When `false`, list/add/remove/run return `cron scheduler is disabled`.
   - `cron add` input: optional `id`, required `schedule`, required `command`.
   - Supported schedule forms:
     - 5-field cron format: `minute hour day-of-month month day-of-week`
@@ -56,17 +60,11 @@ Define expected behavior in concrete terms:
 - error paths:
   - Invalid schedule/command/id returns validation errors without mutating persisted state.
   - Duplicate IDs return `cron job "<id>" already exists`.
-  - Missing IDs for run/remove return validation errors; unknown IDs return not-found behavior consistent with current contract.
+  - Missing IDs for run/remove return validation errors; unknown IDs return deterministic not-found errors.
   - Command execution failures (spawn error, non-zero exit, timeout, cancellation) are recorded on job metadata but must not stop the scheduler loop.
   - Persistence read/write failures return wrapped errors; startup fails fast if persisted cron state cannot be loaded.
 - unchanged behavior:
   - Runtime remains single-process and local-only; no HTTP/gRPC/listener/gateway behavior is introduced.
-  - MCP tool names remain:
-    - `localclaw_cron_list`
-    - `localclaw_cron_add`
-    - `localclaw_cron_remove`
-    - `localclaw_cron_run`
-  - Existing manual cron tool workflows continue to work; recurring behavior is additive.
 
 ## Implementation Notes
 
@@ -82,12 +80,12 @@ Call out touched packages/files and key design decisions.
   - Construct scheduler with required settings (enabled flag + resolved state root/executor dependencies as needed).
   - Preserve startup order and startup failure wrapping (`cron start: ...`).
 - `internal/runtime/mcp_support.go`
-  - Keep runtime MCP wiring unchanged except for additive response fields if exposed by cron entries.
+  - Expose scheduler operations through MCP runtime methods with a direct, explicit contract.
 - `internal/mcp/tools/cron.go`
   - Reuse scheduler-owned validation logic to avoid drift.
-  - Keep tool schemas/names stable; only additive structured response fields are allowed.
+  - Define tool schemas from current spec requirements without compatibility shims.
 - `internal/config/config.go`
-  - Keep `cron.enabled` as kill switch; add config fields only if strictly required by implementation.
+  - Keep `cron.enabled` as the feature toggle; add config fields only if strictly required by implementation.
   - If new fields are introduced, update defaults + validation + docs per repo rules.
 - docs
   - Document that cron jobs execute only while a long-running `localclaw` mode is active (`tui` or `mcp serve`).
@@ -105,7 +103,7 @@ Call out touched packages/files and key design decisions.
     - `@reboot` behavior executes once per scheduler start for persisted jobs.
   - `internal/mcp/tools/cron_test.go`
     - add path uses shared cron validation rules.
-    - cron tool responses preserve existing fields and include additive run metadata when present.
+    - cron tool responses match the current spec-defined result shape.
   - `internal/runtime` tests
     - startup fails with wrapped error when cron state load fails.
     - runtime MCP cron methods continue to route to scheduler correctly.
@@ -126,22 +124,6 @@ Call out touched packages/files and key design decisions.
 - [ ] Cron jobs are persisted and survive process restarts.
 - [ ] Manual `cron_run` executes real commands and uses the same execution/status path as scheduled runs.
 - [ ] Scheduler loop continues running after individual job failures.
-- [ ] Existing MCP cron tool names and request schemas remain compatible.
 - [ ] Cron validation is consistent between MCP tool boundary and scheduler internals.
 - [ ] Documentation is updated to reflect runtime behavior, persistence, and operational limits.
 - [ ] Full test suite passes (`go test ./...`).
-
-## Rollback / Risk Notes
-
-Describe fallback or rollback strategy if needed.
-- Primary risks:
-  - unbounded/long-running commands consuming local resources.
-  - schedule parsing drift between MCP and scheduler behavior.
-  - persisted store corruption causing startup failure.
-- Mitigations:
-  - enforce command timeout + non-overlapping execution policy per job.
-  - centralize schedule validation/parsing in `internal/cron`.
-  - use lock/atomic write patterns for cron state file.
-- Rollback:
-  - set `cron.enabled=false` to disable runtime cron execution immediately.
-  - revert cron scheduler changes while keeping MCP surface stable.

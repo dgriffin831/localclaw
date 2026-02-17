@@ -13,18 +13,18 @@ func (m *model) headerView() string {
 	if !m.mouseEnabled {
 		return ""
 	}
-	provider := m.activeProvider()
-	model := valueOrDefault(m.effectiveModel(), "n/a")
+	session := valueOrDefault(strings.TrimSpace(m.sessionID), "n/a")
+	tokenCount := max(0, m.sessionTokens)
 	innerWidth := panelInnerWidth(m.width)
 	left := "# localclaw"
 	right := fmt.Sprintf(
-		"provider:%s  model:%s  workspace:%s",
-		provider,
-		model,
+		"session:%s  tokens:%d  workspace:%s",
+		session,
+		tokenCount,
 		formatWorkspacePath(m.workspacePath),
 	)
 	if innerWidth < 70 {
-		right = fmt.Sprintf("p:%s m:%s ws:%s", provider, model, formatWorkspacePath(m.workspacePath))
+		right = fmt.Sprintf("s:%s t:%d ws:%s", session, tokenCount, formatWorkspacePath(m.workspacePath))
 	}
 	line := twoColumn(left, right, innerWidth)
 	return headerStyle.Width(max(1, m.width)).Render(line)

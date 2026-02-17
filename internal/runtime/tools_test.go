@@ -217,6 +217,106 @@ func TestDiscoverProviderMetadataReturnsProviderToolsWithoutPersistingProbeSessi
 	}
 }
 
+func TestDiscoverProviderMetadataUsesCodexJSONProbeFallbackWhenMetadataOmitsTools(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	app.cfg.LLM.Provider = "codex"
+
+	llmClient := &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			events := make(chan llm.StreamEvent, 2)
+			errs := make(chan error)
+			if req.Input == providerToolsProbeInput {
+				events <- llm.StreamEvent{
+					Type: llm.StreamEventProviderMetadata,
+					ProviderMetadata: &llm.ProviderMetadata{
+						Provider: "codex",
+						Model:    "gpt-5-codex",
+					},
+				}
+				events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "ok"}
+			} else if req.Input == providerToolsJSONProbeInput {
+				events <- llm.StreamEvent{
+					Type: llm.StreamEventFinal,
+					Text: "{\"tools\":[\"Bash\",\"mcp__localclaw__localclaw_memory_search\",\"Bash\"]}",
+				}
+			} else {
+				errs <- fmt.Errorf("unexpected probe input %q", req.Input)
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+	app.llm = llmClient
+
+	meta, err := app.DiscoverProviderMetadata(ctx, "agent-2", llm.PromptOptions{ModelOverride: "gpt-5-mini"})
+	if err != nil {
+		t.Fatalf("discover provider metadata: %v", err)
+	}
+	if meta.Provider != "codex" {
+		t.Fatalf("expected provider codex, got %q", meta.Provider)
+	}
+	if meta.Model != "gpt-5-codex" {
+		t.Fatalf("expected discovered model, got %q", meta.Model)
+	}
+	if strings.Join(meta.Tools, ",") != "Bash,mcp__localclaw__localclaw_memory_search" {
+		t.Fatalf("expected fallback-discovered tools, got %v", meta.Tools)
+	}
+	if len(llmClient.requests) != 2 {
+		t.Fatalf("expected metadata probe plus fallback probe requests, got %d", len(llmClient.requests))
+	}
+	if llmClient.requests[1].Input != providerToolsJSONProbeInput {
+		t.Fatalf("expected second request to run codex json tools probe, got %q", llmClient.requests[1].Input)
+	}
+	if llmClient.requests[1].Options.ModelOverride != "gpt-5-mini" {
+		t.Fatalf("expected fallback probe to forward model override, got %q", llmClient.requests[1].Options.ModelOverride)
+	}
+}
+
+func TestParseToolNamesFromJSONProbeOutput(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "object payload",
+			in:   "{\"tools\":[\"Bash\",\"WebFetch\"]}",
+			want: "Bash,WebFetch",
+		},
+		{
+			name: "array payload",
+			in:   "[\"Bash\",\"WebFetch\"]",
+			want: "Bash,WebFetch",
+		},
+		{
+			name: "markdown fenced payload",
+			in:   "```json\n{\"tools\":[\"Bash\",\"WebFetch\"]}\n```",
+			want: "Bash,WebFetch",
+		},
+		{
+			name: "embedded json payload",
+			in:   "tool list:\n{\"tools\":[\"Bash\",\"WebFetch\"]}",
+			want: "Bash,WebFetch",
+		},
+		{
+			name: "invalid payload",
+			in:   "tools: Bash, WebFetch",
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(parseToolNamesFromJSONProbeOutput(tc.in), ",")
+			if got != tc.want {
+				t.Fatalf("unexpected parsed tools: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPromptStreamForSessionIncludesPersistedProviderSessionMetadata(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)

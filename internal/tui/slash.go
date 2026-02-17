@@ -165,7 +165,8 @@ func (m *model) handleSessionResume(rawSessionID string) {
 	}
 
 	resolution := runtime.ResolveSession(m.agentID, sessionID)
-	if _, err := m.app.MCPSessionStatus(m.ctx, resolution.AgentID, resolution.SessionID); err != nil {
+	entry, err := m.app.MCPSessionStatus(m.ctx, resolution.AgentID, resolution.SessionID)
+	if err != nil {
 		if errors.Is(err, runtime.ErrMCPNotFound) {
 			m.addSystem(fmt.Sprintf("session %s not found", resolution.SessionID))
 			return
@@ -178,6 +179,7 @@ func (m *model) handleSessionResume(rawSessionID string) {
 	m.agentID = resolution.AgentID
 	m.sessionID = resolution.SessionID
 	m.sessionKey = resolution.SessionKey
+	m.sessionTokens = max(0, entry.TotalTokens)
 	m.messages = nil
 	m.modelOverride = ""
 	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
