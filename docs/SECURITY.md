@@ -9,6 +9,7 @@
 - Channels are restricted to `slack` and `signal` identifiers.
 - LLM providers are constrained to local CLI subprocess invocation (`claudecode` or `codex`).
 - Runtime uses MCP-first provider execution; host no longer runs a legacy local tool-call execution loop.
+- Channel delivery is outbound-only in v1 (no inbound channel listeners/webhooks).
 
 ## Enforced guardrails
 
@@ -16,6 +17,7 @@
 - No HTTP/gRPC server mode exists.
 - No gateway/listener config surface exists.
 - LLM access remains local subprocess execution only.
+- Signal delivery remains local subprocess execution via `signal-cli`.
 
 ## Process and network boundary
 
@@ -24,6 +26,7 @@
 - No open ports/listeners.
 - No browser-hosted execution surface.
 - No Node host/gateway process.
+- Slack delivery performs outbound HTTPS calls to Slack Web API only.
 
 ## Filesystem and state controls
 

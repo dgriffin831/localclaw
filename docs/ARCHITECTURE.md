@@ -54,11 +54,10 @@ No server, gateway, or listener process exists.
 
 1. `workspace.Init`
 2. bootstrap `~/.localclaw/localclaw.json` if missing
-3. `memory.Init` (legacy store interface, no-op implementation)
-4. `sessions.Init`
-5. `skills.Load`
-6. `cron.Start`
-7. `heartbeat.Ping("localclaw startup heartbeat")`
+3. `sessions.Init`
+4. `skills.Load`
+5. `cron.Start`
+6. `heartbeat.Ping("localclaw startup heartbeat")`
 
 Any failure aborts startup.
 
@@ -80,9 +79,8 @@ Session lifecycle:
 
 Memory/runtime tool behavior:
 
-- Memory retrieval is keyword/FTS + grep based (`memory_search` and `memory_grep`).
+- Memory retrieval is keyword/FTS + grep/file-read based (`memory_search`, `memory_grep`, `memory_get`).
 - Runtime and memory CLI construct managers on demand using resolved workspace + `app.root`-based paths.
-- Legacy `memory.Store` on `App` remains a minimal no-op compatibility surface.
 
 ## 5. Storage model
 

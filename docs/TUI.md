@@ -94,7 +94,7 @@ Implemented command set:
 Command behavior details:
 
 - `/shortcuts` prints all available keyboard shortcuts and their behavior.
-- `/status` prints one system line containing status, provider, configured model/profile, effective model, effective selector, selector override state, agent, session, workspace, verbose, and mouse-capture flags.
+- `/status` prints one system line containing status, provider, configured model, effective model, effective selector, selector override state, agent, session, workspace, verbose, and mouse-capture flags.
 - `/tools` prints provider plus provider-reported `tools` only (no runtime fallback list).
 - when provider tools are not yet discovered, `/tools` starts a background probe and refreshes the summary when metadata arrives.
 - for providers that do not emit a tool list in metadata events (for example Codex), localclaw uses a provider-side JSON self-report probe as fallback.

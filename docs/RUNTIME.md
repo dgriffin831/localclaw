@@ -40,10 +40,9 @@ go run ./cmd/localclaw mcp serve
 
 - workspace manager (`internal/workspace`)
 - session store + transcript writer (`internal/session`)
-- legacy memory store interface (`internal/memory/store.go` no-op implementation)
 - runtime tool registry (`internal/skills` + `internal/runtime/tools.go`)
 - cron scheduler and heartbeat monitor
-- channel adapters (`slack`, `signal`)
+- channel adapters (`slack`, `signal`) wired only when present in `channels.enabled`
 - provider-agnostic LLM client contract (`internal/llm`) with local CLI adapters:
   - Claude Code (`internal/llm/claudecode`)
   - Codex (`internal/llm/codex`)
@@ -54,11 +53,10 @@ go run ./cmd/localclaw mcp serve
 
 1. `workspace.Init`
 2. bootstrap default config file at `~/.localclaw/localclaw.json` when missing
-3. `memory.Init`
-4. `sessions.Init`
-5. `skills.Load`
-6. `cron.Start`
-7. `heartbeat.Ping("localclaw startup heartbeat")`
+3. `sessions.Init`
+4. `skills.Load`
+5. `cron.Start`
+6. `heartbeat.Ping("localclaw startup heartbeat")`
 
 Any step failure aborts startup with wrapped context.
 
@@ -101,6 +99,8 @@ Supported tools:
 - `memory_search`
 - `memory_grep`
 - `memory_get`
+- `localclaw_slack_send`
+- `localclaw_signal_send`
 
 Retrieval model details and migration notes are documented in `docs/MEMORY.md`.
 
@@ -109,6 +109,15 @@ Tool enablement:
 - Controlled by resolved `memory.enabled` and `memory.tools.{search,get,grep}` for the agent.
 - Disabled tools return graceful error payloads instead of panics.
 - `ToolDefinitions(agentID)` only reports locally available memory tools for UI/status surfaces.
+
+Channel dispatch behavior:
+
+- Runtime sends Slack and Signal through MCP runtime methods:
+  - `MCPSlackSend`
+  - `MCPSignalSend`
+- Calls are gated by `channels.enabled`.
+- Disabled channel sends return `channel \"<name>\" is disabled`.
+- When `agent_id`/`session_id` are provided, runtime persists channel delivery metadata into session entries.
 
 Skills snapshot behavior:
 

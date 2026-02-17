@@ -4,12 +4,14 @@
 
 ## Loading rules
 
-- If `-config` is omitted, `config.Default()` is used.
+- If `-config` is omitted, loader behavior is:
+  - if `~/.localclaw/localclaw.json` exists, load it;
+  - otherwise use `config.Default()`.
 - If `-config` is provided, file JSON is decoded into defaults (merge-by-field behavior).
 - Config decoding is strict: unknown/removed keys fail parsing.
 - Config always passes `Validate()` before runtime startup.
 - On startup, `App.Run` creates `~/.localclaw/localclaw.json` if missing.
-  - This scaffold file is not auto-loaded unless passed via `-config`.
+  - On later runs, this file is auto-loaded when `-config` is omitted.
 
 ## Top-level schema
 
@@ -41,7 +43,7 @@
       "profile": "default",
       "extra_args": [
         "--allowed-tools",
-        "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get,mcp__localclaw__localclaw_memory_grep,mcp__localclaw__localclaw_workspace_status,mcp__localclaw__localclaw_cron_list,mcp__localclaw__localclaw_cron_add,mcp__localclaw__localclaw_cron_remove,mcp__localclaw__localclaw_cron_run,mcp__localclaw__localclaw_sessions_list,mcp__localclaw__localclaw_sessions_history,mcp__localclaw__localclaw_sessions_delete,mcp__localclaw__localclaw_session_status"
+        "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get,mcp__localclaw__localclaw_memory_grep,mcp__localclaw__localclaw_workspace_status,mcp__localclaw__localclaw_cron_list,mcp__localclaw__localclaw_cron_add,mcp__localclaw__localclaw_cron_remove,mcp__localclaw__localclaw_cron_run,mcp__localclaw__localclaw_sessions_list,mcp__localclaw__localclaw_sessions_history,mcp__localclaw__localclaw_sessions_delete,mcp__localclaw__localclaw_session_status,mcp__localclaw__localclaw_slack_send,mcp__localclaw__localclaw_signal_send"
       ],
       "session_mode": "always",
       "session_arg": "--session-id",
@@ -55,7 +57,6 @@
       "reasoning_default": "medium",
       "extra_args": ["--skip-git-repo-check"],
       "session_mode": "existing",
-      "session_arg": "",
       "resume_args": ["resume", "{sessionId}"],
       "session_id_fields": ["thread_id", "threadId", "session_id", "sessionId"],
       "resume_output": "json",
@@ -66,7 +67,19 @@
     }
   },
   "channels": {
-    "enabled": ["slack", "signal"]
+    "enabled": ["slack", "signal"],
+    "slack": {
+      "bot_token_env": "SLACK_BOT_TOKEN",
+      "default_channel": "",
+      "api_base_url": "https://slack.com/api",
+      "timeout_seconds": 10
+    },
+    "signal": {
+      "cli_path": "signal-cli",
+      "account": "+10000000000",
+      "default_recipient": "",
+      "timeout_seconds": 10
+    }
   },
   "agents": {
     "defaults": {
@@ -88,8 +101,7 @@
           "overlap": 40
         },
         "query": {
-          "maxResults": 8,
-          "minScore": 0
+          "maxResults": 8
         },
         "sync": {
           "onSearch": false,
@@ -146,6 +158,14 @@ General:
 - `channels.enabled` must contain at least one value.
 - `channels.enabled` allowlist: `slack`, `signal`.
 - duplicate channel names are rejected.
+- when `slack` is enabled:
+  - `channels.slack.bot_token_env` is required.
+  - `channels.slack.api_base_url` is required.
+  - `channels.slack.timeout_seconds` must be `> 0`.
+- when `signal` is enabled:
+  - `channels.signal.cli_path` is required.
+  - `channels.signal.account` is required.
+  - `channels.signal.timeout_seconds` must be `> 0`.
 - `agents.defaults.workspace` and `session.store` are required.
 - each `agents.list[].id` is required and unique.
 - `agents.list[].workspace` cannot be blank-whitespace.
@@ -181,11 +201,32 @@ Codex-specific fields:
 Claude Code-specific continuation fields:
 
 - `llm.claude_code.extra_args` appends provider-specific flags directly to `claude` arguments.
-  - default includes `--allowed-tools` with LocalClaw MCP tools so memory/workspace/session/cron tools work without first-run permission prompts.
+  - default includes `--allowed-tools` with LocalClaw MCP tools so memory/workspace/session/cron/channel tools work without first-run permission prompts.
 - `llm.claude_code.session_mode` controls continuation behavior (`always` default).
 - `llm.claude_code.session_arg` controls new-session flag (default `--session-id`).
 - `llm.claude_code.resume_args` controls resume argument templates and supports `{sessionId}` placeholder.
 - `llm.claude_code.session_id_fields` controls JSON fields scanned for provider session IDs.
+
+## Channel configuration notes
+
+Slack (`channels.slack`):
+
+- `bot_token_env`: env var name for Slack bot token lookup at send time.
+- `default_channel`: fallback destination when `localclaw_slack_send` omits `channel`.
+- `api_base_url`: Slack Web API base URL (default `https://slack.com/api`).
+- `timeout_seconds`: request timeout for `chat.postMessage`.
+
+Signal (`channels.signal`):
+
+- `cli_path`: executable path for `signal-cli`.
+- `account`: sender account passed to `signal-cli -a`.
+- `default_recipient`: fallback destination when `localclaw_signal_send` omits `recipient`.
+- `timeout_seconds`: subprocess timeout for send calls.
+
+MCP channel tools:
+
+- `localclaw_slack_send` (required `text`; optional `channel`, `thread_id`, `agent_id`, `session_id`)
+- `localclaw_signal_send` (required `text`; optional `recipient`, `agent_id`, `session_id`)
 
 ## Memory configuration notes
 
@@ -203,12 +244,13 @@ Implementation details to be aware of:
   - `memory.extraPaths`
   - `memory.store.path`
   - `memory.chunking.{tokens,overlap}`
-  - `memory.query.{maxResults,minScore}`
+  - `memory.query.maxResults`
   - `memory.sync.onSearch`
   - `memory.sync.sessions.{deltaBytes,deltaMessages}`
 - Runtime memory config resolution uses additive merge semantics for per-agent overrides.
-  - Practical effect: override fields are applied when they are non-empty/non-zero/true.
-  - Fields are not currently "explicitly unset" per-agent (for example, setting a bool to false does not force-disable a true default).
+  - `memory.enabled` and `memory.tools.{get,search,grep}` support explicit `true/false` overrides.
+  - Non-bool scalar fields still merge using non-empty/non-zero rules.
+  - `memory.sync.onSearch` currently supports explicit enable only (cannot force-disable a true inherited value).
 - Memory CLI (`internal/cli/memory.go`) currently uses `agents.defaults.memory` settings for index/search behavior.
 
 Compatibility behavior:
@@ -219,6 +261,10 @@ Compatibility behavior:
 - Removed Codex MCP isolated-home keys:
   - `llm.codex.mcp.use_isolated_home`
   - `llm.codex.mcp.home_path`
+- Removed Codex continuation key:
+  - `llm.codex.session_arg`
+- Removed memory query key:
+  - `agents.defaults.memory.query.minScore`
 - Removed runtime tool-policy keys:
   - top-level `tools`
   - top-level `skills`

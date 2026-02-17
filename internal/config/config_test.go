@@ -279,8 +279,7 @@ func TestLoadSupportsMemorySearchSettingsUnderMemorySection(t *testing.T) {
 						"overlap": 42
 					},
 					"query": {
-						"maxResults": 6,
-						"minScore": 0.5
+						"maxResults": 6
 					},
 					"sync": {
 						"onSearch": true,
@@ -479,11 +478,81 @@ func TestLoadRejectsRemovedCodexMCPIsolatedHomeFields(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsRemovedCodexSessionArg(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"llm": {
+			"codex": {
+				"session_arg": "--session-id"
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected removed llm.codex.session_arg to be rejected")
+	}
+}
+
+func TestLoadRejectsRemovedMemoryQueryMinScore(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"defaults": {
+				"memory": {
+					"query": {
+						"minScore": 0.5
+					}
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected removed agents.defaults.memory.query.minScore to be rejected")
+	}
+}
+
 func TestValidateRejectsUnsupportedChannel(t *testing.T) {
 	cfg := Default()
 	cfg.Channels.Enabled = []string{"slack", "teams"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected unsupported channel error")
+	}
+}
+
+func TestValidateRejectsMissingEnabledSlackConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{"slack"}
+	cfg.Channels.Slack.BotTokenEnv = "   "
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected missing slack bot token env validation error")
+	}
+}
+
+func TestValidateRejectsMissingEnabledSignalConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{"signal"}
+	cfg.Channels.Signal.Account = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected missing signal account validation error")
+	}
+}
+
+func TestValidateAllowsBlankDisabledChannelConfig(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{"slack"}
+	cfg.Channels.Signal.Account = ""
+	cfg.Channels.Signal.CLIPath = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected disabled signal config to be ignored, got %v", err)
 	}
 }
 
@@ -641,6 +710,8 @@ func TestDefaultConfigIncludesClaudeAllowedMCPTools(t *testing.T) {
 		"mcp__localclaw__localclaw_sessions_history",
 		"mcp__localclaw__localclaw_sessions_delete",
 		"mcp__localclaw__localclaw_session_status",
+		"mcp__localclaw__localclaw_slack_send",
+		"mcp__localclaw__localclaw_signal_send",
 	}
 	for _, tool := range required {
 		if !strings.Contains(allowed, tool) {

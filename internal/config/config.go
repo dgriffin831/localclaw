@@ -25,6 +25,8 @@ var defaultClaudeAllowedMCPTools = []string{
 	"mcp__localclaw__localclaw_sessions_history",
 	"mcp__localclaw__localclaw_sessions_delete",
 	"mcp__localclaw__localclaw_session_status",
+	"mcp__localclaw__localclaw_slack_send",
+	"mcp__localclaw__localclaw_signal_send",
 }
 
 var allowedCodexReasoningLevels = []string{
@@ -82,7 +84,6 @@ type CodexConfig struct {
 	ReasoningDefault string         `json:"reasoning_default"`
 	ExtraArgs        []string       `json:"extra_args"`
 	SessionMode      string         `json:"session_mode"`
-	SessionArg       string         `json:"session_arg"`
 	ResumeArgs       []string       `json:"resume_args"`
 	SessionIDFields  []string       `json:"session_id_fields"`
 	ResumeOutput     string         `json:"resume_output"`
@@ -95,7 +96,23 @@ type CodexMCPConfig struct {
 }
 
 type ChannelsConfig struct {
-	Enabled []string `json:"enabled"`
+	Enabled []string             `json:"enabled"`
+	Slack   SlackChannelsConfig  `json:"slack"`
+	Signal  SignalChannelsConfig `json:"signal"`
+}
+
+type SlackChannelsConfig struct {
+	BotTokenEnv    string `json:"bot_token_env"`
+	DefaultChannel string `json:"default_channel"`
+	APIBaseURL     string `json:"api_base_url"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
+type SignalChannelsConfig struct {
+	CLIPath          string `json:"cli_path"`
+	Account          string `json:"account"`
+	DefaultRecipient string `json:"default_recipient"`
+	TimeoutSeconds   int    `json:"timeout_seconds"`
 }
 
 type AgentsConfig struct {
@@ -176,8 +193,7 @@ type ChunkingConfig struct {
 }
 
 type QueryConfig struct {
-	MaxResults int     `json:"maxResults"`
-	MinScore   float64 `json:"minScore"`
+	MaxResults int `json:"maxResults"`
 }
 
 type SyncConfig struct {
@@ -245,7 +261,21 @@ func Default() Config {
 				},
 			},
 		},
-		Channels: ChannelsConfig{Enabled: []string{"slack", "signal"}},
+		Channels: ChannelsConfig{
+			Enabled: []string{"slack", "signal"},
+			Slack: SlackChannelsConfig{
+				BotTokenEnv:    "SLACK_BOT_TOKEN",
+				DefaultChannel: "",
+				APIBaseURL:     "https://slack.com/api",
+				TimeoutSeconds: 10,
+			},
+			Signal: SignalChannelsConfig{
+				CLIPath:          "signal-cli",
+				Account:          "+10000000000",
+				DefaultRecipient: "",
+				TimeoutSeconds:   10,
+			},
+		},
 		Agents: AgentsConfig{
 			Defaults: AgentDefaultsConfig{
 				Workspace: ".",
@@ -267,7 +297,6 @@ func Default() Config {
 					},
 					Query: QueryConfig{
 						MaxResults: 8,
-						MinScore:   0,
 					},
 					Sync: SyncConfig{
 						OnSearch: false,
@@ -376,7 +405,6 @@ func (c Config) Validate() error {
 	if err := validateCodexReasoningDefault(c.LLM.Codex.ReasoningDefault); err != nil {
 		return err
 	}
-	// TODO: Keep this validation aligned with runtime wiring: channels.enabled is validated here, but runtime must also gate actual adapter wiring/usage by this allowlist.
 	if len(c.Channels.Enabled) == 0 {
 		return errors.New("channels.enabled must include at least one channel")
 	}
@@ -395,6 +423,28 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate channel %q", channel)
 		}
 		seen[channel] = struct{}{}
+	}
+	if _, enabled := seen["slack"]; enabled {
+		if strings.TrimSpace(c.Channels.Slack.BotTokenEnv) == "" {
+			return errors.New("channels.slack.bot_token_env is required when slack is enabled")
+		}
+		if strings.TrimSpace(c.Channels.Slack.APIBaseURL) == "" {
+			return errors.New("channels.slack.api_base_url is required when slack is enabled")
+		}
+		if c.Channels.Slack.TimeoutSeconds <= 0 {
+			return errors.New("channels.slack.timeout_seconds must be > 0 when slack is enabled")
+		}
+	}
+	if _, enabled := seen["signal"]; enabled {
+		if strings.TrimSpace(c.Channels.Signal.CLIPath) == "" {
+			return errors.New("channels.signal.cli_path is required when signal is enabled")
+		}
+		if strings.TrimSpace(c.Channels.Signal.Account) == "" {
+			return errors.New("channels.signal.account is required when signal is enabled")
+		}
+		if c.Channels.Signal.TimeoutSeconds <= 0 {
+			return errors.New("channels.signal.timeout_seconds must be > 0 when signal is enabled")
+		}
 	}
 	seenAgentIDs := map[string]struct{}{}
 	for _, agent := range c.Agents.List {

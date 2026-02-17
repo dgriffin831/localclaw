@@ -29,19 +29,20 @@ import (
 
 // App composes all localclaw capabilities in a single process.
 type App struct {
-	cfg        config.Config
-	tools      *skills.ToolRegistry
-	sessions   *session.Store
-	workspace  workspace.Manager
-	skills     skills.Registry
-	cron       cron.Scheduler
-	heartbeat  heartbeat.Monitor
-	slack      slack.Client  // TODO: Wire outbound Slack dispatch once channel execution is implemented.
-	signal     signal.Client // TODO: Wire outbound Signal dispatch once channel execution is implemented.
-	llm        llm.Client
-	llmClients map[string]llm.Client
-	transcript *session.TranscriptWriter
-	now        func() time.Time
+	cfg             config.Config
+	enabledChannels map[string]struct{}
+	tools           *skills.ToolRegistry
+	sessions        *session.Store
+	workspace       workspace.Manager
+	skills          skills.Registry
+	cron            cron.Scheduler
+	heartbeat       heartbeat.Monitor
+	slack           slack.Client
+	signal          signal.Client
+	llm             llm.Client
+	llmClients      map[string]llm.Client
+	transcript      *session.TranscriptWriter
+	now             func() time.Time
 
 	snapshotMu          sync.Mutex
 	skillPromptSnapshot map[string]skillsSessionSnapshot
@@ -140,7 +141,6 @@ func New(cfg config.Config) (*App, error) {
 		ReasoningDefault: cfg.LLM.Codex.ReasoningDefault,
 		ExtraArgs:        cfg.LLM.Codex.ExtraArgs,
 		SessionMode:      cfg.LLM.Codex.SessionMode,
-		SessionArg:       cfg.LLM.Codex.SessionArg,
 		ResumeArgs:       cfg.LLM.Codex.ResumeArgs,
 		SessionIDFields:  cfg.LLM.Codex.SessionIDFields,
 		ResumeOutput:     cfg.LLM.Codex.ResumeOutput,
@@ -174,9 +174,39 @@ func New(cfg config.Config) (*App, error) {
 		}
 	}
 
+	enabledChannels := make(map[string]struct{}, len(cfg.Channels.Enabled))
+	for _, channel := range cfg.Channels.Enabled {
+		name := strings.ToLower(strings.TrimSpace(channel))
+		if name == "" {
+			continue
+		}
+		enabledChannels[name] = struct{}{}
+	}
+
+	var slackAdapter slack.Client
+	if _, ok := enabledChannels["slack"]; ok {
+		slackAdapter = slack.NewLocalAdapter(slack.Settings{
+			TokenEnv:       cfg.Channels.Slack.BotTokenEnv,
+			DefaultChannel: cfg.Channels.Slack.DefaultChannel,
+			APIBaseURL:     cfg.Channels.Slack.APIBaseURL,
+			Timeout:        time.Duration(cfg.Channels.Slack.TimeoutSeconds) * time.Second,
+		})
+	}
+
+	var signalAdapter signal.Client
+	if _, ok := enabledChannels["signal"]; ok {
+		signalAdapter = signal.NewLocalAdapter(signal.Settings{
+			CLIPath:          cfg.Channels.Signal.CLIPath,
+			Account:          cfg.Channels.Signal.Account,
+			DefaultRecipient: cfg.Channels.Signal.DefaultRecipient,
+			Timeout:          time.Duration(cfg.Channels.Signal.TimeoutSeconds) * time.Second,
+		})
+	}
+
 	return &App{
-		cfg:   cfg,
-		tools: skills.DefaultToolRegistry(),
+		cfg:             cfg,
+		enabledChannels: enabledChannels,
+		tools:           skills.DefaultToolRegistry(),
 		sessions: session.NewStore(session.Settings{
 			StateRoot:     cfg.App.Root,
 			StorePath:     cfg.Session.Store,
@@ -189,11 +219,10 @@ func New(cfg config.Config) (*App, error) {
 				return workspaceManager.ResolveWorkspace(agentID)
 			},
 		}),
-		cron:      cron.NewInProcessScheduler(cfg.Cron.Enabled),
-		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
-		// TODO: Honor channels.enabled by gating adapter wiring and channel usage per configured allowlist instead of unconditionally wiring both adapters.
-		slack:      slack.NewLocalAdapter(),
-		signal:     signal.NewLocalAdapter(),
+		cron:       cron.NewInProcessScheduler(cfg.Cron.Enabled),
+		heartbeat:  heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
+		slack:      slackAdapter,
+		signal:     signalAdapter,
 		llm:        llmClient,
 		llmClients: llmClients,
 		// TODO: Wire transcript appends into memory autosync (StartAutoSync/HandleTranscriptUpdate) via a runtime event bus so session delta indexing is active at startup.

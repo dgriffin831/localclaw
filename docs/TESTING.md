@@ -20,6 +20,7 @@ This document describes test coverage, commands, and Red/Green workflow for `loc
 | TUI behavior | `internal/tui/app_test.go` | slash commands, autocomplete, waiting/status UX, welcome rendering, history/keybindings |
 | Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, bootstrap loading/filtering, subagent allowlist |
 | Session store/transcripts | `internal/session/store_test.go` | path resolution, lock behavior, metadata preservation, write safety |
+| Channel adapters | `internal/channels/slack/adapter_test.go`, `internal/channels/signal/adapter_test.go` | outbound delivery behavior, timeout/cancellation, and failure-path error mapping |
 | Memory CLI | `internal/cli/memory_test.go` | `memory status/index/search/grep` JSON/text output and argument handling |
 | MCP runtime/tools | `internal/mcp/*_test.go`, `internal/cli/mcp_test.go` | stdio JSON-RPC loop, tool discovery/calls, `mcp serve` routing |
 | Session snapshot hook | `internal/hooks/session_memory_test.go` | snapshot generation, slug/summary fallback, transcript handling |
@@ -37,6 +38,8 @@ go test ./...
 
 ```bash
 go test ./internal/config
+go test ./internal/channels/slack
+go test ./internal/channels/signal
 go test ./internal/runtime
 go test ./internal/skills
 go test ./internal/tui
@@ -52,6 +55,8 @@ go test ./internal/mcp
 
 ```bash
 go test ./internal/config -run TestValidate -v
+go test ./internal/channels/slack -run TestLocalAdapterSendUsesDefaultChannelAndReturnsDeliveryMetadata -v
+go test ./internal/channels/signal -run TestLocalAdapterSendBuildsGroupCommandUsingDefaultRecipient -v
 go test ./internal/runtime -run TestPromptIncludesBootstrapContextOnFirstMessageOnly -v
 go test ./internal/runtime -run TestPromptStreamForSessionPassesThroughProviderToolEvents -v
 go test ./internal/skills -run TestSnapshotContainsEligibleSkillsOnly -v

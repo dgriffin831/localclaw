@@ -83,6 +83,10 @@ func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Serv
 	sessionsDeleteTool := mcpTools.NewSessionsDeleteTool(orchestrationBackend)
 	sessionStatusTool := mcpTools.NewSessionStatusTool(orchestrationBackend)
 
+	channelsBackend := mcpTools.RuntimeChannelsBackend{App: app}
+	slackSendTool := mcpTools.NewSlackSendTool(channelsBackend)
+	signalSendTool := mcpTools.NewSignalSendTool(channelsBackend)
+
 	registrations := []mcp.ToolRegistration{
 		{
 			Definition: mcpTools.MemorySearchDefinition(),
@@ -131,6 +135,14 @@ func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Serv
 		{
 			Definition: mcpTools.SessionStatusDefinition(),
 			Handler:    sessionStatusTool.Call,
+		},
+		{
+			Definition: mcpTools.SlackSendDefinition(),
+			Handler:    slackSendTool.Call,
+		},
+		{
+			Definition: mcpTools.SignalSendDefinition(),
+			Handler:    signalSendTool.Call,
 		},
 	}
 	tools := applyMCPToolPolicy(registrations, policy)

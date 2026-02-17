@@ -10,6 +10,8 @@ Keep it current when architecture, tooling, or workflows change.
 - `docs/ARCHITECTURE.md` is the implementation-detail architecture reference.
 - `docs/RUNTIME.md` documents startup wiring and runtime lifecycle.
 - `docs/CONFIGURATION.md` documents config schema, defaults, and validation guardrails.
+- `docs/SLACK.md` documents Slack channel setup and outbound delivery behavior.
+- `docs/SIGNAL.md` documents Signal channel setup and `signal-cli` runtime behavior.
 - `docs/TUI.md` documents full-screen TUI behavior and controls.
 - `docs/CLAUDE_CODE.md` documents local Claude Code CLI integration details.
 - `docs/TESTING.md` is the comprehensive testing guide.

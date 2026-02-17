@@ -17,6 +17,7 @@
 - Per-agent session metadata + transcript files under the configured `app.root`.
 - SQLite-backed memory indexing/search/grep with CLI tooling (`memory status/index/search/grep`).
 - Runtime memory tools (`memory_search`, `memory_grep`, `memory_get`) injected when `agents.*.memory` enables them.
+- Outbound channel delivery tools for Slack (`localclaw_slack_send`) and Signal (`localclaw_signal_send`).
 - Session lifecycle hooks for `/reset` and `/new` snapshot behavior.
 
 ## Quick start
@@ -131,6 +132,8 @@ Optional TUI startup defaults:
 - `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
 - `docs/MEMORY.md` - memory retrieval v2 model (`memory_search` + `memory_grep`) and implementation notes.
 - `docs/TUI.md` - terminal UX behavior and controls.
+- `docs/SLACK.md` - Slack setup and outbound delivery implementation details.
+- `docs/SIGNAL.md` - Signal (`signal-cli`) setup and outbound delivery implementation details.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
 - `docs/CODEX.md` - local Codex CLI integration details.
 - `docs/TESTING.md` - package coverage and Red/Green command loops.

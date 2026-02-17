@@ -1,0 +1,11 @@
+{
+  "channels": {
+    "enabled": ["signal"],
+    "signal": {
+      "cli_path": "signal-cli",
+      "account": "+17143026547",
+      "default_recipient": "",
+      "timeout_seconds": 10
+    }
+  }
+}

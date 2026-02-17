@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dgriffin831/localclaw/internal/channels/signal"
+	"github.com/dgriffin831/localclaw/internal/channels/slack"
 	"github.com/dgriffin831/localclaw/internal/cron"
 	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/session"
@@ -45,6 +47,19 @@ type MCPHistoryItem struct {
 type MCPSessionsHistory struct {
 	Items []MCPHistoryItem `json:"items"`
 	Total int              `json:"total"`
+}
+
+type MCPSlackSendResult struct {
+	OK        bool   `json:"ok"`
+	Channel   string `json:"channel"`
+	MessageID string `json:"message_id"`
+	ThreadID  string `json:"thread_id,omitempty"`
+}
+
+type MCPSignalSendResult struct {
+	OK        bool   `json:"ok"`
+	Recipient string `json:"recipient"`
+	SentAt    string `json:"sent_at"`
 }
 
 func (a *App) MCPMemorySearch(ctx context.Context, agentID, sessionID, query string, opts memory.SearchOptions) ([]memory.SearchResult, error) {
@@ -136,6 +151,64 @@ func (a *App) MCPCronRemove(ctx context.Context, id string) (bool, error) {
 
 func (a *App) MCPCronRun(ctx context.Context, id string) (cron.RunResult, error) {
 	return a.cron.Run(ctx, id)
+}
+
+func (a *App) MCPSlackSend(ctx context.Context, text, channel, threadID, agentID, sessionID string) (MCPSlackSendResult, error) {
+	if !a.channelEnabled("slack") || a.slack == nil {
+		return MCPSlackSendResult{}, disabledChannelError("slack")
+	}
+
+	delivery, err := a.slack.Send(ctx, slack.SendRequest{
+		Text:     text,
+		Channel:  channel,
+		ThreadID: threadID,
+	})
+	if err != nil {
+		return MCPSlackSendResult{}, err
+	}
+
+	result := MCPSlackSendResult{
+		OK:        delivery.OK,
+		Channel:   delivery.Channel,
+		MessageID: delivery.MessageID,
+		ThreadID:  delivery.ThreadID,
+	}
+
+	if shouldPersistDelivery(agentID, sessionID) {
+		if err := a.persistChannelDelivery(ctx, session.OriginSlack, agentID, sessionID, result.Channel, result.ThreadID, result.MessageID); err != nil {
+			return result, fmt.Errorf("slack delivered but failed to persist session metadata (channel=%q message_id=%q thread_id=%q): %w", result.Channel, result.MessageID, result.ThreadID, err)
+		}
+	}
+
+	return result, nil
+}
+
+func (a *App) MCPSignalSend(ctx context.Context, text, recipient, agentID, sessionID string) (MCPSignalSendResult, error) {
+	if !a.channelEnabled("signal") || a.signal == nil {
+		return MCPSignalSendResult{}, disabledChannelError("signal")
+	}
+
+	delivery, err := a.signal.Send(ctx, signal.SendRequest{
+		Text:      text,
+		Recipient: recipient,
+	})
+	if err != nil {
+		return MCPSignalSendResult{}, err
+	}
+
+	result := MCPSignalSendResult{
+		OK:        delivery.OK,
+		Recipient: delivery.Recipient,
+		SentAt:    delivery.SentAt,
+	}
+
+	if shouldPersistDelivery(agentID, sessionID) {
+		if err := a.persistChannelDelivery(ctx, session.OriginSignal, agentID, sessionID, "signal", "", ""); err != nil {
+			return result, fmt.Errorf("signal delivered but failed to persist session metadata (recipient=%q sent_at=%q): %w", result.Recipient, result.SentAt, err)
+		}
+	}
+
+	return result, nil
 }
 
 func (a *App) MCPSessionsList(ctx context.Context, agentID string, limit, offset int) (MCPSessionsList, error) {
@@ -317,4 +390,50 @@ func extractTranscriptText(v interface{}) string {
 	default:
 		return ""
 	}
+}
+
+func (a *App) channelEnabled(name string) bool {
+	if a == nil {
+		return false
+	}
+	if len(a.enabledChannels) == 0 {
+		return false
+	}
+	_, ok := a.enabledChannels[strings.ToLower(strings.TrimSpace(name))]
+	return ok
+}
+
+func disabledChannelError(name string) error {
+	trimmed := strings.ToLower(strings.TrimSpace(name))
+	if trimmed == "" {
+		trimmed = "unknown"
+	}
+	return fmt.Errorf("channel %q is disabled", trimmed)
+}
+
+func shouldPersistDelivery(agentID, sessionID string) bool {
+	return strings.TrimSpace(agentID) != "" || strings.TrimSpace(sessionID) != ""
+}
+
+func (a *App) persistChannelDelivery(ctx context.Context, origin session.Origin, agentID, sessionID, channel, threadID, messageID string) error {
+	if a.sessions == nil {
+		return errors.New("session store is unavailable")
+	}
+	resolution := ResolveSession(agentID, sessionID)
+	_, err := a.sessions.Update(ctx, resolution.AgentID, resolution.SessionID, func(entry *session.SessionEntry) error {
+		if entry.Origin == "" || entry.Origin == session.OriginUnknown {
+			entry.Origin = origin
+		}
+		if value := strings.TrimSpace(channel); value != "" {
+			entry.Delivery.Channel = value
+		}
+		if value := strings.TrimSpace(threadID); value != "" {
+			entry.Delivery.ThreadID = value
+		}
+		if value := strings.TrimSpace(messageID); value != "" {
+			entry.Delivery.MessageID = value
+		}
+		return nil
+	})
+	return err
 }

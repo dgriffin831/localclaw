@@ -140,11 +140,30 @@ func TestHeaderViewShownWhenMouseOn(t *testing.T) {
 	m.mouseEnabled = true
 
 	got := ansiEscapePattern.ReplaceAllString(m.headerView(), "")
-	if !strings.Contains(got, "# localclaw") || !strings.Contains(got, "session:") || !strings.Contains(got, "tokens:0") || !strings.Contains(got, "workspace:") {
+	if !strings.Contains(got, "localclaw") || !strings.Contains(got, "session:") || !strings.Contains(got, "tokens:0") || !strings.Contains(got, "workspace:") {
 		t.Fatalf("expected header to be shown when mouse capture is on, got %q", got)
+	}
+	if strings.Contains(got, "#") {
+		t.Fatalf("expected header to omit hash prefix, got %q", got)
 	}
 	if strings.Contains(got, "provider:") || strings.Contains(got, "model:") {
 		t.Fatalf("expected header to omit provider/model metadata when mouse capture is on, got %q", got)
+	}
+}
+
+func TestHeaderViewUsesConfiguredAppName(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.Name = "clawbox"
+	m := newModel(context.Background(), nil, cfg)
+	m.width = 160
+	m.mouseEnabled = true
+
+	got := ansiEscapePattern.ReplaceAllString(m.headerView(), "")
+	if !strings.Contains(got, "clawbox") {
+		t.Fatalf("expected configured app name in header, got %q", got)
+	}
+	if strings.Contains(got, "#") {
+		t.Fatalf("expected header to omit hash prefix, got %q", got)
 	}
 }
 

@@ -8,8 +8,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dgriffin831/localclaw/internal/channels/signal"
+	"github.com/dgriffin831/localclaw/internal/channels/slack"
+	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/memory"
+	"github.com/dgriffin831/localclaw/internal/session"
 )
+
+type stubSlackClient struct {
+	sendFn func(ctx context.Context, req slack.SendRequest) (slack.SendResult, error)
+}
+
+func (s stubSlackClient) Send(ctx context.Context, req slack.SendRequest) (slack.SendResult, error) {
+	return s.sendFn(ctx, req)
+}
+
+type stubSignalClient struct {
+	sendFn func(ctx context.Context, req signal.SendRequest) (signal.SendResult, error)
+}
+
+func (s stubSignalClient) Send(ctx context.Context, req signal.SendRequest) (signal.SendResult, error) {
+	return s.sendFn(ctx, req)
+}
 
 func TestReadTranscriptHistoryAcceptsLargeLines(t *testing.T) {
 	dir := t.TempDir()
@@ -164,5 +184,116 @@ func TestMCPSessionDeleteReturnsFalseWhenSessionIsMissing(t *testing.T) {
 	}
 	if removed {
 		t.Fatalf("expected removed=false for missing session")
+	}
+}
+
+func TestNewWiresOnlyEnabledChannels(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.Root = t.TempDir()
+	cfg.Channels.Enabled = []string{"slack"}
+	cfg.Channels.Signal.Account = ""
+	cfg.Channels.Signal.CLIPath = ""
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if app.slack == nil {
+		t.Fatalf("expected slack adapter when slack enabled")
+	}
+	if app.signal != nil {
+		t.Fatalf("expected signal adapter to remain nil when signal disabled")
+	}
+}
+
+func TestMCPSignalSendReturnsDisabledErrorWhenChannelDisabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.Root = t.TempDir()
+	cfg.Channels.Enabled = []string{"slack"}
+	cfg.Channels.Signal.Account = ""
+	cfg.Channels.Signal.CLIPath = ""
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	_, err = app.MCPSignalSend(context.Background(), "hello", "", "", "")
+	if err == nil {
+		t.Fatalf("expected disabled-channel error")
+	}
+	if !strings.Contains(err.Error(), "channel \"signal\" is disabled") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMCPSlackSendPersistsSessionDeliveryMetadata(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	app.enabledChannels = map[string]struct{}{"slack": {}}
+	app.slack = stubSlackClient{
+		sendFn: func(ctx context.Context, req slack.SendRequest) (slack.SendResult, error) {
+			if req.Channel != "CDELIVERY" {
+				t.Fatalf("unexpected channel %q", req.Channel)
+			}
+			return slack.SendResult{
+				OK:        true,
+				Channel:   "CDELIVERY",
+				MessageID: "1700000000.000321",
+				ThreadID:  "1700000000.000123",
+			}, nil
+		},
+	}
+
+	result, err := app.MCPSlackSend(ctx, "hello", "CDELIVERY", "1700000000.000123", "default", "chan-meta")
+	if err != nil {
+		t.Fatalf("slack send: %v", err)
+	}
+	if !result.OK {
+		t.Fatalf("expected result.OK=true")
+	}
+
+	entry, err := app.MCPSessionStatus(ctx, "default", "chan-meta")
+	if err != nil {
+		t.Fatalf("session status: %v", err)
+	}
+	if entry.Origin != session.OriginSlack {
+		t.Fatalf("expected origin slack, got %q", entry.Origin)
+	}
+	if entry.Delivery.Channel != "CDELIVERY" {
+		t.Fatalf("expected delivery channel CDELIVERY, got %+v", entry.Delivery)
+	}
+	if entry.Delivery.ThreadID != "1700000000.000123" {
+		t.Fatalf("expected thread id persisted, got %+v", entry.Delivery)
+	}
+	if entry.Delivery.MessageID != "1700000000.000321" {
+		t.Fatalf("expected message id persisted, got %+v", entry.Delivery)
+	}
+}
+
+func TestMCPSlackSendReturnsDeliveryMetadataInPersistenceErrors(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	app.enabledChannels = map[string]struct{}{"slack": {}}
+	app.sessions = nil
+	app.slack = stubSlackClient{
+		sendFn: func(ctx context.Context, req slack.SendRequest) (slack.SendResult, error) {
+			return slack.SendResult{
+				OK:        true,
+				Channel:   "CDELIVERY",
+				MessageID: "1700000000.000999",
+				ThreadID:  "1700000000.000888",
+			}, nil
+		},
+	}
+
+	_, err := app.MCPSlackSend(ctx, "hello", "CDELIVERY", "1700000000.000888", "default", "meta-fail")
+	if err == nil {
+		t.Fatalf("expected metadata persistence error")
+	}
+	if !strings.Contains(err.Error(), "1700000000.000999") {
+		t.Fatalf("expected message id in persistence error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "1700000000.000888") {
+		t.Fatalf("expected thread id in persistence error, got %v", err)
 	}
 }

@@ -103,6 +103,8 @@ func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 		"localclaw_sessions_delete",
 		"localclaw_sessions_history",
 		"localclaw_sessions_list",
+		"localclaw_signal_send",
+		"localclaw_slack_send",
 		"localclaw_workspace_status",
 	}
 	if len(names) != len(want) {

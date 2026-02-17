@@ -308,9 +308,6 @@ func runMemorySearch(ctx context.Context, cfg config.Config, app *runtime.App, a
 	if searchOpts.MaxResults <= 0 {
 		searchOpts.MaxResults = resolved.queryMaxResults
 	}
-	if *minScore == 0 {
-		searchOpts.MinScore = resolved.queryMinScore
-	}
 
 	results, err := manager.Search(ctx, query, searchOpts)
 	if err != nil {
@@ -519,7 +516,6 @@ type memoryCommandResolution struct {
 	workspacePath   string
 	storePath       string
 	queryMaxResults int
-	queryMinScore   float64
 }
 
 type sourceScanDetails struct {
@@ -596,7 +592,6 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 		workspacePath:   workspacePath,
 		storePath:       storePath,
 		queryMaxResults: memoryCfg.Query.MaxResults,
-		queryMinScore:   memoryCfg.Query.MinScore,
 	}
 	if resolution.queryMaxResults <= 0 {
 		resolution.queryMaxResults = 8

@@ -329,7 +329,7 @@ JSON flag behavior:
 - `--json` is always set for non-resume calls
 - for resume calls:
   - set `--json` when `resume_output` is `json` or `jsonl`
-  - omit `--json` when `resume_output` is `text` (default)
+  - omit `--json` when `resume_output` is `text`
 
 ### Provider session ID discovery
 
@@ -443,9 +443,12 @@ Session continuation configuration lives under `llm.claude_code` and `llm.codex`
 Shared fields:
 
 - `session_mode`: `always | existing | none`
-- `session_arg` (provider-specific start arg)
 - `resume_args` (supports `{sessionId}` placeholder)
 - `session_id_fields` (fields scanned in provider JSON output)
+
+Claude Code-specific field:
+
+- `session_arg` (start arg, default `--session-id`)
 
 Codex-only field:
 
@@ -454,7 +457,7 @@ Codex-only field:
 Current defaults (`internal/config/config.go`):
 
 - Claude Code: `session_mode=always`, `session_arg=--session-id`, `resume_args=["--resume","{sessionId}"]`
-- Codex: `session_mode=existing`, `resume_args=["resume","{sessionId}"]`, `resume_output=text`
+- Codex: `session_mode=existing`, `resume_args=["resume","{sessionId}"]`, `resume_output=json`
 
 Validation rules include:
 
@@ -509,6 +512,5 @@ Current implementation intentionally keeps these constraints:
 
 - provider resume error detection is substring-based heuristic matching
 - provider key normalization currently does not enforce a strict allowlist
-- codex `session_arg` exists in config but is not currently used in codex command construction
 - transcript event bus exists but runtime does not yet wire transcript update subscribers at startup
 - continuation state is provider-local per session and is not shared across providers
