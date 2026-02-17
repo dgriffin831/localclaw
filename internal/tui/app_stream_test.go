@@ -71,9 +71,8 @@ func TestVerboseToolCallShowsDetailedMetadata(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolCall,
 			ToolCall: &llm.ToolCall{
-				ID:    "call-1",
-				Name:  "memory_search",
-				Class: llm.ToolClassLocal,
+				ID:   "call-1",
+				Name: "memory_search",
 				Args: map[string]interface{}{
 					"query":       "incident summary",
 					"max_results": 3,
@@ -84,7 +83,7 @@ func TestVerboseToolCallShowsDetailedMetadata(t *testing.T) {
 	m = updated.(model)
 
 	all := joinedMessageRaw(m.messages)
-	if !strings.Contains(all, "[verbose] tool call details: id=call-1 class=local") {
+	if !strings.Contains(all, "[verbose] tool call details: id=call-1") {
 		t.Fatalf("expected verbose tool call details, got %q", all)
 	}
 	if !strings.Contains(all, "query=incident summary") || !strings.Contains(all, "max_results=3") {
@@ -203,8 +202,7 @@ func TestToolCallEventSurfacesToolActivity(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolCall,
 			ToolCall: &llm.ToolCall{
-				Name:  "memory_search",
-				Class: llm.ToolClassLocal,
+				Name: "memory_search",
 			},
 		},
 	})
@@ -223,14 +221,11 @@ func TestToolCallEventSurfacesToolActivity(t *testing.T) {
 	if card.ToolName != "memory_search" {
 		t.Fatalf("expected tool card tool name memory_search, got %q", card.ToolName)
 	}
-	if card.Ownership != "localclaw_mcp" {
-		t.Fatalf("expected tool card ownership localclaw_mcp, got %q", card.Ownership)
-	}
 	if card.HasResult {
 		t.Fatalf("expected tool call card to remain running before result")
 	}
 	rendered := ansiEscapePattern.ReplaceAllString(next.renderTranscript(), "")
-	if !strings.Contains(rendered, "tool [localclaw_mcp] memory_search") {
+	if !strings.Contains(rendered, "tool memory_search") {
 		t.Fatalf("expected rendered card summary, got %q", rendered)
 	}
 	if !strings.Contains(rendered, "running") {
@@ -250,9 +245,8 @@ func TestToolResultEventReturnsToWaitingState(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolResult,
 			ToolResult: &llm.ToolResult{
-				Tool:  "memory_search",
-				Class: llm.ToolClassDelegated,
-				OK:    true,
+				Tool: "memory_search",
+				OK:   true,
 			},
 		},
 	})
@@ -271,9 +265,6 @@ func TestToolResultEventReturnsToWaitingState(t *testing.T) {
 	if card.ToolName != "memory_search" {
 		t.Fatalf("expected tool card tool name memory_search, got %q", card.ToolName)
 	}
-	if card.Ownership != "provider_native" {
-		t.Fatalf("expected tool card ownership provider_native, got %q", card.Ownership)
-	}
 	if !card.HasResult {
 		t.Fatalf("expected result card to be marked complete")
 	}
@@ -283,7 +274,7 @@ func TestToolResultEventReturnsToWaitingState(t *testing.T) {
 	}
 }
 
-func TestToolResultEventUsesCallOwnershipWhenResultClassMissing(t *testing.T) {
+func TestToolResultEventPairsByCallIDWhenResultClassMissing(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.running = true
 	m.activeRunID = 7
@@ -295,9 +286,8 @@ func TestToolResultEventUsesCallOwnershipWhenResultClassMissing(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolCall,
 			ToolCall: &llm.ToolCall{
-				ID:    "call-123",
-				Name:  "Bash",
-				Class: llm.ToolClassDelegated,
+				ID:   "call-123",
+				Name: "Bash",
 			},
 		},
 	})
@@ -323,12 +313,12 @@ func TestToolResultEventUsesCallOwnershipWhenResultClassMissing(t *testing.T) {
 	if card == nil {
 		t.Fatalf("expected tool card payload after call/result pair")
 	}
-	if card.Ownership != "provider_native" {
-		t.Fatalf("expected ownership to resolve from prior call id, got %q", card.Ownership)
+	if card.CallID != "call-123" {
+		t.Fatalf("expected call/result pair to retain call id, got %q", card.CallID)
 	}
 }
 
-func TestToolResultEventWithoutOwnershipShowsUnspecified(t *testing.T) {
+func TestToolResultEventWithoutCallIDStillRendersCard(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.running = true
 	m.activeRunID = 7
@@ -348,10 +338,7 @@ func TestToolResultEventWithoutOwnershipShowsUnspecified(t *testing.T) {
 	next := updated.(model)
 	card := latestToolCard(next.messages)
 	if card == nil {
-		t.Fatalf("expected tool card payload for ownership fallback")
-	}
-	if card.Ownership != "unspecified" {
-		t.Fatalf("expected unknown ownership label, got %q", card.Ownership)
+		t.Fatalf("expected tool card payload without call id")
 	}
 }
 
@@ -367,9 +354,8 @@ func TestToolCardsExpandWithCtrlO(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolCall,
 			ToolCall: &llm.ToolCall{
-				ID:    "call-1",
-				Name:  "memory_search",
-				Class: llm.ToolClassLocal,
+				ID:   "call-1",
+				Name: "memory_search",
 				Args: map[string]interface{}{
 					"query": "incident summary",
 				},
@@ -385,7 +371,6 @@ func TestToolCardsExpandWithCtrlO(t *testing.T) {
 			ToolResult: &llm.ToolResult{
 				CallID: "call-1",
 				Tool:   "memory_search",
-				Class:  llm.ToolClassLocal,
 				OK:     true,
 				Status: "completed",
 				Data: map[string]interface{}{
@@ -434,9 +419,8 @@ func TestExpandedToolCardFormatsContentAndHidesProviderResult(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolCall,
 			ToolCall: &llm.ToolCall{
-				ID:    "call-content",
-				Name:  "memory_search",
-				Class: llm.ToolClassLocal,
+				ID:   "call-content",
+				Name: "memory_search",
 			},
 		},
 	})
@@ -450,7 +434,6 @@ func TestExpandedToolCardFormatsContentAndHidesProviderResult(t *testing.T) {
 			ToolResult: &llm.ToolResult{
 				CallID: "call-content",
 				Tool:   "memory_search",
-				Class:  llm.ToolClassLocal,
 				OK:     true,
 				Status: "completed",
 				Data: map[string]interface{}{
@@ -477,6 +460,79 @@ func TestExpandedToolCardFormatsContentAndHidesProviderResult(t *testing.T) {
 	}
 }
 
+func TestExpandedToolCardFormatsStructuredValuesAndDedupesResultMetadata(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.running = true
+	m.activeRunID = 7
+	m.status = statusWaiting
+	m.toolsExpanded = true
+
+	filter := map[string]interface{}{
+		"tags": []interface{}{"security", "incident"},
+	}
+	updated, _ := m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{
+			Type: llm.StreamEventToolCall,
+			ToolCall: &llm.ToolCall{
+				ID:   "call-structured",
+				Name: "web_search",
+				Args: map[string]interface{}{
+					"query":   "OpenClaw news",
+					"filters": filter,
+				},
+			},
+		},
+	})
+	m = updated.(model)
+
+	updated, _ = m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{
+			Type: llm.StreamEventToolResult,
+			ToolResult: &llm.ToolResult{
+				CallID: "call-structured",
+				Tool:   "web_search",
+				OK:     true,
+				Status: "completed",
+				Data: map[string]interface{}{
+					"query":   "OpenClaw news",
+					"filters": filter,
+					"items": []interface{}{
+						map[string]interface{}{
+							"title":   "OpenClaw",
+							"snippet": strings.Repeat("x", 220) + "TAIL_MARKER",
+						},
+					},
+				},
+			},
+		},
+	})
+	next := updated.(model)
+
+	rendered := ansiEscapePattern.ReplaceAllString(next.renderTranscript(), "")
+	if !strings.Contains(rendered, "arg.filters:") || !strings.Contains(rendered, "\"tags\": [") {
+		t.Fatalf("expected structured arg values to render as pretty JSON block, got %q", rendered)
+	}
+	if strings.Contains(rendered, "data.query: OpenClaw news") {
+		t.Fatalf("expected duplicated data.query to be omitted when shown in args, got %q", rendered)
+	}
+	if strings.Contains(rendered, "data.filters:") {
+		t.Fatalf("expected duplicated data.filters to be omitted when shown in args, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "data.items:") || !strings.Contains(rendered, "```json") {
+		t.Fatalf("expected structured result values to render as pretty JSON block, got %q", rendered)
+	}
+	if strings.Contains(rendered, "map[") {
+		t.Fatalf("expected expanded card to avoid one-line map[...] rendering, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "TAIL_MARKER") {
+		t.Fatalf("expected structured result block to avoid truncation, got %q", rendered)
+	}
+}
+
 func TestExpandedToolCardShowsErrorForFailedResult(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.running = true
@@ -490,9 +546,8 @@ func TestExpandedToolCardShowsErrorForFailedResult(t *testing.T) {
 		Event: llm.StreamEvent{
 			Type: llm.StreamEventToolCall,
 			ToolCall: &llm.ToolCall{
-				ID:    "call-err",
-				Name:  "Bash",
-				Class: llm.ToolClassDelegated,
+				ID:   "call-err",
+				Name: "Bash",
 				Args: map[string]interface{}{
 					"command": "ls denied",
 				},
@@ -509,7 +564,6 @@ func TestExpandedToolCardShowsErrorForFailedResult(t *testing.T) {
 			ToolResult: &llm.ToolResult{
 				CallID: "call-err",
 				Tool:   "Bash",
-				Class:  llm.ToolClassDelegated,
 				OK:     false,
 				Status: "error",
 				Error:  "permission denied",
@@ -519,7 +573,7 @@ func TestExpandedToolCardShowsErrorForFailedResult(t *testing.T) {
 	next := updated.(model)
 
 	rendered := ansiEscapePattern.ReplaceAllString(next.renderTranscript(), "")
-	if !strings.Contains(rendered, "tool [provider_native] Bash • failed") {
+	if !strings.Contains(rendered, "tool Bash • failed") {
 		t.Fatalf("expected failed summary in expanded card, got %q", rendered)
 	}
 	if !strings.Contains(rendered, "error: permission denied") {
@@ -527,25 +581,25 @@ func TestExpandedToolCardShowsErrorForFailedResult(t *testing.T) {
 	}
 }
 
-func TestFinishRunClearsToolCallOwnershipCache(t *testing.T) {
+func TestFinishRunClearsToolCardCallIDIndex(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
-	m.toolCallOwnershipByID["call-123"] = llm.ToolClassDelegated
+	m.toolCardIndexByCallID["call-123"] = 1
 
 	m.finishRun(statusIdle)
 
-	if len(m.toolCallOwnershipByID) != 0 {
-		t.Fatalf("expected finishRun to clear call ownership cache")
+	if len(m.toolCardIndexByCallID) != 0 {
+		t.Fatalf("expected finishRun to clear tool card index cache")
 	}
 }
 
-func TestAbortRunClearsToolCallOwnershipCache(t *testing.T) {
+func TestAbortRunClearsToolCardCallIDIndex(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
-	m.toolCallOwnershipByID["call-123"] = llm.ToolClassDelegated
+	m.toolCardIndexByCallID["call-123"] = 1
 
 	m.abortRun("aborted")
 
-	if len(m.toolCallOwnershipByID) != 0 {
-		t.Fatalf("expected abortRun to clear call ownership cache")
+	if len(m.toolCardIndexByCallID) != 0 {
+		t.Fatalf("expected abortRun to clear tool card index cache")
 	}
 }
 

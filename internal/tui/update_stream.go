@@ -39,49 +39,33 @@ func (m *model) handleStreamEvent(event llm.StreamEvent) {
 		m.refreshViewport(true)
 	case llm.StreamEventToolCall:
 		toolName := "tool"
-		toolClass := llm.ToolClassUnspecified
 		callID := ""
 		args := map[string]interface{}{}
+		// Tool execution is provider-side (including localclaw MCP tools), so
+		// cards intentionally do not render ownership/class labels.
 		if event.ToolCall != nil && strings.TrimSpace(event.ToolCall.Name) != "" {
 			toolName = event.ToolCall.Name
 		}
 		if event.ToolCall != nil {
-			toolClass = event.ToolCall.Class
-			class := string(event.ToolCall.Class)
-			if class == "" {
-				class = "unspecified"
-			}
 			callID = strings.TrimSpace(event.ToolCall.ID)
-			if callID != "" {
-				m.toolCallOwnershipByID[callID] = toolClass
-			}
 			displayCallID := callID
 			if displayCallID == "" {
 				displayCallID = "n/a"
 			}
 			args = copyInterfaceMap(event.ToolCall.Args)
-			m.addVerbose("tool call details: id=%s class=%s args=%s", displayCallID, class, summarizeVerboseMap(event.ToolCall.Args))
+			m.addVerbose("tool call details: id=%s args=%s", displayCallID, summarizeVerboseMap(event.ToolCall.Args))
 		}
-		ownership := toolOwnershipLabel(toolClass)
-		m.setStatus(fmt.Sprintf("tool [%s] %s", ownership, toolName))
-		m.recordToolCallCard(callID, toolName, ownership, args)
+		m.setStatus(fmt.Sprintf("tool %s", toolName))
+		m.recordToolCallCard(callID, toolName, args)
 		m.refreshViewport(true)
 	case llm.StreamEventToolResult:
 		if event.ToolResult != nil {
 			toolName := event.ToolResult.Tool
-			toolClass := event.ToolResult.Class
 			callID := strings.TrimSpace(event.ToolResult.CallID)
-			if toolClass == llm.ToolClassUnspecified && callID != "" {
-				toolClass = m.toolCallOwnershipByID[callID]
-			}
-			if callID != "" {
-				delete(m.toolCallOwnershipByID, callID)
-			}
 			if toolName == "" && event.ToolCall != nil {
 				toolName = event.ToolCall.Name
 			}
-			ownership := toolOwnershipLabel(toolClass)
-			m.recordToolResultCard(callID, toolName, ownership, event.ToolResult)
+			m.recordToolResultCard(callID, toolName, event.ToolResult)
 			if callID == "" {
 				callID = "n/a"
 			}

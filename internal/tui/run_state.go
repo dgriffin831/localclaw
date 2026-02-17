@@ -45,7 +45,6 @@ func (m *model) submitInput() tea.Cmd {
 }
 
 func (m *model) startRun(input string) {
-	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
 	m.runSeq++
 	m.activeRunID = m.runSeq
 	m.running = true
@@ -95,7 +94,6 @@ func (m *model) finishRun(finalStatus string) {
 	m.running = false
 	m.setStatus(finalStatus)
 	m.activeThinkingMessage = ""
-	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
 	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 	m.activeRunID = 0
 	m.activeAssistantIdx = -1
@@ -112,7 +110,6 @@ func (m *model) abortRun(message string) {
 		m.runCancel()
 		m.runCancel = nil
 	}
-	resetToolCallOwnershipByID(m.toolCallOwnershipByID)
 	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 	if m.running {
 		m.running = false

@@ -20,6 +20,9 @@ Implementation location:
   - assistant text blocks -> `StreamEventDelta`
   - assistant tool-use blocks -> `StreamEventToolCall`
   - user tool-result blocks -> `StreamEventToolResult`
+    - result data normalizes delegated payloads to execution output context
+    - when `tool_use_result.structured_content` is present, it is promoted into canonical result data fields
+    - provider raw payload remains available only in hidden/internal `provider_result`
   - discovered provider session IDs -> `StreamEventProviderMetadata` (`provider=claudecode`, `session_id=...`)
   - result event `result` field -> `StreamEventFinal`
 - if a line is not valid JSON, adapter falls back to treating it as raw delta text.

@@ -108,7 +108,7 @@ TUI slash commands:
 If tools are not yet discovered, `/tools` triggers a background probe and refreshes once metadata arrives.
 For providers that omit explicit tool metadata in stream events (for example Codex), localclaw runs a provider-side JSON self-report probe as a fallback.
 
-`/models` lists discovered provider model catalogs grouped by provider and marks the active selector.
+`/models` lists discovered provider model catalogs grouped by provider and includes an `active` summary.
 `/models refresh` forces a re-discovery run.
 `/model` changes the active provider/model/reasoning selector for the current TUI session and applies it to subsequent prompts and metadata probes.
 

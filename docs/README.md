@@ -10,6 +10,7 @@ This directory is the implementation-level documentation surface for `localclaw`
 - `CRON.md`: recurring scheduler behavior, implementation, and usage.
 - `HEARTBEATS.md`: heartbeat scheduling, prompt behavior, and `HEARTBEAT.md` usage.
 - `MEMORY.md`: retrieval-v2 search/grep model and implementation behavior.
+- `TOOLS.md`: MCP/provider tools architecture, execution model, and implementation details.
 - `SESSIONS.md`: session identity, continuation, storage, and lifecycle behavior.
 - `TUI.md`: terminal UX model, keybindings, and slash commands.
 - `SLACK.md`: Slack outbound channel setup and implementation details.

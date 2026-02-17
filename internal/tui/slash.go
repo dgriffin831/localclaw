@@ -247,7 +247,6 @@ func (m *model) handleSessionDelete(rawSessionID string) {
 func (m *model) toolsSummary() string {
 	lines := []string{
 		fmt.Sprintf("provider=%s", m.activeProvider()),
-		"effective selector: " + valueOrDefault(m.effectiveSelector(), "n/a"),
 		"tools:",
 	}
 	if len(m.providerTools) == 0 {
@@ -269,7 +268,7 @@ func (m *model) toolsSummary() string {
 func (m *model) modelsSummary() string {
 	lines := []string{
 		"models:",
-		"active selector: " + valueOrDefault(m.effectiveSelector(), "n/a"),
+		"active: " + m.activeSummary(),
 	}
 	if m.app == nil {
 		lines = append(lines, "- runtime unavailable")
@@ -451,6 +450,26 @@ func (m *model) effectiveSelector() string {
 	return fmt.Sprintf("%s/%s/%s", provider, model, reasoning)
 }
 
+func (m *model) activeSummary() string {
+	provider := strings.TrimSpace(m.activeProvider())
+	if provider == "" {
+		provider = "unknown"
+	}
+	model := strings.TrimSpace(m.effectiveModel())
+	reasoning := strings.TrimSpace(m.effectiveReasoning())
+	if model != "" {
+		if reasoning == "" {
+			return fmt.Sprintf("%s/%s", provider, model)
+		}
+		return fmt.Sprintf("%s/%s/%s", provider, model, reasoning)
+	}
+	summary := provider + " model=unknown"
+	if reasoning != "" {
+		summary += " reasoning=" + reasoning
+	}
+	return summary
+}
+
 func (m *model) selectorOverride() string {
 	provider := strings.TrimSpace(m.providerOverride)
 	model := strings.TrimSpace(m.modelOverride)
@@ -591,23 +610,6 @@ func (m *model) handleModelSelectionSlash(raw string) {
 		return
 	}
 	m.addSystem(fmt.Sprintf("active selector set to %s", selector))
-}
-
-func toolOwnershipLabel(class llm.ToolClass) string {
-	switch class {
-	case llm.ToolClassDelegated:
-		return "provider_native"
-	case llm.ToolClassLocal:
-		return "localclaw_mcp"
-	default:
-		return "unspecified"
-	}
-}
-
-func resetToolCallOwnershipByID(values map[string]llm.ToolClass) {
-	for id := range values {
-		delete(values, id)
-	}
 }
 
 func resetToolCardIndexByCallID(values map[string]int) {

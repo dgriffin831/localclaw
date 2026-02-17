@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -51,12 +52,11 @@ func (m *model) addAssistant(text string, thinkingPlaceholder bool) {
 	m.activeAssistantIdx = len(m.messages) - 1
 }
 
-func (m *model) recordToolCallCard(callID, toolName, ownership string, args map[string]interface{}) {
+func (m *model) recordToolCallCard(callID, toolName string, args map[string]interface{}) {
 	card := &toolCardMessage{
-		CallID:    strings.TrimSpace(callID),
-		ToolName:  valueOrDefault(strings.TrimSpace(toolName), "tool"),
-		Ownership: valueOrDefault(strings.TrimSpace(ownership), "unspecified"),
-		Args:      copyInterfaceMap(args),
+		CallID:   strings.TrimSpace(callID),
+		ToolName: valueOrDefault(strings.TrimSpace(toolName), "tool"),
+		Args:     copyInterfaceMap(args),
 	}
 	idx := m.appendToolCard(card)
 	if card.CallID != "" {
@@ -64,7 +64,7 @@ func (m *model) recordToolCallCard(callID, toolName, ownership string, args map[
 	}
 }
 
-func (m *model) recordToolResultCard(callID, toolName, ownership string, result *llm.ToolResult) {
+func (m *model) recordToolResultCard(callID, toolName string, result *llm.ToolResult) {
 	if result == nil {
 		return
 	}
@@ -92,14 +92,8 @@ func (m *model) recordToolResultCard(callID, toolName, ownership string, result 
 	if strings.TrimSpace(toolName) != "" {
 		card.ToolName = strings.TrimSpace(toolName)
 	}
-	if strings.TrimSpace(ownership) != "" {
-		card.Ownership = strings.TrimSpace(ownership)
-	}
 	if strings.TrimSpace(card.ToolName) == "" {
 		card.ToolName = "tool"
-	}
-	if strings.TrimSpace(card.Ownership) == "" {
-		card.Ownership = "unspecified"
 	}
 	card.HasResult = true
 	card.OK = result.OK
@@ -190,9 +184,8 @@ func (m *model) renderToolCard(card *toolCardMessage, expanded bool) string {
 		return ""
 	}
 	toolName := valueOrDefault(strings.TrimSpace(card.ToolName), "tool")
-	ownership := valueOrDefault(strings.TrimSpace(card.Ownership), "unspecified")
 	status := resolveToolCardStatus(card)
-	header := fmt.Sprintf("tool [%s] %s • %s", ownership, toolName, status)
+	header := fmt.Sprintf("tool %s • %s", toolName, status)
 	if !expanded {
 		return header
 	}
@@ -211,7 +204,7 @@ func (m *model) renderToolCard(card *toolCardMessage, expanded bool) string {
 		if strings.TrimSpace(card.Error) != "" {
 			lines = append(lines, "error: "+truncateToolCardText(card.Error))
 		}
-		dataLines := formatToolCardData(card.Data)
+		dataLines := formatToolCardData(card.ToolName, card.Args, card.Data)
 		if len(dataLines) == 0 {
 			lines = append(lines, "data: none")
 		} else {
@@ -261,12 +254,12 @@ func formatToolCardMap(prefix string, values map[string]interface{}) []string {
 	sort.Strings(keys)
 	lines := make([]string, 0, len(keys))
 	for _, key := range keys {
-		lines = append(lines, fmt.Sprintf("%s%s: %s", prefix, key, truncateToolCardText(fmt.Sprint(values[key]))))
+		lines = append(lines, formatToolCardValue(prefix+key, values[key])...)
 	}
 	return lines
 }
 
-func formatToolCardData(values map[string]interface{}) []string {
+func formatToolCardData(toolName string, args map[string]interface{}, values map[string]interface{}) []string {
 	if len(values) == 0 {
 		return nil
 	}
@@ -275,22 +268,24 @@ func formatToolCardData(values map[string]interface{}) []string {
 		if key == "provider_result" {
 			continue
 		}
+		if shouldSkipToolCardDataKey(toolName, args, key, values[key]) {
+			continue
+		}
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	lines := make([]string, 0, len(keys))
 	for _, key := range keys {
-		if key == "content" {
-			lines = append(lines, formatToolCardContentBlock("data.content", values[key])...)
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("data.%s: %s", key, truncateToolCardText(fmt.Sprint(values[key]))))
+		lines = append(lines, formatToolCardValue("data."+key, values[key])...)
 	}
 	return lines
 }
 
-func formatToolCardContentBlock(label string, raw interface{}) []string {
-	language, content := formatToolCardContent(raw)
+func formatToolCardValue(label string, raw interface{}) []string {
+	language, content, block := formatToolCardContent(raw)
+	if !block {
+		return []string{fmt.Sprintf("%s: %s", label, content)}
+	}
 	lines := []string{label + ":"}
 	fence := "```"
 	if language != "" {
@@ -306,30 +301,40 @@ func formatToolCardContentBlock(label string, raw interface{}) []string {
 	return lines
 }
 
-func formatToolCardContent(raw interface{}) (language string, content string) {
+func formatToolCardContent(raw interface{}) (language string, content string, block bool) {
 	switch value := raw.(type) {
 	case nil:
-		return "", ""
+		return "", "(empty)", false
 	case string:
 		if pretty, ok := prettyToolCardJSON(value); ok {
-			return "json", pretty
+			return "json", pretty, true
 		}
-		return "", strings.TrimRight(value, "\n")
+		trimmed := strings.TrimRight(value, "\n")
+		if shouldRenderToolCardBlock(trimmed) {
+			return "text", trimmed, true
+		}
+		return "", truncateToolCardText(trimmed), false
 	default:
-		if marshaled, err := json.MarshalIndent(value, "", "  "); err == nil {
-			return "json", string(marshaled)
+		if isStructuredToolCardValue(value) {
+			if marshaled, err := json.MarshalIndent(value, "", "  "); err == nil {
+				return "json", string(marshaled), true
+			}
 		}
 		text := fmt.Sprint(value)
 		if pretty, ok := prettyToolCardJSON(text); ok {
-			return "json", pretty
+			return "json", pretty, true
 		}
-		return "", strings.TrimRight(text, "\n")
+		trimmed := strings.TrimRight(text, "\n")
+		if shouldRenderToolCardBlock(trimmed) {
+			return "text", trimmed, true
+		}
+		return "", truncateToolCardText(trimmed), false
 	}
 }
 
 func prettyToolCardJSON(raw string) (string, bool) {
 	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" || !json.Valid([]byte(trimmed)) {
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') || !json.Valid([]byte(trimmed)) {
 		return "", false
 	}
 	var buf bytes.Buffer
@@ -337,6 +342,44 @@ func prettyToolCardJSON(raw string) (string, bool) {
 		return "", false
 	}
 	return buf.String(), true
+}
+
+func shouldSkipToolCardDataKey(toolName string, args map[string]interface{}, key string, value interface{}) bool {
+	if key == "tool" && strings.EqualFold(strings.TrimSpace(fmt.Sprint(value)), strings.TrimSpace(toolName)) {
+		return true
+	}
+	if key == "arguments" && len(args) > 0 && reflect.DeepEqual(value, args) {
+		return true
+	}
+	if len(args) == 0 {
+		return false
+	}
+	argValue, ok := args[key]
+	if !ok {
+		return false
+	}
+	return reflect.DeepEqual(argValue, value)
+}
+
+func shouldRenderToolCardBlock(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	return strings.Contains(trimmed, "\n") || len(trimmed) > 180
+}
+
+func isStructuredToolCardValue(value interface{}) bool {
+	typed := reflect.TypeOf(value)
+	if typed == nil {
+		return false
+	}
+	switch typed.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Array:
+		return true
+	default:
+		return false
+	}
 }
 
 func truncateToolCardText(value string) string {

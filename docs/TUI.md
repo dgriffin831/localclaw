@@ -98,7 +98,7 @@ Command behavior details:
 - `/tools` prints provider plus provider-reported `tools` only (no runtime fallback list).
 - when provider tools are not yet discovered, `/tools` starts a background probe and refreshes the summary when metadata arrives.
 - for providers that do not emit a tool list in metadata events (for example Codex), localclaw uses a provider-side JSON self-report probe as fallback.
-- `/models` prints discovered provider model catalogs grouped by provider and marks the active selector.
+- `/models` prints discovered provider model catalogs grouped by provider and shows an `active:` summary line.
 - `/models refresh` forces provider model catalog re-discovery.
 - `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
 - `/verbose off` suppresses the additional `[verbose]` diagnostics.
@@ -165,11 +165,13 @@ Completion behavior:
 - Final payload replaces assistant text when non-empty.
 - If final and delta are both empty, assistant message becomes `(no output)`.
 - Assistant final text is appended to transcript file and token accounting.
-- Tool call/result activity renders as transcript tool cards with ownership labels (`provider_native` or `localclaw_mcp`).
-- Collapsed cards show summary (`tool`, ownership, terminal status).
-- Expanded cards include call ID, arguments, status, error (if any), and result data keys/values.
+- Tool call/result activity renders as transcript tool cards from provider stream events.
+- Collapsed cards show summary (`tool`, tool name, terminal status).
+- Expanded cards include call ID, arguments, status, error (if any), and canonical result data fields.
+- Structured argument/result values (maps, slices, JSON strings) render as multiline fenced blocks for readability.
+- Expanded cards omit duplicated result metadata when equivalent context is already shown in call/header fields.
 - `data.provider_result` is intentionally hidden in expanded cards.
-- `data.content` is rendered in a fenced block without truncation; JSON content is pretty-printed.
+- Long or multiline plain-text values render in fenced text blocks without truncation.
 
 ## Rendering
 

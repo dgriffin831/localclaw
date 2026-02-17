@@ -54,8 +54,8 @@ func (m *model) statusView() string {
 
 func (m *model) statusSettings(innerWidth int) string {
 	provider := m.activeProvider()
-	model := valueOrDefault(m.effectiveModel(), "n/a")
-	reasoning := valueOrDefault(m.effectiveReasoning(), "n/a")
+	model := valueOrDefault(m.effectiveModel(), "unknown")
+	reasoning := valueOrDefault(m.effectiveReasoning(), "none")
 	settings := fmt.Sprintf(
 		"provider:%s  model:%s  reasoning:%s  verbose:%s  tools:%s  mouse:%s",
 		provider,

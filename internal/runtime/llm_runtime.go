@@ -84,6 +84,8 @@ func (a *App) promptStreamWithSessionContinuation(ctx context.Context, resolutio
 						providerEvents = nil
 						continue
 					}
+					// Runtime is pass-through for provider tool events. Tool execution is
+					// provider-side (including localclaw MCP tools), not host-side.
 					if evt.Type == llm.StreamEventProviderMetadata && evt.ProviderMetadata != nil {
 						a.persistProviderSessionID(ctx, resolution, attemptReq, evt.ProviderMetadata)
 					}

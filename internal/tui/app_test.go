@@ -1102,6 +1102,28 @@ func TestHandleSlashModelsReportsRuntimeUnavailable(t *testing.T) {
 	}
 }
 
+func TestHandleSlashModelsActiveSummaryUsesKnownStateWhenModelUnknown(t *testing.T) {
+	m, _ := newRuntimeBackedModel(t)
+	m.cfg.LLM.Provider = "codex"
+	m.cfg.LLM.Codex.Model = ""
+	m.cfg.LLM.Codex.ReasoningDefault = "medium"
+	m.providerOverride = "codex"
+	m.providerName = "codex"
+	m.providerModel = ""
+	_ = m.handleSlash("/models")
+
+	if len(m.messages) == 0 {
+		t.Fatalf("expected /models to add a system message")
+	}
+	got := m.messages[len(m.messages)-1].Raw
+	if !strings.Contains(got, "active: codex model=unknown reasoning=medium") {
+		t.Fatalf("expected /models active summary to show known provider/reasoning state, got %q", got)
+	}
+	if strings.Contains(got, "active selector:") || strings.Contains(got, "n/a") {
+		t.Fatalf("expected /models active summary to avoid active selector/n/a fallback text, got %q", got)
+	}
+}
+
 func TestHandleSlashStatusIncludesEffectiveSelector(t *testing.T) {
 	cfg := config.Default()
 	cfg.LLM.Provider = "codex"
@@ -1124,6 +1146,31 @@ func TestHandleSlashStatusIncludesEffectiveSelector(t *testing.T) {
 	}
 	if !strings.Contains(got, "effective_selector=codex/gpt-5-mini/high") {
 		t.Fatalf("expected status to include effective selector, got %q", got)
+	}
+}
+
+func TestComposerFooterShowsKnownStateWhenModelUnknown(t *testing.T) {
+	cfg := config.Default()
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.Model = ""
+	cfg.LLM.Codex.ReasoningDefault = "medium"
+
+	m := newModel(context.Background(), nil, cfg)
+	m.width = 220
+	m.mouseEnabled = false
+
+	got := ansiEscapePattern.ReplaceAllString(m.composerFooterView(), "")
+	if !strings.Contains(got, "provider:codex") {
+		t.Fatalf("expected footer to include provider codex, got %q", got)
+	}
+	if !strings.Contains(got, "model:unknown") {
+		t.Fatalf("expected footer to show unknown model instead of n/a, got %q", got)
+	}
+	if !strings.Contains(got, "reasoning:medium") {
+		t.Fatalf("expected footer to include known reasoning default, got %q", got)
+	}
+	if strings.Contains(got, "model:n/a") {
+		t.Fatalf("expected footer to avoid model n/a fallback, got %q", got)
 	}
 }
 

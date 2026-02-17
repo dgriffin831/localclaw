@@ -49,8 +49,8 @@
 ## Tool boundary
 
 - Local capabilities are exposed via the MCP server (`localclaw mcp serve`).
-- Provider-native tools remain provider-owned (`provider_native` in UI/event ownership).
-- localclaw does not execute a legacy host-managed structured tool loop in the prompt stream path.
+- Tool execution is provider-side only (including localclaw tools surfaced through MCP).
+- localclaw does not execute a host-managed structured tool loop in the prompt stream path.
 
 ## Explicitly out of scope
 

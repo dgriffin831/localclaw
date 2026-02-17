@@ -588,6 +588,18 @@ func TestParseStreamJSONLineMCPToolCallEvents(t *testing.T) {
 	if startEvents[0].ToolCall.Name != "localclaw_workspace_status" {
 		t.Fatalf("expected mcp tool name localclaw_workspace_status, got %q", startEvents[0].ToolCall.Name)
 	}
+	if got, _ := startEvents[0].ToolCall.Args["agent_id"].(string); got != "default" {
+		t.Fatalf("expected flattened mcp args to include agent_id, got %#v", startEvents[0].ToolCall.Args)
+	}
+	if _, ok := startEvents[0].ToolCall.Args["arguments"]; ok {
+		t.Fatalf("expected mcp call args to omit arguments wrapper, got %#v", startEvents[0].ToolCall.Args)
+	}
+	if _, ok := startEvents[0].ToolCall.Args["tool"]; ok {
+		t.Fatalf("expected mcp call args to omit tool wrapper, got %#v", startEvents[0].ToolCall.Args)
+	}
+	if _, ok := startEvents[0].ToolCall.Args["server"]; ok {
+		t.Fatalf("expected mcp call args to omit server wrapper, got %#v", startEvents[0].ToolCall.Args)
+	}
 
 	completeEvents, err := parseStreamJSONLine(completeLine, nil)
 	if err != nil {
@@ -601,6 +613,21 @@ func TestParseStreamJSONLineMCPToolCallEvents(t *testing.T) {
 	}
 	if !completeEvents[0].ToolResult.OK {
 		t.Fatalf("expected mcp completed result to be OK")
+	}
+	if got, _ := completeEvents[0].ToolResult.Data["ok"].(bool); !got {
+		t.Fatalf("expected mcp structured_content to map to tool result data, got %#v", completeEvents[0].ToolResult.Data)
+	}
+	if _, ok := completeEvents[0].ToolResult.Data["result"]; ok {
+		t.Fatalf("expected mcp result wrapper to be omitted, got %#v", completeEvents[0].ToolResult.Data)
+	}
+	if _, ok := completeEvents[0].ToolResult.Data["arguments"]; ok {
+		t.Fatalf("expected mcp arguments wrapper to be omitted from result data, got %#v", completeEvents[0].ToolResult.Data)
+	}
+	if _, ok := completeEvents[0].ToolResult.Data["tool"]; ok {
+		t.Fatalf("expected mcp tool wrapper to be omitted from result data, got %#v", completeEvents[0].ToolResult.Data)
+	}
+	if _, ok := completeEvents[0].ToolResult.Data["server"]; ok {
+		t.Fatalf("expected mcp server wrapper to be omitted from result data, got %#v", completeEvents[0].ToolResult.Data)
 	}
 }
 

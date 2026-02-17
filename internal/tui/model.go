@@ -49,7 +49,6 @@ type chatMessage struct {
 type toolCardMessage struct {
 	CallID    string
 	ToolName  string
-	Ownership string
 	Args      map[string]interface{}
 	HasResult bool
 	OK        bool
@@ -125,7 +124,6 @@ type model struct {
 	providerModelCatalogs           map[string]llm.ProviderModelCatalog
 	providerModelCatalogErrors      map[string]string
 	providerModelsDiscoveryInFlight bool
-	toolCallOwnershipByID           map[string]llm.ToolClass
 	toolCardIndexByCallID           map[string]int
 
 	streamDeltaEvents int
@@ -285,7 +283,6 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 		providerName:               strings.TrimSpace(cfg.LLM.Provider),
 		providerModelCatalogs:      map[string]llm.ProviderModelCatalog{},
 		providerModelCatalogErrors: map[string]string{},
-		toolCallOwnershipByID:      map[string]llm.ToolClass{},
 		toolCardIndexByCallID:      map[string]int{},
 	}
 	m.syncSessionMetadata()

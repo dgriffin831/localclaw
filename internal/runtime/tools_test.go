@@ -793,7 +793,6 @@ func TestPromptIncludesBootstrapContextAfterCompaction(t *testing.T) {
 func TestPromptStreamForSessionPassesThroughProviderToolEvents(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)
-	respondCalled := false
 
 	app.llm = &captureRequestLLMClient{
 		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
@@ -804,10 +803,6 @@ func TestPromptStreamForSessionPassesThroughProviderToolEvents(t *testing.T) {
 				ToolCall: &llm.ToolCall{
 					ID:   "call-1",
 					Name: "Bash",
-					Respond: func(ctx context.Context, result llm.ToolResult) error {
-						respondCalled = true
-						return nil
-					},
 				},
 			}
 			events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "final output"}
@@ -849,9 +844,6 @@ func TestPromptStreamForSessionPassesThroughProviderToolEvents(t *testing.T) {
 	}
 	if sawToolResult {
 		t.Fatalf("did not expect runtime to execute tool loop")
-	}
-	if respondCalled {
-		t.Fatalf("did not expect runtime to invoke tool responder")
 	}
 }
 

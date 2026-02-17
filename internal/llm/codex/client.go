@@ -78,7 +78,6 @@ func NewClient(settings Settings) *LocalClient {
 func (c *LocalClient) Capabilities() llm.Capabilities {
 	return llm.Capabilities{
 		SupportsRequestOptions: true,
-		StructuredToolCalls:    false,
 	}
 }
 
@@ -733,7 +732,17 @@ func deriveDelegatedToolName(item map[string]interface{}) string {
 
 func extractDelegatedToolArgs(item map[string]interface{}) map[string]interface{} {
 	args := map[string]interface{}{}
-	for _, key := range []string{"server", "tool", "query", "action", "arguments"} {
+	for _, source := range []string{"arguments", "input"} {
+		if payload, ok := item[source].(map[string]interface{}); ok {
+			for key, value := range payload {
+				if value == nil {
+					continue
+				}
+				args[key] = value
+			}
+		}
+	}
+	for _, key := range []string{"query", "action"} {
 		value, ok := item[key]
 		if !ok || value == nil {
 			continue
@@ -747,10 +756,14 @@ func extractDelegatedToolArgs(item map[string]interface{}) map[string]interface{
 }
 
 func extractDelegatedToolResultData(item map[string]interface{}) map[string]interface{} {
+	if resultData := normalizeDelegatedResultPayload(item["result"]); len(resultData) > 0 {
+		return resultData
+	}
+
 	data := map[string]interface{}{}
 	for key, value := range item {
 		switch key {
-		case "id", "type", "status", "error":
+		case "id", "type", "status", "error", "server", "tool", "arguments", "result":
 			continue
 		}
 		if value == nil {
@@ -762,6 +775,81 @@ func extractDelegatedToolResultData(item map[string]interface{}) map[string]inte
 		return nil
 	}
 	return data
+}
+
+func normalizeDelegatedResultPayload(raw interface{}) map[string]interface{} {
+	switch typed := raw.(type) {
+	case nil:
+		return nil
+	case map[string]interface{}:
+		if structured := normalizeDelegatedStructuredContent(typed); len(structured) > 0 {
+			return structured
+		}
+		data := map[string]interface{}{}
+		for key, value := range typed {
+			switch key {
+			case "id", "type", "status", "error", "server", "tool", "arguments":
+				continue
+			}
+			if value == nil {
+				continue
+			}
+			data[key] = value
+		}
+		if len(data) == 0 {
+			return nil
+		}
+		return data
+	default:
+		return normalizeDelegatedStructuredValue(raw)
+	}
+}
+
+func normalizeDelegatedStructuredContent(payload map[string]interface{}) map[string]interface{} {
+	if raw, ok := payload["structured_content"]; ok {
+		return normalizeDelegatedStructuredValue(raw)
+	}
+	if raw, ok := payload["structuredContent"]; ok {
+		return normalizeDelegatedStructuredValue(raw)
+	}
+	return nil
+}
+
+func normalizeDelegatedStructuredValue(raw interface{}) map[string]interface{} {
+	switch typed := raw.(type) {
+	case nil:
+		return nil
+	case map[string]interface{}:
+		if len(typed) == 0 {
+			return nil
+		}
+		out := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			if value == nil {
+				continue
+			}
+			out[key] = value
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		var parsed interface{}
+		if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+			if parsedMap, ok := parsed.(map[string]interface{}); ok && len(parsedMap) > 0 {
+				return parsedMap
+			}
+			return map[string]interface{}{"content": parsed}
+		}
+		return map[string]interface{}{"content": trimmed}
+	default:
+		return map[string]interface{}{"content": typed}
+	}
 }
 
 func extractCommandText(item map[string]interface{}) string {

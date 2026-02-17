@@ -387,6 +387,43 @@ func TestParseStreamJSONLineToolUseAndToolResult(t *testing.T) {
 	}
 }
 
+func TestParseStreamJSONLineToolResultPrefersStructuredContent(t *testing.T) {
+	toolNames := map[string]string{}
+
+	toolUseLine := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_9","name":"localclaw_workspace_status","input":{"agent_id":"default"}}]}}`
+	events, resultErr, err := parseStreamJSONLine(toolUseLine, toolNames)
+	if err != nil {
+		t.Fatalf("parse tool_use line: %v", err)
+	}
+	if resultErr != "" {
+		t.Fatalf("unexpected result error: %q", resultErr)
+	}
+	if len(events) != 1 || events[0].Type != llm.StreamEventToolCall {
+		t.Fatalf("expected tool call event, got %#v", events)
+	}
+
+	toolResultLine := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_9","content":"ignored fallback text","is_error":false}]},"tool_use_result":{"structured_content":{"ok":true,"count":1},"server":"localclaw","tool":"localclaw_workspace_status","arguments":{"agent_id":"default"}}}`
+	events, resultErr, err = parseStreamJSONLine(toolResultLine, toolNames)
+	if err != nil {
+		t.Fatalf("parse tool_result line: %v", err)
+	}
+	if resultErr != "" {
+		t.Fatalf("unexpected result error: %q", resultErr)
+	}
+	if len(events) != 1 || events[0].Type != llm.StreamEventToolResult || events[0].ToolResult == nil {
+		t.Fatalf("expected one tool_result event, got %#v", events)
+	}
+	if got, _ := events[0].ToolResult.Data["ok"].(bool); !got {
+		t.Fatalf("expected structured_content to map into result data, got %#v", events[0].ToolResult.Data)
+	}
+	if got, _ := events[0].ToolResult.Data["count"].(float64); got != 1 {
+		t.Fatalf("expected structured_content count to map into result data, got %#v", events[0].ToolResult.Data)
+	}
+	if _, ok := events[0].ToolResult.Data["content"]; ok {
+		t.Fatalf("expected structured_content to replace fallback content text, got %#v", events[0].ToolResult.Data)
+	}
+}
+
 func TestParseStreamJSONLineToolResultError(t *testing.T) {
 	toolNames := map[string]string{}
 	line := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_404","content":"permission denied","is_error":true}]}}`

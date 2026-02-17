@@ -21,18 +21,17 @@ type ToolClass string
 
 const (
 	ToolClassUnspecified ToolClass = ""
-	ToolClassLocal       ToolClass = "local"
-	ToolClassDelegated   ToolClass = "delegated"
+	// ToolClassDelegated indicates the provider executed the tool call.
+	// localclaw tools are exposed to providers through MCP and execute on the
+	// provider side; runtime does not host a separate tool execution loop.
+	ToolClassDelegated ToolClass = "delegated"
 )
 
-type ToolResultResponder func(ctx context.Context, result ToolResult) error
-
 type ToolCall struct {
-	ID      string
-	Name    string
-	Args    map[string]interface{}
-	Class   ToolClass
-	Respond ToolResultResponder
+	ID    string
+	Name  string
+	Args  map[string]interface{}
+	Class ToolClass
 }
 
 type ToolResult struct {
@@ -116,7 +115,6 @@ type Request struct {
 
 type Capabilities struct {
 	SupportsRequestOptions bool
-	StructuredToolCalls    bool
 }
 
 // Client is the provider-agnostic baseline runtime contract.

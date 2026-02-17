@@ -18,6 +18,7 @@ const (
 
 // DiscoverProviderMetadata probes the provider for current model/tool metadata
 // without persisting provider session IDs into localclaw session state.
+// Provider-reported tools are the source of truth for runtime/TUI tool lists.
 func (a *App) DiscoverProviderMetadata(ctx context.Context, agentID string, opts llm.PromptOptions) (llm.ProviderMetadata, error) {
 	resolvedAgentID := ResolveAgentID(agentID)
 	configuredProvider := a.resolveProvider(opts.ProviderOverride)

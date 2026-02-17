@@ -75,7 +75,6 @@ func (c *LocalClient) ValidateMCPWiring() error {
 func (c *LocalClient) Capabilities() llm.Capabilities {
 	return llm.Capabilities{
 		SupportsRequestOptions: true,
-		StructuredToolCalls:    false,
 	}
 }
 
@@ -748,16 +747,7 @@ func parseUserMessageToolResultEvents(env claudeStreamEnvelope, toolNames map[st
 			}
 		} else {
 			result.Status = "completed"
-			result.Data = map[string]interface{}{}
-			if text := renderToolResultText(item.Content); text != "" {
-				result.Data["content"] = text
-			}
-			if len(env.ToolUseResult) > 0 {
-				result.Data["provider_result"] = env.ToolUseResult
-			}
-			if len(result.Data) == 0 {
-				result.Data = nil
-			}
+			result.Data = normalizeClaudeToolResultData(item.Content, env.ToolUseResult)
 		}
 
 		events = append(events, llm.StreamEvent{
@@ -766,6 +756,81 @@ func parseUserMessageToolResultEvents(env claudeStreamEnvelope, toolNames map[st
 		})
 	}
 	return events, nil
+}
+
+func normalizeClaudeToolResultData(content interface{}, providerResult map[string]interface{}) map[string]interface{} {
+	if len(providerResult) > 0 {
+		if data := normalizeClaudeStructuredProviderResult(providerResult); len(data) > 0 {
+			data["provider_result"] = providerResult
+			return data
+		}
+	}
+
+	if data := normalizeClaudeStructuredContent(content); len(data) > 0 {
+		if len(providerResult) > 0 {
+			data["provider_result"] = providerResult
+		}
+		return data
+	}
+
+	result := map[string]interface{}{}
+	if text := renderToolResultText(content); text != "" {
+		result["content"] = text
+	}
+	if len(providerResult) > 0 {
+		result["provider_result"] = providerResult
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func normalizeClaudeStructuredProviderResult(providerResult map[string]interface{}) map[string]interface{} {
+	if data := normalizeClaudeStructuredContent(providerResult["structured_content"]); len(data) > 0 {
+		return data
+	}
+	if data := normalizeClaudeStructuredContent(providerResult["structuredContent"]); len(data) > 0 {
+		return data
+	}
+	return nil
+}
+
+func normalizeClaudeStructuredContent(raw interface{}) map[string]interface{} {
+	switch typed := raw.(type) {
+	case nil:
+		return nil
+	case map[string]interface{}:
+		if len(typed) == 0 {
+			return nil
+		}
+		out := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			if value == nil {
+				continue
+			}
+			out[key] = value
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		var parsed interface{}
+		if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+			if parsedMap, ok := parsed.(map[string]interface{}); ok && len(parsedMap) > 0 {
+				return parsedMap
+			}
+			return map[string]interface{}{"content": parsed}
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 func renderToolResultText(raw interface{}) string {
