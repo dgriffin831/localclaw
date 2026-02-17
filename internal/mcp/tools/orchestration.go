@@ -13,8 +13,8 @@ import (
 const (
 	ToolLocalclawSessionsList    = "localclaw_sessions_list"
 	ToolLocalclawSessionsHistory = "localclaw_sessions_history"
-	ToolLocalclawSessionsSend    = "localclaw_sessions_send"
 	ToolLocalclawSessionStatus   = "localclaw_session_status"
+	ToolLocalclawSessionsDelete  = "localclaw_sessions_delete"
 )
 
 var ErrSessionNotFound = errors.New("session not found")
@@ -48,14 +48,13 @@ type SessionsHistoryResult struct {
 	Total int                  `json:"total"`
 }
 
-type SessionsSendRequest struct {
+type SessionsDeleteRequest struct {
 	AgentID   string
 	SessionID string
-	Input     string
 }
 
-type SessionsSendResult struct {
-	Output string `json:"output"`
+type SessionsDeleteResult struct {
+	Deleted bool `json:"deleted"`
 }
 
 type SessionStatusRequest struct {
@@ -70,13 +69,13 @@ type SessionStatusResult struct {
 type OrchestrationBackend interface {
 	SessionsList(ctx context.Context, req SessionsListRequest) (SessionsListResult, error)
 	SessionsHistory(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error)
-	SessionsSend(ctx context.Context, req SessionsSendRequest) (SessionsSendResult, error)
+	SessionsDelete(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error)
 	SessionStatus(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error)
 }
 
 type SessionsListTool struct{ backend OrchestrationBackend }
 type SessionsHistoryTool struct{ backend OrchestrationBackend }
-type SessionsSendTool struct{ backend OrchestrationBackend }
+type SessionsDeleteTool struct{ backend OrchestrationBackend }
 type SessionStatusTool struct{ backend OrchestrationBackend }
 
 func NewSessionsListTool(backend OrchestrationBackend) SessionsListTool {
@@ -85,8 +84,8 @@ func NewSessionsListTool(backend OrchestrationBackend) SessionsListTool {
 func NewSessionsHistoryTool(backend OrchestrationBackend) SessionsHistoryTool {
 	return SessionsHistoryTool{backend: backend}
 }
-func NewSessionsSendTool(backend OrchestrationBackend) SessionsSendTool {
-	return SessionsSendTool{backend: backend}
+func NewSessionsDeleteTool(backend OrchestrationBackend) SessionsDeleteTool {
+	return SessionsDeleteTool{backend: backend}
 }
 func NewSessionStatusTool(backend OrchestrationBackend) SessionStatusTool {
 	return SessionStatusTool{backend: backend}
@@ -124,26 +123,25 @@ func SessionsHistoryDefinition() protocol.Tool {
 	}
 }
 
-func SessionsSendDefinition() protocol.Tool {
+func SessionStatusDefinition() protocol.Tool {
 	return protocol.Tool{
-		Name:        ToolLocalclawSessionsSend,
-		Description: "Send a prompt to an existing session and return response",
+		Name:        ToolLocalclawSessionStatus,
+		Description: "Get metadata for an existing session",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"agent_id":   map[string]interface{}{"type": "string"},
 				"session_id": map[string]interface{}{"type": "string"},
-				"input":      map[string]interface{}{"type": "string"},
 			},
-			"required": []string{"session_id", "input"},
+			"required": []string{"session_id"},
 		},
 	}
 }
 
-func SessionStatusDefinition() protocol.Tool {
+func SessionsDeleteDefinition() protocol.Tool {
 	return protocol.Tool{
-		Name:        ToolLocalclawSessionStatus,
-		Description: "Get metadata for an existing session",
+		Name:        ToolLocalclawSessionsDelete,
+		Description: "Delete an existing session and transcript",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -210,7 +208,7 @@ func (t SessionsHistoryTool) Call(ctx context.Context, args map[string]interface
 	return protocol.CallToolResult{StructuredContent: map[string]interface{}{"ok": true, "items": result.Items, "total": result.Total, "limit": limit, "offset": offset}}
 }
 
-func (t SessionsSendTool) Call(ctx context.Context, args map[string]interface{}) protocol.CallToolResult {
+func (t SessionsDeleteTool) Call(ctx context.Context, args map[string]interface{}) protocol.CallToolResult {
 	agentID, err := optionalStringArg(args, "agent_id")
 	if err != nil {
 		return errorResult(err)
@@ -219,21 +217,14 @@ func (t SessionsSendTool) Call(ctx context.Context, args map[string]interface{})
 	if err != nil {
 		return errorResult(err)
 	}
-	input, err := requiredStringArg(args, "input")
-	if err != nil {
-		return errorResult(err)
-	}
-	if len(input) > 8192 {
-		return errorResult(fmt.Errorf("input cannot exceed 8192 characters"))
-	}
-	result, runErr := t.backend.SessionsSend(ctx, SessionsSendRequest{AgentID: agentID, SessionID: sessionID, Input: input})
+	result, runErr := t.backend.SessionsDelete(ctx, SessionsDeleteRequest{AgentID: agentID, SessionID: sessionID})
 	if runErr != nil {
 		if errors.Is(runErr, ErrSessionNotFound) {
 			return errorResult(runErr)
 		}
-		return errorResult(fmt.Errorf("sessions_send failed: %w", runErr))
+		return errorResult(fmt.Errorf("sessions_delete failed: %w", runErr))
 	}
-	return protocol.CallToolResult{StructuredContent: map[string]interface{}{"ok": true, "output": result.Output}}
+	return protocol.CallToolResult{StructuredContent: map[string]interface{}{"ok": true, "deleted": result.Deleted, "session_id": sessionID}}
 }
 
 func (t SessionStatusTool) Call(ctx context.Context, args map[string]interface{}) protocol.CallToolResult {
@@ -282,15 +273,15 @@ func (b RuntimeOrchestrationBackend) SessionsHistory(ctx context.Context, req Se
 	return SessionsHistoryResult{Items: items, Total: out.Total}, nil
 }
 
-func (b RuntimeOrchestrationBackend) SessionsSend(ctx context.Context, req SessionsSendRequest) (SessionsSendResult, error) {
-	output, err := b.App.MCPSessionsSend(ctx, req.AgentID, req.SessionID, req.Input)
+func (b RuntimeOrchestrationBackend) SessionsDelete(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
+	removed, err := b.App.MCPSessionDelete(ctx, req.AgentID, req.SessionID)
 	if err != nil {
-		if errors.Is(err, runtime.ErrMCPNotFound) {
-			return SessionsSendResult{}, ErrSessionNotFound
-		}
-		return SessionsSendResult{}, err
+		return SessionsDeleteResult{}, err
 	}
-	return SessionsSendResult{Output: output}, nil
+	if !removed {
+		return SessionsDeleteResult{}, ErrSessionNotFound
+	}
+	return SessionsDeleteResult{Deleted: true}, nil
 }
 
 func (b RuntimeOrchestrationBackend) SessionStatus(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error) {

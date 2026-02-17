@@ -39,7 +39,8 @@ localclaw binary (single process)
   |   |- Claude Code client (subprocess)
   |   `- Codex client (subprocess)
   `- command modes
-      |- check
+      |- default => help
+      |- doctor
       |- tui
       |- memory {status,index,search,grep}
       `- mcp {serve}

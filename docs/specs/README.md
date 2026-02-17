@@ -2,6 +2,13 @@
 
 `docs/specs/` holds feature-level specs that drive implementation and tests.
 
+## V1 Policy
+
+`localclaw` is still in v1 build-out. Specs should prefer clean implementations and should not require:
+- rollback plans
+- fallback execution paths
+- legacy compatibility shims
+
 ## When to Add a Spec
 
 Add or update a spec for:
@@ -26,6 +33,7 @@ Add or update a spec for:
 ## Required Sections
 
 - Status
+- V1 build policy note
 - Problem / Motivation
 - Scope
 - Behavior contract

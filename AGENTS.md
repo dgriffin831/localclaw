@@ -28,7 +28,7 @@ Keep it current when architecture, tooling, or workflows change.
 ## Project Structure & Module Organization
 
 - Entrypoint:
-  - `cmd/localclaw/main.go` (`check`, `tui`, `memory` command modes).
+  - `cmd/localclaw/main.go` (`doctor`, `tui`, `memory`, `mcp` command modes).
 - Core orchestration:
   - `internal/runtime/app.go`
   - `internal/runtime/tools.go`
@@ -65,7 +65,8 @@ Keep it current when architecture, tooling, or workflows change.
   - `go test ./internal/hooks`
 - Run startup checks:
   - `go run ./cmd/localclaw`
-  - `go run ./cmd/localclaw check`
+  - `go run ./cmd/localclaw doctor`
+  - `go run ./cmd/localclaw doctor --deep`
 - Run TUI:
   - `go run ./cmd/localclaw tui`
 - Run memory command mode:
@@ -73,7 +74,7 @@ Keep it current when architecture, tooling, or workflows change.
   - `go run ./cmd/localclaw memory index --force`
   - `go run ./cmd/localclaw memory search "incident summary"`
 - Run with explicit config file:
-  - `go run ./cmd/localclaw -config ./localclaw.json check`
+  - `go run ./cmd/localclaw -config ./localclaw.json doctor`
   - `go run ./cmd/localclaw -config ./localclaw.json tui`
   - `go run ./cmd/localclaw -config ./localclaw.json memory status`
 - Formatting:
@@ -131,7 +132,7 @@ Behavior changes should follow Red -> Green -> Validate -> Deliver.
 
 ### Command-mode behavior
 
-- Supported command modes are `check`, `tui`, and `memory`.
+- Supported command modes are `doctor`, `tui`, `memory`, and `mcp`.
 - If adding a new mode:
   - wire it in `cmd/localclaw/main.go`
   - add mode-specific tests

@@ -4,12 +4,13 @@ This document describes current terminal UI behavior in `internal/tui/app.go`.
 
 ## Runtime model
 
-`localclaw tui` runs a Bubble Tea full-screen program (`tea.WithAltScreen`, `tea.WithMouseCellMotion`) with:
+`localclaw tui` runs a Bubble Tea full-screen program with `tea.WithAltScreen` always enabled, and `tea.WithMouseCellMotion` enabled when `app.default.mouse` is on:
 
-- header line
+- header line (shown only when mouse capture is on)
 - transcript viewport
 - status line
-- bordered multiline composer with slash-command menu and keybinding hint line
+- bordered multiline composer with slash-command menu
+- footer line with left-aligned keyboard shortcuts and right-aligned runtime settings
 
 Streaming output comes from `app.PromptStreamForSession`.
 
@@ -18,8 +19,10 @@ Streaming output comes from `app.PromptStreamForSession`.
 Header currently shows:
 
 - app label (`# localclaw`)
-- provider/effective-model tuple (`provider:<provider>  model:<effective_model>`)
+- session/token tuple (`session:<session_id>  tokens:<total_tokens>`)
 - resolved workspace path
+
+When mouse capture is off (`mouse:off`), the header row is hidden.
 
 Status state machine values:
 
@@ -33,8 +36,11 @@ Status state machine values:
 Behavior notes:
 
 - Busy statuses show spinner + elapsed time.
-- While waiting and no stream delta has arrived, status text shows active thinking message when thinking visibility is on.
+- While waiting and no stream delta has arrived, status text always shows the active thinking message.
 - Thinking messages come from `app.thinking_messages`; fallback is `thinking`.
+- Status row shows lifecycle text only (`idle`, `waiting`, etc.); runtime settings are rendered in the footer row under the composer.
+- The status row no longer includes a `/status` hint token.
+- A dedicated spacer row is rendered between the transcript viewport and the status/composer area.
 - `Ctrl+O` toggles tool-card expansion in the transcript (`collapsed` summary vs `expanded` details).
 
 ## Input and keybindings
@@ -49,11 +55,11 @@ Composer behavior:
 - `Ctrl+P` / `Ctrl+N`: prompt history navigation
 - `Alt+Up` / `Alt+Down`: history navigation aliases
 - `Mouse wheel`: transcript scroll
+- Footer row: left side shows keyboard shortcuts hint, right side shows `provider/model/verbose/tools/mouse` runtime settings.
 
 Global controls:
 
 - `Esc`: abort active run
-- `Ctrl+T`: toggle thinking visibility
 - `Ctrl+O`: toggle tool-card expansion
 - `Ctrl+Y`: toggle mouse capture (turn off to allow terminal text selection)
 - `Ctrl+C`: clear composer; second press within 1 second exits
@@ -75,7 +81,9 @@ Implemented command set:
 - `/clear`
 - `/reset`
 - `/new`
-- `/thinking <on|off>`
+- `/sessions`
+- `/resume <session_id>`
+- `/delete <session_id>`
 - `/verbose <on|off>`
 - `/mouse <on|off>`
 - `/model <name>`
@@ -85,10 +93,10 @@ Implemented command set:
 Command behavior details:
 
 - `/shortcuts` prints all available keyboard shortcuts and their behavior.
-- `/status` prints one system line containing status, provider, configured model/profile, effective model, model override state, agent, session, workspace, thinking, verbose, and mouse-capture flags.
-- `/tools` prints provider plus explicit ownership sections:
-  - `provider_native` for provider-discovered native tools.
-  - `localclaw_mcp` for localclaw runtime tools for the active agent.
+- `/status` prints one system line containing status, provider, configured model/profile, effective model, model override state, agent, session, workspace, verbose, and mouse-capture flags.
+- `/tools` prints provider plus provider-reported `tools` only (no runtime fallback list).
+- when provider tools are not yet discovered, `/tools` starts a background probe and refreshes the summary when metadata arrives.
+- for providers that do not emit a tool list in metadata events (for example Codex), localclaw uses a provider-side JSON self-report probe as fallback.
 - `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
 - `/verbose off` suppresses the additional `[verbose]` diagnostics.
 - `/mouse off` disables mouse capture so the terminal can highlight/select text normally.
@@ -96,6 +104,9 @@ Command behavior details:
 - `/clear` clears transcript messages without adding a confirmation line.
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
+- `/sessions` lists persisted sessions for the active agent and marks the current session.
+- `/resume <session_id>` switches to an existing session, reloads transcript history, and clears any active model override.
+- `/delete <session_id>` removes session metadata + transcript for non-active sessions.
 - `/model <name>` sets a session-local model override for providers that support override flags (currently `codex`).
 - `/model default` or `/model off` clears the active override.
 - unsupported providers (for example `claudecode`) return an explicit notice and continue with configured defaults.
@@ -114,6 +125,10 @@ On TUI model creation:
 
 - Adds `localclaw ready. Type /help for commands.` system line.
 - Loads and renders workspace `WELCOME.md` (if present) as markdown system content.
+- Applies startup toggles from `app.default`:
+  - `verbose` -> verbose diagnostics mode
+  - `mouse` -> mouse capture
+  - `tools` -> tool-card expansion
 
 On `/new`:
 
@@ -163,9 +178,9 @@ Completion behavior:
 Current tests in `internal/tui/app_test.go` cover:
 
 - slash parsing and autocomplete behavior
-- `/help`, `/tools`, `/new`, `/reset` command effects
+- `/help`, `/tools`, `/new`, `/reset`, `/sessions`, `/resume`, `/delete` command effects
 - welcome message startup/new rendering
-- status/thinking message behavior
+- status lifecycle/metadata behavior
 - history navigation keybindings
 - header workspace path resolution
 - layout overflow safeguards

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,7 @@ func (c *captureLLMClient) Capabilities() llm.Capabilities {
 
 type captureRequestLLMClient struct {
 	lastRequest llm.Request
+	requests    []llm.Request
 	streamFn    func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error)
 }
 
@@ -58,11 +60,13 @@ func (c *captureRequestLLMClient) PromptStream(ctx context.Context, input string
 
 func (c *captureRequestLLMClient) PromptRequest(ctx context.Context, req llm.Request) (string, error) {
 	c.lastRequest = req
+	c.requests = append(c.requests, req)
 	return "ok", nil
 }
 
 func (c *captureRequestLLMClient) PromptStreamRequest(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
 	c.lastRequest = req
+	c.requests = append(c.requests, req)
 	if c.streamFn != nil {
 		return c.streamFn(ctx, req)
 	}
@@ -159,6 +163,347 @@ func TestPromptStreamForSessionWithOptionsPassesModelOverride(t *testing.T) {
 
 	if llmClient.lastRequest.Options.ModelOverride != "gpt-5-mini" {
 		t.Fatalf("expected model override in request options, got %q", llmClient.lastRequest.Options.ModelOverride)
+	}
+}
+
+func TestDiscoverProviderMetadataReturnsProviderToolsWithoutPersistingProbeSession(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	llmClient := &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			events := make(chan llm.StreamEvent, 1)
+			errs := make(chan error)
+			events <- llm.StreamEvent{
+				Type: llm.StreamEventProviderMetadata,
+				ProviderMetadata: &llm.ProviderMetadata{
+					Provider: "claudecode",
+					Model:    "claude-opus-4-6",
+					Tools:    []string{"Bash", "mcp__localclaw__localclaw_memory_search", "Bash"},
+				},
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+	app.llm = llmClient
+
+	meta, err := app.DiscoverProviderMetadata(ctx, "agent-2", llm.PromptOptions{ModelOverride: "gpt-5-mini"})
+	if err != nil {
+		t.Fatalf("discover provider metadata: %v", err)
+	}
+	if meta.Provider != "claudecode" {
+		t.Fatalf("expected provider claudecode, got %q", meta.Provider)
+	}
+	if meta.Model != "claude-opus-4-6" {
+		t.Fatalf("expected discovered model, got %q", meta.Model)
+	}
+	if strings.Join(meta.Tools, ",") != "Bash,mcp__localclaw__localclaw_memory_search" {
+		t.Fatalf("expected normalized discovered tools, got %v", meta.Tools)
+	}
+	if llmClient.lastRequest.Options.ModelOverride != "gpt-5-mini" {
+		t.Fatalf("expected probe request to forward model override, got %q", llmClient.lastRequest.Options.ModelOverride)
+	}
+	if llmClient.lastRequest.Session.ProviderSessionID != "" {
+		t.Fatalf("expected probe request to avoid provider session resume id, got %q", llmClient.lastRequest.Session.ProviderSessionID)
+	}
+
+	_, exists, err := app.sessions.Get(ctx, "agent-2", ProviderToolsProbeSessionID)
+	if err != nil {
+		t.Fatalf("lookup probe session entry: %v", err)
+	}
+	if exists {
+		t.Fatalf("expected provider metadata probe not to persist probe session state")
+	}
+}
+
+func TestDiscoverProviderMetadataUsesCodexJSONProbeFallbackWhenMetadataOmitsTools(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	app.cfg.LLM.Provider = "codex"
+
+	llmClient := &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			events := make(chan llm.StreamEvent, 2)
+			errs := make(chan error)
+			if req.Input == providerToolsProbeInput {
+				events <- llm.StreamEvent{
+					Type: llm.StreamEventProviderMetadata,
+					ProviderMetadata: &llm.ProviderMetadata{
+						Provider: "codex",
+						Model:    "gpt-5-codex",
+					},
+				}
+				events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "ok"}
+			} else if req.Input == providerToolsJSONProbeInput {
+				events <- llm.StreamEvent{
+					Type: llm.StreamEventFinal,
+					Text: "{\"tools\":[\"Bash\",\"mcp__localclaw__localclaw_memory_search\",\"Bash\"]}",
+				}
+			} else {
+				errs <- fmt.Errorf("unexpected probe input %q", req.Input)
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+	app.llm = llmClient
+
+	meta, err := app.DiscoverProviderMetadata(ctx, "agent-2", llm.PromptOptions{ModelOverride: "gpt-5-mini"})
+	if err != nil {
+		t.Fatalf("discover provider metadata: %v", err)
+	}
+	if meta.Provider != "codex" {
+		t.Fatalf("expected provider codex, got %q", meta.Provider)
+	}
+	if meta.Model != "gpt-5-codex" {
+		t.Fatalf("expected discovered model, got %q", meta.Model)
+	}
+	if strings.Join(meta.Tools, ",") != "Bash,mcp__localclaw__localclaw_memory_search" {
+		t.Fatalf("expected fallback-discovered tools, got %v", meta.Tools)
+	}
+	if len(llmClient.requests) != 2 {
+		t.Fatalf("expected metadata probe plus fallback probe requests, got %d", len(llmClient.requests))
+	}
+	if llmClient.requests[1].Input != providerToolsJSONProbeInput {
+		t.Fatalf("expected second request to run codex json tools probe, got %q", llmClient.requests[1].Input)
+	}
+	if llmClient.requests[1].Options.ModelOverride != "gpt-5-mini" {
+		t.Fatalf("expected fallback probe to forward model override, got %q", llmClient.requests[1].Options.ModelOverride)
+	}
+}
+
+func TestParseToolNamesFromJSONProbeOutput(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "object payload",
+			in:   "{\"tools\":[\"Bash\",\"WebFetch\"]}",
+			want: "Bash,WebFetch",
+		},
+		{
+			name: "array payload",
+			in:   "[\"Bash\",\"WebFetch\"]",
+			want: "Bash,WebFetch",
+		},
+		{
+			name: "markdown fenced payload",
+			in:   "```json\n{\"tools\":[\"Bash\",\"WebFetch\"]}\n```",
+			want: "Bash,WebFetch",
+		},
+		{
+			name: "embedded json payload",
+			in:   "tool list:\n{\"tools\":[\"Bash\",\"WebFetch\"]}",
+			want: "Bash,WebFetch",
+		},
+		{
+			name: "invalid payload",
+			in:   "tools: Bash, WebFetch",
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(parseToolNamesFromJSONProbeOutput(tc.in), ",")
+			if got != tc.want {
+				t.Fatalf("unexpected parsed tools: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPromptStreamForSessionIncludesPersistedProviderSessionMetadata(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
+
+	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		entry.Key = "default/main"
+		session.SetProviderSessionID(entry, "claudecode", "claude-session-1")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed provider session id: %v", err)
+	}
+
+	events, errs := app.PromptStreamForSession(ctx, "default", "main", "hello")
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("unexpected stream error: %v", err)
+			}
+		}
+	}
+
+	if llmClient.lastRequest.Session.Provider != "claudecode" {
+		t.Fatalf("expected provider metadata claudecode, got %q", llmClient.lastRequest.Session.Provider)
+	}
+	if llmClient.lastRequest.Session.ProviderSessionID != "claude-session-1" {
+		t.Fatalf("expected persisted provider session id, got %q", llmClient.lastRequest.Session.ProviderSessionID)
+	}
+}
+
+func TestPromptStreamPersistsProviderSessionIDAndRetriesAfterResumeFailure(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	attempt := 0
+	app.llm = &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			attempt++
+			events := make(chan llm.StreamEvent, 2)
+			errs := make(chan error, 1)
+			switch attempt {
+			case 1:
+				if req.Session.ProviderSessionID != "stale-id" {
+					errs <- fmt.Errorf("expected stale provider session id on first attempt, got %q", req.Session.ProviderSessionID)
+					close(events)
+					close(errs)
+					return events, errs
+				}
+				errs <- fmt.Errorf("resume failed: invalid session")
+			case 2:
+				if req.Session.ProviderSessionID != "" {
+					errs <- fmt.Errorf("expected cleared provider session id on retry, got %q", req.Session.ProviderSessionID)
+					close(events)
+					close(errs)
+					return events, errs
+				}
+				events <- llm.StreamEvent{
+					Type: llm.StreamEventProviderMetadata,
+					ProviderMetadata: &llm.ProviderMetadata{
+						Provider:  "claudecode",
+						SessionID: "fresh-session-id",
+					},
+				}
+				events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "ok"}
+			default:
+				errs <- fmt.Errorf("unexpected attempt %d", attempt)
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+
+	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		session.SetProviderSessionID(entry, "claudecode", "stale-id")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed stale provider session id: %v", err)
+	}
+
+	events, errs := app.PromptStreamForSession(ctx, "default", "main", "hello")
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("unexpected stream error: %v", err)
+			}
+		}
+	}
+	if attempt != 2 {
+		t.Fatalf("expected one retry after resume failure, got %d attempts", attempt)
+	}
+
+	entry, exists, err := app.sessions.Get(ctx, "default", "main")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected session entry to exist")
+	}
+	if got := session.GetProviderSessionID(entry, "claudecode"); got != "fresh-session-id" {
+		t.Fatalf("expected persisted fresh provider session id, got %q", got)
+	}
+}
+
+func TestPromptStreamRetriesWhenResumeFailsWithNoConversationFound(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	attempt := 0
+	app.llm = &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			attempt++
+			events := make(chan llm.StreamEvent, 1)
+			errs := make(chan error, 1)
+			switch attempt {
+			case 1:
+				if req.Session.ProviderSessionID != "stale-id" {
+					errs <- fmt.Errorf("expected stale provider session id on first attempt, got %q", req.Session.ProviderSessionID)
+					close(events)
+					close(errs)
+					return events, errs
+				}
+				errs <- fmt.Errorf("claude code cli execution failed: exit status 1: No conversation found with session ID: stale-id")
+			case 2:
+				if req.Session.ProviderSessionID != "" {
+					errs <- fmt.Errorf("expected cleared provider session id on retry, got %q", req.Session.ProviderSessionID)
+					close(events)
+					close(errs)
+					return events, errs
+				}
+				events <- llm.StreamEvent{Type: llm.StreamEventFinal, Text: "ok"}
+			default:
+				errs <- fmt.Errorf("unexpected attempt %d", attempt)
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+
+	_, err := app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		session.SetProviderSessionID(entry, "claudecode", "stale-id")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed stale provider session id: %v", err)
+	}
+
+	events, errs := app.PromptStreamForSession(ctx, "default", "main", "hello")
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("unexpected stream error: %v", err)
+			}
+		}
+	}
+
+	if attempt != 2 {
+		t.Fatalf("expected one retry after no-conversation resume failure, got %d attempts", attempt)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm"
+	"github.com/dgriffin831/localclaw/internal/session"
 	"github.com/dgriffin831/localclaw/internal/workspace"
 )
 
@@ -276,12 +277,97 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	}
 }
 
-func TestNewConfiguresCodexMCPHomeUnderStateRoot(t *testing.T) {
+func TestNewPassesClaudeExtraArgs(t *testing.T) {
+	stateRoot := t.TempDir()
+	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
+	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+`, argsPath)
+	if err := os.WriteFile(claudeScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.App.Root = stateRoot
+	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
+	cfg.LLM.ClaudeCode.ExtraArgs = []string{
+		"--dangerously-skip-permissions",
+		"--allowed-tools",
+		"mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get",
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	requestClient, ok := app.llm.(llm.RequestClient)
+	if !ok {
+		t.Fatalf("expected request-capable llm client")
+	}
+	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("prompt stream request error: %v", err)
+			}
+		}
+	}
+
+	argsFile, err := os.Open(argsPath)
+	if err != nil {
+		t.Fatalf("open captured args: %v", err)
+	}
+	defer argsFile.Close()
+
+	var args []string
+	scanner := bufio.NewScanner(argsFile)
+	for scanner.Scan() {
+		args = append(args, strings.TrimSpace(scanner.Text()))
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan captured args: %v", err)
+	}
+
+	hasDangerousSkip := false
+	hasAllowedTools := false
+	for i, arg := range args {
+		if arg == "--dangerously-skip-permissions" {
+			hasDangerousSkip = true
+		}
+		if arg == "--allowed-tools" && i+1 < len(args) &&
+			args[i+1] == "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get" {
+			hasAllowedTools = true
+		}
+	}
+	if !hasDangerousSkip {
+		t.Fatalf("expected --dangerously-skip-permissions in args: %v", args)
+	}
+	if !hasAllowedTools {
+		t.Fatalf("expected configured --allowed-tools in args: %v", args)
+	}
+}
+
+func TestNewDoesNotOverrideCodexHomeFromEnvironment(t *testing.T) {
 	stateRoot := t.TempDir()
 	tmpDir := t.TempDir()
 	argsPath := filepath.Join(tmpDir, "codex-args.txt")
 	envPath := filepath.Join(tmpDir, "codex-env.txt")
 	codexScriptPath := filepath.Join(tmpDir, "codex")
+	expectedHome := filepath.Join(tmpDir, "codex-home")
+	t.Setenv("CODEX_HOME", expectedHome)
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 printf "%%s\n" "$@" > %q
@@ -329,13 +415,12 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	if err != nil {
 		t.Fatalf("read captured env: %v", err)
 	}
-	expectedHome := filepath.Join(stateRoot, "runtime", "codex", "home")
 	if !strings.Contains(string(envPayload), "CODEX_HOME="+expectedHome) {
-		t.Fatalf("expected CODEX_HOME under state root, got %q", strings.TrimSpace(string(envPayload)))
+		t.Fatalf("expected CODEX_HOME pass-through from environment, got %q", strings.TrimSpace(string(envPayload)))
 	}
 }
 
-func TestPromptForSessionDoesNotSetAllowedToolsForClaude(t *testing.T) {
+func TestPromptForSessionIncludesDefaultAllowedToolsForClaude(t *testing.T) {
 	stateRoot := t.TempDir()
 	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
 	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
@@ -388,8 +473,11 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 			break
 		}
 	}
-	if allowedTools != "" {
-		t.Fatalf("did not expect --allowed-tools flag in args: %v", args)
+	if allowedTools == "" {
+		t.Fatalf("expected --allowed-tools flag in args: %v", args)
+	}
+	if allowedTools != cfg.LLM.ClaudeCode.ExtraArgs[1] {
+		t.Fatalf("expected default --allowed-tools value %q, got %q", cfg.LLM.ClaudeCode.ExtraArgs[1], allowedTools)
 	}
 }
 
@@ -630,5 +718,56 @@ func TestResetSessionStartNewAvoidsExistingTranscriptCollision(t *testing.T) {
 	}
 	if !strings.HasPrefix(next.SessionID, "s-20260216-000000") {
 		t.Fatalf("unexpected next session id %q", next.SessionID)
+	}
+}
+
+func TestResetSessionSameSessionClearsProviderSessionContinuation(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.App.Root = t.TempDir()
+	cfg.Agents.Defaults.Workspace = "."
+	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
+	cfg.Cron.Enabled = false
+	cfg.Heartbeat.Enabled = false
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if err := app.Run(ctx); err != nil {
+		t.Fatalf("run app: %v", err)
+	}
+
+	_, err = app.sessions.Update(ctx, "default", "main", func(entry *session.SessionEntry) error {
+		session.SetProviderSessionID(entry, "claudecode", "claude-session")
+		session.SetProviderSessionID(entry, "codex", "codex-thread")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed provider session ids: %v", err)
+	}
+
+	current := app.ResetSession(ctx, ResetSessionRequest{
+		AgentID:   "default",
+		SessionID: "main",
+		Source:    "test",
+		StartNew:  false,
+	})
+	if current.SessionID != "main" {
+		t.Fatalf("expected same session id after reset, got %q", current.SessionID)
+	}
+
+	entry, exists, err := app.sessions.Get(ctx, "default", "main")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected session entry to exist")
+	}
+	if got := session.GetProviderSessionID(entry, "claudecode"); got != "" {
+		t.Fatalf("expected claudecode provider session cleared, got %q", got)
+	}
+	if got := session.GetProviderSessionID(entry, "codex"); got != "" {
+		t.Fatalf("expected codex provider session cleared, got %q", got)
 	}
 }

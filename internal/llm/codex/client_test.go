@@ -65,74 +65,27 @@ func TestResolveEffectiveMCPConfigPathPrecedence(t *testing.T) {
 	})
 }
 
-func TestResolveEffectiveMCPConfigPathIsolatedHome(t *testing.T) {
-	isolated := filepath.Join(t.TempDir(), "isolated-home")
+func TestResolveEffectiveMCPConfigPathNormalizesConfiguredPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
 	client := NewClient(Settings{
 		BinaryPath: "codex",
 		MCP: MCPSettings{
-			UseIsolatedHome: true,
-			HomePath:        isolated,
+			ConfigPath: "~/.codex/custom.toml",
 		},
 	})
-
 	path, env, err := client.resolveEffectiveMCPConfigPath()
 	if err != nil {
 		t.Fatalf("resolveEffectiveMCPConfigPath: %v", err)
 	}
-	wantPath := filepath.Join(isolated, "config.toml")
-	if path != wantPath {
-		t.Fatalf("expected isolated config path %q, got %q", wantPath, path)
+	want := filepath.Join(home, ".codex", "custom.toml")
+	if path != want {
+		t.Fatalf("expected normalized explicit path %q, got %q", want, path)
 	}
-	if env["CODEX_HOME"] != isolated {
-		t.Fatalf("expected CODEX_HOME=%q, got %q", isolated, env["CODEX_HOME"])
+	if len(env) != 0 {
+		t.Fatalf("expected no env overrides for explicit path, got %#v", env)
 	}
-}
-
-func TestResolveEffectiveMCPConfigPathNormalizesConfiguredAndIsolatedPaths(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	t.Run("explicit path resolves tilde", func(t *testing.T) {
-		client := NewClient(Settings{
-			BinaryPath: "codex",
-			MCP: MCPSettings{
-				ConfigPath: "~/.codex/custom.toml",
-			},
-		})
-		path, env, err := client.resolveEffectiveMCPConfigPath()
-		if err != nil {
-			t.Fatalf("resolveEffectiveMCPConfigPath: %v", err)
-		}
-		want := filepath.Join(home, ".codex", "custom.toml")
-		if path != want {
-			t.Fatalf("expected normalized explicit path %q, got %q", want, path)
-		}
-		if len(env) != 0 {
-			t.Fatalf("expected no env overrides for explicit path, got %#v", env)
-		}
-	})
-
-	t.Run("isolated home resolves tilde", func(t *testing.T) {
-		client := NewClient(Settings{
-			BinaryPath: "codex",
-			MCP: MCPSettings{
-				UseIsolatedHome: true,
-				HomePath:        "~/.isolated-codex",
-			},
-		})
-		path, env, err := client.resolveEffectiveMCPConfigPath()
-		if err != nil {
-			t.Fatalf("resolveEffectiveMCPConfigPath: %v", err)
-		}
-		wantHome := filepath.Join(home, ".isolated-codex")
-		wantPath := filepath.Join(wantHome, "config.toml")
-		if path != wantPath {
-			t.Fatalf("expected normalized isolated path %q, got %q", wantPath, path)
-		}
-		if env["CODEX_HOME"] != wantHome {
-			t.Fatalf("expected normalized CODEX_HOME=%q, got %q", wantHome, env["CODEX_HOME"])
-		}
-	})
 }
 
 func TestEnsureMCPServerConfigMergesExistingToml(t *testing.T) {
@@ -244,8 +197,66 @@ func TestBuildCommandArgsForRequestUsesModelOverride(t *testing.T) {
 	}
 }
 
+func TestBuildCommandArgsForRequestUsesResumeArgsWhenPersistedSessionExists(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		Profile:          "dev",
+		WorkingDirectory: "/tmp/workspace",
+		SessionMode:      "existing",
+		ResumeArgs:       []string{"resume", "{sessionId}"},
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			ProviderSessionID: "thread-42",
+		},
+	})
+	wantPrefix := []string{"exec", "resume", "thread-42"}
+	if len(args) < len(wantPrefix) {
+		t.Fatalf("unexpected short args for resume path: %v", args)
+	}
+	for i := range wantPrefix {
+		if args[i] != wantPrefix[i] {
+			t.Fatalf("unexpected resume args prefix[%d]: got %q want %q (all=%v)", i, args[i], wantPrefix[i], args)
+		}
+	}
+	for _, arg := range args {
+		if arg == "-C" {
+			t.Fatalf("did not expect -C in resume args: %v", args)
+		}
+		if arg == "-p" {
+			t.Fatalf("did not expect -p in resume args: %v", args)
+		}
+	}
+	if args[len(args)-1] != "-" {
+		t.Fatalf("expected stdin prompt marker '-' in resume args: %v", args)
+	}
+}
+
+func TestBuildCommandArgsForRequestResumeTextOutputOmitsJSONFlag(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		WorkingDirectory: "/tmp/workspace",
+		SessionMode:      "existing",
+		ResumeArgs:       []string{"resume", "{sessionId}"},
+		ResumeOutput:     "text",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			ProviderSessionID: "thread-42",
+		},
+	})
+	for _, arg := range args {
+		if arg == "--json" {
+			t.Fatalf("expected --json to be omitted for resume text output mode, got %v", args)
+		}
+	}
+}
+
 func TestPromptStreamRequestParsesJSONStream(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
 	codexArgsPath := filepath.Join(tmpDir, "codex-args.txt")
 	codexEnvPath := filepath.Join(tmpDir, "codex-env.txt")
 	codexStdinPath := filepath.Join(tmpDir, "codex-stdin.txt")
@@ -262,14 +273,9 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 		t.Fatalf("write fake codex: %v", err)
 	}
 
-	isolated := filepath.Join(tmpDir, "isolated-home")
 	client := NewClient(Settings{
 		BinaryPath:       fakeCodexPath,
 		WorkingDirectory: "/tmp/workspace",
-		MCP: MCPSettings{
-			UseIsolatedHome: true,
-			HomePath:        isolated,
-		},
 	})
 
 	events, errs := client.PromptStreamRequest(context.Background(), llm.Request{Input: "prompt"})
@@ -343,8 +349,9 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	if err != nil {
 		t.Fatalf("read env capture: %v", err)
 	}
-	if !strings.Contains(string(envPayload), "CODEX_HOME="+isolated) {
-		t.Fatalf("expected CODEX_HOME isolated override, got %q", strings.TrimSpace(string(envPayload)))
+	gotEnv := strings.TrimSpace(string(envPayload))
+	if gotEnv != "" && gotEnv != "CODEX_HOME=" {
+		t.Fatalf("expected no non-empty CODEX_HOME override, got %q", gotEnv)
 	}
 }
 
@@ -362,7 +369,7 @@ func TestPromptStreamRequestReturnsErrorWhenBinaryMissing(t *testing.T) {
 
 func TestParseStreamJSONLineCommandExecutionStarted(t *testing.T) {
 	line := `{"type":"item.started","item":{"type":"command_execution","id":"cmd_1","command":"ls -la"}}`
-	events, err := parseStreamJSONLine(line)
+	events, err := parseStreamJSONLine(line, nil)
 	if err != nil {
 		t.Fatalf("parse stream line: %v", err)
 	}
@@ -389,9 +396,41 @@ func TestParseStreamJSONLineCommandExecutionStarted(t *testing.T) {
 	}
 }
 
+func TestParseStreamJSONLineWebSearchStarted(t *testing.T) {
+	line := `{"type":"item.started","item":{"id":"ws_123","type":"web_search","query":"","action":{"type":"other"}}}`
+	events, err := parseStreamJSONLine(line, nil)
+	if err != nil {
+		t.Fatalf("parse stream line: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	if events[0].Type != llm.StreamEventToolCall {
+		t.Fatalf("expected tool_call event, got %q", events[0].Type)
+	}
+	if events[0].ToolCall == nil {
+		t.Fatalf("expected tool call payload")
+	}
+	if events[0].ToolCall.ID != "ws_123" {
+		t.Fatalf("expected call id ws_123, got %q", events[0].ToolCall.ID)
+	}
+	if events[0].ToolCall.Name != "web_search" {
+		t.Fatalf("expected web_search tool name, got %q", events[0].ToolCall.Name)
+	}
+	if events[0].ToolCall.Class != llm.ToolClassDelegated {
+		t.Fatalf("expected delegated tool class, got %q", events[0].ToolCall.Class)
+	}
+	if got, _ := events[0].ToolCall.Args["query"].(string); got != "" {
+		t.Fatalf("expected query arg to be empty string, got %#v", events[0].ToolCall.Args["query"])
+	}
+	if _, ok := events[0].ToolCall.Args["action"]; !ok {
+		t.Fatalf("expected action arg in tool call args")
+	}
+}
+
 func TestParseStreamJSONLineCommandExecutionCompleted(t *testing.T) {
 	line := `{"type":"item.completed","item":{"type":"command_execution","id":"cmd_1","command":"ls -la","status":"completed","exit_code":0,"aggregated_output":"file.txt"}}`
-	events, err := parseStreamJSONLine(line)
+	events, err := parseStreamJSONLine(line, nil)
 	if err != nil {
 		t.Fatalf("parse stream line: %v", err)
 	}
@@ -418,9 +457,88 @@ func TestParseStreamJSONLineCommandExecutionCompleted(t *testing.T) {
 	}
 }
 
+func TestParseStreamJSONLineWebSearchCompleted(t *testing.T) {
+	line := `{"type":"item.completed","item":{"id":"ws_123","type":"web_search","query":"OpenClaw news","action":{"type":"search","query":"OpenClaw news","queries":["OpenClaw news"]}}}`
+	events, err := parseStreamJSONLine(line, nil)
+	if err != nil {
+		t.Fatalf("parse stream line: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	if events[0].Type != llm.StreamEventToolResult {
+		t.Fatalf("expected tool_result event, got %q", events[0].Type)
+	}
+	if events[0].ToolResult == nil {
+		t.Fatalf("expected tool result payload")
+	}
+	if events[0].ToolResult.CallID != "ws_123" {
+		t.Fatalf("expected call id ws_123, got %q", events[0].ToolResult.CallID)
+	}
+	if events[0].ToolResult.Tool != "web_search" {
+		t.Fatalf("expected web_search tool result name, got %q", events[0].ToolResult.Tool)
+	}
+	if !events[0].ToolResult.OK {
+		t.Fatalf("expected successful web_search result")
+	}
+	if got, _ := events[0].ToolResult.Data["query"].(string); got != "OpenClaw news" {
+		t.Fatalf("expected query in tool result data, got %#v", events[0].ToolResult.Data["query"])
+	}
+}
+
+func TestParseStreamJSONLineMCPToolCallEvents(t *testing.T) {
+	startLine := `{"type":"item.started","item":{"id":"item_2","type":"mcp_tool_call","server":"localclaw","tool":"localclaw_workspace_status","arguments":{"agent_id":"default"},"status":"in_progress"}}`
+	completeLine := `{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"localclaw","tool":"localclaw_workspace_status","arguments":{"agent_id":"default"},"result":{"structured_content":{"ok":true}},"status":"completed"}}`
+
+	startEvents, err := parseStreamJSONLine(startLine, nil)
+	if err != nil {
+		t.Fatalf("parse mcp started line: %v", err)
+	}
+	if len(startEvents) != 1 || startEvents[0].Type != llm.StreamEventToolCall || startEvents[0].ToolCall == nil {
+		t.Fatalf("expected mcp started line to emit tool_call, got %#v", startEvents)
+	}
+	if startEvents[0].ToolCall.Name != "localclaw_workspace_status" {
+		t.Fatalf("expected mcp tool name localclaw_workspace_status, got %q", startEvents[0].ToolCall.Name)
+	}
+
+	completeEvents, err := parseStreamJSONLine(completeLine, nil)
+	if err != nil {
+		t.Fatalf("parse mcp completed line: %v", err)
+	}
+	if len(completeEvents) != 1 || completeEvents[0].Type != llm.StreamEventToolResult || completeEvents[0].ToolResult == nil {
+		t.Fatalf("expected mcp completed line to emit tool_result, got %#v", completeEvents)
+	}
+	if completeEvents[0].ToolResult.Tool != "localclaw_workspace_status" {
+		t.Fatalf("expected mcp tool result name localclaw_workspace_status, got %q", completeEvents[0].ToolResult.Tool)
+	}
+	if !completeEvents[0].ToolResult.OK {
+		t.Fatalf("expected mcp completed result to be OK")
+	}
+}
+
+func TestParseStreamJSONLineEmitsProviderSessionMetadata(t *testing.T) {
+	line := `{"type":"session.configured","model":"gpt-5-codex","thread_id":"thread-123","tools":["mcp__localclaw__memory_search"]}`
+	events, err := parseStreamJSONLine(line, nil)
+	if err != nil {
+		t.Fatalf("parse stream line: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one event, got %d", len(events))
+	}
+	if events[0].Type != llm.StreamEventProviderMetadata || events[0].ProviderMetadata == nil {
+		t.Fatalf("expected provider metadata event, got %#v", events[0])
+	}
+	if events[0].ProviderMetadata.Provider != "codex" {
+		t.Fatalf("expected codex provider, got %q", events[0].ProviderMetadata.Provider)
+	}
+	if events[0].ProviderMetadata.SessionID != "thread-123" {
+		t.Fatalf("expected thread id in provider metadata, got %q", events[0].ProviderMetadata.SessionID)
+	}
+}
+
 func TestParseStreamJSONLineCommandExecutionFailed(t *testing.T) {
 	line := `{"type":"item.completed","item":{"type":"command_execution","id":"cmd_1","command":"ls -la","status":"failed","exit_code":2,"aggregated_output":"permission denied"}}`
-	events, err := parseStreamJSONLine(line)
+	events, err := parseStreamJSONLine(line, nil)
 	if err != nil {
 		t.Fatalf("parse stream line: %v", err)
 	}

@@ -70,7 +70,6 @@ func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Serv
 
 	workspaceBackend := mcpTools.RuntimeWorkspaceBackend{App: app}
 	workspaceStatusTool := mcpTools.NewWorkspaceStatusTool(workspaceBackend)
-	workspaceBootstrapContextTool := mcpTools.NewWorkspaceBootstrapContextTool(workspaceBackend)
 
 	cronBackend := mcpTools.RuntimeCronBackend{App: app}
 	cronListTool := mcpTools.NewCronListTool(cronBackend)
@@ -81,7 +80,7 @@ func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Serv
 	orchestrationBackend := mcpTools.RuntimeOrchestrationBackend{App: app}
 	sessionsListTool := mcpTools.NewSessionsListTool(orchestrationBackend)
 	sessionsHistoryTool := mcpTools.NewSessionsHistoryTool(orchestrationBackend)
-	sessionsSendTool := mcpTools.NewSessionsSendTool(orchestrationBackend)
+	sessionsDeleteTool := mcpTools.NewSessionsDeleteTool(orchestrationBackend)
 	sessionStatusTool := mcpTools.NewSessionStatusTool(orchestrationBackend)
 
 	registrations := []mcp.ToolRegistration{
@@ -100,10 +99,6 @@ func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Serv
 		{
 			Definition: mcpTools.WorkspaceStatusDefinition(),
 			Handler:    workspaceStatusTool.Call,
-		},
-		{
-			Definition: mcpTools.WorkspaceBootstrapContextDefinition(),
-			Handler:    workspaceBootstrapContextTool.Call,
 		},
 		{
 			Definition: mcpTools.CronListDefinition(),
@@ -130,8 +125,8 @@ func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Serv
 			Handler:    sessionsHistoryTool.Call,
 		},
 		{
-			Definition: mcpTools.SessionsSendDefinition(),
-			Handler:    sessionsSendTool.Call,
+			Definition: mcpTools.SessionsDeleteDefinition(),
+			Handler:    sessionsDeleteTool.Call,
 		},
 		{
 			Definition: mcpTools.SessionStatusDefinition(),

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -45,22 +46,26 @@ func TestBuildCommandArgsForRequestIncludesMCPFlagsAndSystemPrompt(t *testing.T)
 		},
 	}
 	args := client.buildCommandArgsForRequest(req, "/tmp/mcp.json")
-	want := []string{
-		"-p", "hello",
-		"--output-format", "stream-json",
-		"--verbose",
-		"--mcp-config", "/tmp/mcp.json",
-		"--strict-mcp-config",
-		"--allowed-tools", "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get",
-		"--append-system-prompt", "system guidance\n\nskill guidance",
+	if !containsArgSequence(args, []string{"-p", "hello"}) {
+		t.Fatalf("expected prompt args, got %v", args)
 	}
-	if len(args) != len(want) {
-		t.Fatalf("unexpected arg length: got %d want %d (%v)", len(args), len(want), args)
+	if !containsArgSequence(args, []string{"--output-format", "stream-json"}) {
+		t.Fatalf("expected stream-json output mode, got %v", args)
 	}
-	for i := range want {
-		if args[i] != want[i] {
-			t.Fatalf("unexpected arg[%d]: got %q want %q (all=%v)", i, args[i], want[i], args)
-		}
+	if !containsArgSequence(args, []string{"--mcp-config", "/tmp/mcp.json"}) {
+		t.Fatalf("expected mcp config args, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--strict-mcp-config"}) {
+		t.Fatalf("expected strict mcp flag, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--allowed-tools", "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get"}) {
+		t.Fatalf("expected allowed-tools args, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--append-system-prompt", "system guidance\n\nskill guidance"}) {
+		t.Fatalf("expected append-system-prompt args, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--session-id"}) {
+		t.Fatalf("expected session-id arg for start mode, got %v", args)
 	}
 }
 
@@ -81,6 +86,66 @@ func TestBuildCommandArgsForRequestOmitsAllowedToolsWhenNoToolDefinitions(t *tes
 		if arg == "--allowed-tools" {
 			t.Fatalf("expected allowed-tools flag to be omitted when no tool definitions are available")
 		}
+	}
+}
+
+func TestBuildCommandArgsForRequestIncludesConfiguredExtraArgs(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath: "claude",
+		ExtraArgs: []string{
+			"--dangerously-skip-permissions",
+			"--allowed-tools",
+			"mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get",
+		},
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{Input: "hello"}, "/tmp/mcp.json")
+	if !containsArgSequence(args, []string{"--dangerously-skip-permissions"}) {
+		t.Fatalf("expected --dangerously-skip-permissions in args, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--allowed-tools", "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get"}) {
+		t.Fatalf("expected configured --allowed-tools in args, got %v", args)
+	}
+}
+
+func TestBuildCommandArgsForRequestAddsStartSessionArgWhenNoPersistedSession(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:   "claude",
+		SessionMode:  "always",
+		SessionArg:   "--session-id",
+		ResumeArgs:   []string{"--resume", "{sessionId}"},
+		MCPConfigDir: t.TempDir(),
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{Input: "hello"}, "/tmp/mcp.json")
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--session-id" && strings.TrimSpace(args[i+1]) != "" {
+			return
+		}
+	}
+	t.Fatalf("expected --session-id <id> args for new session, got %v", args)
+}
+
+func TestBuildCommandArgsForRequestUsesResumeArgsWhenPersistedSessionExists(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:  "claude",
+		SessionMode: "always",
+		ResumeArgs:  []string{"--resume", "{sessionId}"},
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			ProviderSessionID: "sess-42",
+		},
+	}, "/tmp/mcp.json")
+	if !containsArgSequence(args, []string{"--resume", "sess-42"}) {
+		t.Fatalf("expected resume args with provider session id, got %v", args)
+	}
+}
+
+func TestGenerateSessionIDProducesUUIDv4(t *testing.T) {
+	id := generateSessionID()
+	pattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	if !pattern.MatchString(id) {
+		t.Fatalf("expected UUIDv4 format, got %q", id)
 	}
 }
 
@@ -338,6 +403,139 @@ func TestParseStreamJSONLineResultError(t *testing.T) {
 	if resultErr != "max turns reached" {
 		t.Fatalf("expected result error text, got %q", resultErr)
 	}
+}
+
+func TestParseStreamJSONLineResultErrorUsesErrorsArray(t *testing.T) {
+	toolNames := map[string]string{}
+	line := `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: stale-id"]}`
+	events, resultErr, err := parseStreamJSONLine(line, toolNames)
+	if err != nil {
+		t.Fatalf("parse line: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected no final events for empty result text, got %d", len(events))
+	}
+	if resultErr != "No conversation found with session ID: stale-id" {
+		t.Fatalf("expected provider error from errors array, got %q", resultErr)
+	}
+}
+
+func TestPromptStreamRequestSurfacesResultErrorWhenProcessExitsNonZero(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "fake-claude.sh")
+	script := `#!/usr/bin/env bash
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: stale-id"]}'
+exit 1
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
+	}
+
+	client := NewClient(Settings{
+		BinaryPath:          scriptPath,
+		MCPConfigDir:        tmpDir,
+		MCPServerBinaryPath: "localclaw",
+		MCPServerArgs:       []string{"mcp", "serve"},
+	})
+
+	events, errs := client.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for range events {
+	}
+	var gotErr error
+	for err := range errs {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if gotErr == nil {
+		t.Fatalf("expected error from non-zero fake claude command")
+	}
+	if !strings.Contains(gotErr.Error(), "No conversation found with session ID") {
+		t.Fatalf("expected surfaced result error text, got %v", gotErr)
+	}
+}
+
+func TestPromptStreamRequestDoesNotEmitProviderSessionMetadataAfterResultError(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "fake-claude-result-then-system.sh")
+	script := `#!/usr/bin/env bash
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: stale-id"]}'
+echo '{"type":"system","subtype":"init","session_id":"non-resumable-id","model":"claude-opus-4-6"}'
+exit 1
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude script: %v", err)
+	}
+
+	client := NewClient(Settings{
+		BinaryPath:          scriptPath,
+		MCPConfigDir:        tmpDir,
+		MCPServerBinaryPath: "localclaw",
+		MCPServerArgs:       []string{"mcp", "serve"},
+	})
+
+	events, errs := client.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	providerMetadataCount := 0
+	for evt := range events {
+		if evt.Type == llm.StreamEventProviderMetadata {
+			providerMetadataCount++
+		}
+	}
+	var gotErr error
+	for err := range errs {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if gotErr == nil {
+		t.Fatalf("expected error from non-zero fake claude command")
+	}
+	if providerMetadataCount != 0 {
+		t.Fatalf("expected no provider metadata events after result error, got %d", providerMetadataCount)
+	}
+}
+
+func TestParseStreamJSONLineExtractsProviderSessionMetadata(t *testing.T) {
+	toolNames := map[string]string{}
+	line := `{"type":"system","subtype":"init","session_id":"session-abc","model":"claude-opus","tools":["Bash"]}`
+	events, resultErr, err := parseStreamJSONLine(line, toolNames)
+	if err != nil {
+		t.Fatalf("parse line: %v", err)
+	}
+	if resultErr != "" {
+		t.Fatalf("unexpected result error: %q", resultErr)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected one provider metadata event, got %d", len(events))
+	}
+	if events[0].Type != llm.StreamEventProviderMetadata || events[0].ProviderMetadata == nil {
+		t.Fatalf("expected provider metadata event, got %#v", events[0])
+	}
+	if events[0].ProviderMetadata.Provider != "claudecode" {
+		t.Fatalf("expected provider claudecode, got %q", events[0].ProviderMetadata.Provider)
+	}
+	if events[0].ProviderMetadata.SessionID != "session-abc" {
+		t.Fatalf("expected session id session-abc, got %q", events[0].ProviderMetadata.SessionID)
+	}
+}
+
+func containsArgSequence(args []string, seq []string) bool {
+	if len(seq) == 0 || len(args) < len(seq) {
+		return false
+	}
+	for i := 0; i <= len(args)-len(seq); i++ {
+		matches := true
+		for j := range seq {
+			if args[i+j] != seq[j] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
 }
 
 func TestParseStreamJSONLineInvalidJSON(t *testing.T) {

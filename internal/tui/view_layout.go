@@ -10,18 +10,21 @@ import (
 )
 
 func (m *model) headerView() string {
-	provider := m.activeProvider()
-	model := valueOrDefault(m.effectiveModel(), "n/a")
+	if !m.mouseEnabled {
+		return ""
+	}
+	session := valueOrDefault(strings.TrimSpace(m.sessionID), "n/a")
+	tokenCount := max(0, m.sessionTokens)
 	innerWidth := panelInnerWidth(m.width)
 	left := "# localclaw"
 	right := fmt.Sprintf(
-		"provider:%s  model:%s  workspace:%s",
-		provider,
-		model,
+		"session:%s  tokens:%d  workspace:%s",
+		session,
+		tokenCount,
 		formatWorkspacePath(m.workspacePath),
 	)
 	if innerWidth < 70 {
-		right = fmt.Sprintf("p:%s m:%s ws:%s", provider, model, formatWorkspacePath(m.workspacePath))
+		right = fmt.Sprintf("s:%s t:%d ws:%s", session, tokenCount, formatWorkspacePath(m.workspacePath))
 	}
 	line := twoColumn(left, right, innerWidth)
 	return headerStyle.Width(max(1, m.width)).Render(line)
@@ -34,56 +37,72 @@ func (m *model) statusView() string {
 	}
 
 	base := m.status
-	if base == statusWaiting && m.showThinking && !m.hasStreamDelta {
+	if base == statusWaiting && !m.hasStreamDelta {
 		base = m.currentThinkingMessage()
 	}
+	innerWidth := panelInnerWidth(m.width)
+
+	if m.isBusy() {
+		left := fmt.Sprintf("%s %s%s", m.spinner.View(), base, elapsed)
+		return statusBusyStyle.Width(max(1, m.width)).Render(twoColumn(left, "", innerWidth))
+	}
+	if m.status == statusError {
+		return statusErrStyle.Width(max(1, m.width)).Render(twoColumn("error", "", innerWidth))
+	}
+	return statusIdleStyle.Width(max(1, m.width)).Render(twoColumn(base, "", innerWidth))
+}
+
+func (m *model) statusSettings(innerWidth int) string {
 	provider := m.activeProvider()
 	model := valueOrDefault(m.effectiveModel(), "n/a")
 	settings := fmt.Sprintf(
-		"provider:%s  model:%s  thinking:%s  verbose:%s  tools:%s  mouse:%s  /status",
+		"provider:%s  model:%s  verbose:%s  tools:%s  mouse:%s",
 		provider,
 		model,
-		onOff(m.showThinking),
 		onOff(m.verbose),
 		mapBool(m.toolsExpanded, "expanded", "collapsed"),
 		onOff(m.mouseEnabled),
 	)
-	innerWidth := panelInnerWidth(m.width)
 	if innerWidth < 70 {
-		settings = fmt.Sprintf("p:%s m:%s t:%s v:%s /status", provider, model, onOff(m.showThinking), onOff(m.verbose))
+		settings = fmt.Sprintf("p:%s m:%s v:%s mouse:%s", provider, model, onOff(m.verbose), onOff(m.mouseEnabled))
 	}
 	if innerWidth < 42 {
-		settings = "/status"
+		settings = fmt.Sprintf("mouse:%s", onOff(m.mouseEnabled))
 	}
-
-	if m.isBusy() {
-		left := fmt.Sprintf("%s %s%s", m.spinner.View(), base, elapsed)
-		return statusBusyStyle.Width(max(1, m.width)).Render(twoColumn(left, settings, innerWidth))
-	}
-	if m.status == statusError {
-		return statusErrStyle.Width(max(1, m.width)).Render(twoColumn("error", settings, innerWidth))
-	}
-	return statusIdleStyle.Width(max(1, m.width)).Render(twoColumn(base, settings, innerWidth))
+	return settings
 }
 
 func (m *model) inputView() string {
-	hintText := "Ctrl+J newline • Ctrl+Y mouse • Ctrl+O tools • Ctrl+T thinking • /shortcuts"
-	if panelInnerWidth(m.width) < 90 {
-		hintText = "Ctrl+J newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
-	}
-	if panelInnerWidth(m.width) < 70 {
-		hintText = "Ctrl+J newline • Ctrl+Y mouse • /shortcuts"
-	}
-	if panelInnerWidth(m.width) < 42 {
-		hintText = "Ctrl+J • /shortcuts"
-	}
-	hint := inputHintStyle.Render(truncateText(hintText, panelInnerWidth(m.width)))
 	body := m.input.View()
 	if menu := m.slashMenuView(); menu != "" {
 		body += "\n" + menu
 	}
-	body += "\n" + hint
 	return inputStyle.Width(max(1, m.width)).Render(body)
+}
+
+func (m *model) composerGapView() string {
+	return statusIdleStyle.Width(max(1, m.width)).Render("")
+}
+
+func (m *model) composerFooterView() string {
+	innerWidth := panelInnerWidth(m.width)
+	left := m.inputHintText(innerWidth)
+	right := m.statusSettings(innerWidth)
+	return statusIdleStyle.Width(max(1, m.width)).Render(twoColumn(left, right, innerWidth))
+}
+
+func (m *model) inputHintText(innerWidth int) string {
+	hintText := "Ctrl+J newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
+	if innerWidth < 90 {
+		hintText = "Ctrl+J newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
+	}
+	if innerWidth < 70 {
+		hintText = "Ctrl+J newline • Ctrl+Y mouse • /shortcuts"
+	}
+	if innerWidth < 42 {
+		hintText = "Ctrl+J • /shortcuts"
+	}
+	return truncateText(hintText, innerWidth)
 }
 
 func (m *model) layout() {
@@ -95,15 +114,17 @@ func (m *model) layout() {
 	m.input.SetWidth(max(10, innerWidth-2))
 	m.adjustInputHeight()
 
-	headerHeight := lipgloss.Height(m.headerView())
-	statusHeight := lipgloss.Height(m.statusView())
+	headerHeight := optionalRowHeight(m.headerView())
+	statusHeight := optionalRowHeight(m.statusView())
 	inputHeight := lipgloss.Height(m.inputView())
+	gapHeight := lipgloss.Height(m.composerGapView())
+	footerHeight := lipgloss.Height(m.composerFooterView())
 
-	viewportHeight := m.height - headerHeight - statusHeight - inputHeight
+	viewportHeight := m.height - headerHeight - statusHeight - inputHeight - gapHeight - footerHeight
 	if viewportHeight < 3 {
 		m.input.SetHeight(1)
 		inputHeight = lipgloss.Height(m.inputView())
-		viewportHeight = m.height - headerHeight - statusHeight - inputHeight
+		viewportHeight = m.height - headerHeight - statusHeight - inputHeight - gapHeight - footerHeight
 	}
 	if viewportHeight < 1 {
 		viewportHeight = 1
@@ -111,6 +132,13 @@ func (m *model) layout() {
 
 	m.viewport.Width = max(20, m.width)
 	m.viewport.Height = viewportHeight
+}
+
+func optionalRowHeight(row string) int {
+	if strings.TrimSpace(row) == "" {
+		return 0
+	}
+	return lipgloss.Height(row)
 }
 
 func (m *model) adjustInputHeight() {

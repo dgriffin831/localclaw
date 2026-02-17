@@ -27,23 +27,39 @@
 {
   "app": {
     "name": "localclaw",
-    "root": "~/.localclaw"
+    "root": "~/.localclaw",
+    "default": {
+      "verbose": false,
+      "mouse": false,
+      "tools": false
+    }
   },
   "llm": {
     "provider": "claudecode",
     "claude_code": {
       "binary_path": "claude",
-      "profile": "default"
+      "profile": "default",
+      "extra_args": [
+        "--allowed-tools",
+        "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get,mcp__localclaw__localclaw_memory_grep,mcp__localclaw__localclaw_workspace_status,mcp__localclaw__localclaw_cron_list,mcp__localclaw__localclaw_cron_add,mcp__localclaw__localclaw_cron_remove,mcp__localclaw__localclaw_cron_run,mcp__localclaw__localclaw_sessions_list,mcp__localclaw__localclaw_sessions_history,mcp__localclaw__localclaw_sessions_delete,mcp__localclaw__localclaw_session_status"
+      ],
+      "session_mode": "always",
+      "session_arg": "--session-id",
+      "resume_args": ["--resume", "{sessionId}"],
+      "session_id_fields": ["session_id", "sessionId", "conversation_id", "conversationId"]
     },
     "codex": {
       "binary_path": "codex",
       "profile": "",
       "model": "",
-      "extra_args": [],
+      "extra_args": ["--skip-git-repo-check"],
+      "session_mode": "existing",
+      "session_arg": "",
+      "resume_args": ["resume", "{sessionId}"],
+      "session_id_fields": ["thread_id", "threadId", "session_id", "sessionId"],
+      "resume_output": "json",
       "mcp": {
         "config_path": "",
-        "use_isolated_home": true,
-        "home_path": "",
         "server_name": "localclaw"
       }
     }
@@ -113,10 +129,18 @@ General:
 
 - `app.name` is required.
 - `app.root` is required.
+- `app.default` controls TUI startup flags:
+  - `verbose`: initial verbose diagnostics (`false` default)
+  - `mouse`: initial mouse capture (`false` default)
+  - `tools`: initial tool-card expansion (`false` default)
 - `app.thinking_messages` entries must be non-blank when provided.
 - `llm.provider` must be `claudecode` or `codex`.
 - `llm.claude_code.binary_path` is required when `llm.provider` is `claudecode`.
 - `llm.codex.binary_path` is required when `llm.provider` is `codex`.
+- `llm.claude_code.session_mode` and `llm.codex.session_mode` must be `always`, `existing`, or `none`.
+- for `session_mode=existing`, configured `resume_args` must include `{sessionId}`.
+- `llm.claude_code.session_id_fields[]` and `llm.codex.session_id_fields[]` entries cannot be blank.
+- `llm.codex.resume_output` must be one of `json`, `jsonl`, or `text` when set.
 - `channels.enabled` must contain at least one value.
 - `channels.enabled` allowlist: `slack`, `signal`.
 - duplicate channel names are rejected.
@@ -140,6 +164,25 @@ Codex-specific fields:
 - `llm.codex.profile` optionally sets Codex profile (`-p`).
 - `llm.codex.model` sets the default Codex model (`-m`) when no runtime override is present.
 - `llm.codex.extra_args` appends provider-specific flags directly to `codex exec` arguments.
+  - default includes `--skip-git-repo-check` so Codex runs in non-git/trust-unregistered directories.
+- `llm.codex.session_mode` controls continuation behavior:
+  - `existing`: resume when a persisted provider session exists
+  - `always`: same as `existing` for resume, otherwise start new
+  - `none`: disable provider session continuation flags
+- `llm.codex.resume_args` controls resume argument templates and supports `{sessionId}` placeholder.
+- `llm.codex.session_id_fields` controls JSON fields scanned for provider session IDs.
+- `llm.codex.resume_output` controls resume parsing mode (`json` default).
+  - use `text` only as a compatibility fallback when your Codex CLI/version cannot stream JSON on resume; note this disables structured tool-call/result events on resumed turns.
+- `llm.codex.mcp.config_path` optionally points to a specific Codex `config.toml`; otherwise Codex defaults are used (`$CODEX_HOME/config.toml` when set, else `~/.codex/config.toml`).
+
+Claude Code-specific continuation fields:
+
+- `llm.claude_code.extra_args` appends provider-specific flags directly to `claude` arguments.
+  - default includes `--allowed-tools` with LocalClaw MCP tools so memory/workspace/session/cron tools work without first-run permission prompts.
+- `llm.claude_code.session_mode` controls continuation behavior (`always` default).
+- `llm.claude_code.session_arg` controls new-session flag (default `--session-id`).
+- `llm.claude_code.resume_args` controls resume argument templates and supports `{sessionId}` placeholder.
+- `llm.claude_code.session_id_fields` controls JSON fields scanned for provider session IDs.
 
 ## Memory configuration notes
 
@@ -168,6 +211,11 @@ Implementation details to be aware of:
 Compatibility behavior:
 
 - Removed/deprecated config keys are not supported.
+- Removed app defaults key:
+  - `app.default.thinking`
+- Removed Codex MCP isolated-home keys:
+  - `llm.codex.mcp.use_isolated_home`
+  - `llm.codex.mcp.home_path`
 - Removed runtime tool-policy keys:
   - top-level `tools`
   - top-level `skills`
@@ -188,6 +236,24 @@ Example:
 {
   "app": {
     "thinking_messages": ["thinking", "checking memory", "drafting response"]
+  }
+}
+```
+
+## Optional TUI startup defaults
+
+You can set startup defaults for common TUI toggles under `app.default`.
+
+Example:
+
+```json
+{
+  "app": {
+    "default": {
+      "verbose": false,
+      "mouse": false,
+      "tools": false
+    }
   }
 }
 ```

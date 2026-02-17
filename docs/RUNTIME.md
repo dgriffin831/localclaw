@@ -8,7 +8,9 @@ Entrypoint: `cmd/localclaw/main.go`
 
 Supported command modes:
 
-- `check` (default): runs startup initialization checks, then verifies resolved workspace and session-store paths.
+- no command (default): renders detailed CLI help.
+- `doctor`: runs startup initialization checks and validates resolved workspace/session-store paths with detailed output.
+- `doctor --deep`: runs `doctor` checks plus deep checks (currently an LLM prompt probe).
 - `tui`: runs startup initialization, then starts Bubble Tea UI.
 - `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`, `grep`).
 - `mcp`: runs startup initialization, then serves stdio JSON-RPC MCP requests (`serve` subcommand).
@@ -17,7 +19,8 @@ Examples:
 
 ```bash
 go run ./cmd/localclaw
-go run ./cmd/localclaw check
+go run ./cmd/localclaw doctor
+go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
@@ -71,6 +74,7 @@ Runtime exposes session-default and session-explicit prompt paths:
 Prompt assembly (`buildPromptRequest`) behavior:
 
 - Resolves `agentID/sessionID` into stable `session_key`.
+- Adds provider metadata (`provider`) and persisted provider-native session ID (`provider_session_id`) when available.
 - Injects workspace bootstrap context on first prompt in a session.
 - Re-injects bootstrap context after compaction count increases.
 - Injects a localclaw-authored skills block from workspace skill snapshots.
@@ -84,7 +88,10 @@ Provider compatibility:
 MCP-first hard cutover:
 
 - Runtime no longer intercepts or executes provider-emitted structured `tool_call` events in the prompt stream path.
-- `PromptStreamForSession` forwards provider stream events directly.
+- `PromptStreamForSession` forwards provider stream events and wraps them with continuation persistence behavior:
+  - intercepts `provider_metadata` events with `session_id`
+  - persists session IDs per provider in session metadata (`providerSessionIds`)
+  - if a resume call fails with recognized stale/invalid session errors, clears the persisted provider session ID and retries once with a fresh provider session.
 - Provider-native and localclaw MCP execution happens provider-side; runtime remains local-only orchestrator and transcript/session manager.
 
 ## Runtime tools
@@ -129,6 +136,7 @@ Reset behavior:
 - `ResetSession` runs session memory snapshot hook best-effort.
 - Hook failures are logged but non-fatal.
 - `StartNew=true` rotates to a unique timestamp-based session ID.
+- `StartNew=false` clears persisted provider continuation IDs for the current local session.
 
 Memory flush behavior:
 

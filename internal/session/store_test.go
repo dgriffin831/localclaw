@@ -258,3 +258,93 @@ func TestUpdatePreservesRequiredMetadataFields(t *testing.T) {
 		t.Fatalf("expected updatedAt to remain populated")
 	}
 }
+
+func TestProviderSessionIDHelpersNormalizeSetGetClear(t *testing.T) {
+	t.Parallel()
+
+	entry := SessionEntry{}
+	SetProviderSessionID(&entry, "  ClaudeCode  ", " sess-123 ")
+	if got := GetProviderSessionID(entry, "claudecode"); got != "sess-123" {
+		t.Fatalf("expected canonical provider session id, got %q", got)
+	}
+	if got := GetProviderSessionID(entry, " CLAUDECODE "); got != "sess-123" {
+		t.Fatalf("expected normalized provider lookup to succeed, got %q", got)
+	}
+
+	SetProviderSessionID(&entry, "codex", "thread-1")
+	if got := GetProviderSessionID(entry, "codex"); got != "thread-1" {
+		t.Fatalf("expected codex provider session id, got %q", got)
+	}
+
+	ClearProviderSessionID(&entry, "clAudeCode")
+	if got := GetProviderSessionID(entry, "claudecode"); got != "" {
+		t.Fatalf("expected provider session id cleared, got %q", got)
+	}
+	if got := GetProviderSessionID(entry, "codex"); got != "thread-1" {
+		t.Fatalf("expected other provider session id to remain, got %q", got)
+	}
+
+	ClearProviderSessionID(&entry, "codex")
+	if entry.ProviderSessionIDs != nil && len(entry.ProviderSessionIDs) != 0 {
+		t.Fatalf("expected provider session map to be empty after clear, got %#v", entry.ProviderSessionIDs)
+	}
+}
+
+func TestDeleteRemovesSessionEntry(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(Settings{
+		StateRoot: t.TempDir(),
+		StorePath: "agents/{agentId}/sessions/sessions.json",
+	})
+
+	if _, err := store.Update(context.Background(), "alpha", "sess-1", func(entry *SessionEntry) error {
+		entry.Origin = OriginCLI
+		return nil
+	}); err != nil {
+		t.Fatalf("seed sess-1: %v", err)
+	}
+	if _, err := store.Update(context.Background(), "alpha", "sess-2", func(entry *SessionEntry) error {
+		entry.Origin = OriginSlack
+		return nil
+	}); err != nil {
+		t.Fatalf("seed sess-2: %v", err)
+	}
+
+	removed, err := store.Delete(context.Background(), "alpha", "sess-1")
+	if err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+	if !removed {
+		t.Fatalf("expected delete to report removed=true")
+	}
+
+	if _, exists, err := store.Get(context.Background(), "alpha", "sess-1"); err != nil {
+		t.Fatalf("get deleted session: %v", err)
+	} else if exists {
+		t.Fatalf("expected sess-1 to be deleted")
+	}
+
+	if _, exists, err := store.Get(context.Background(), "alpha", "sess-2"); err != nil {
+		t.Fatalf("get remaining session: %v", err)
+	} else if !exists {
+		t.Fatalf("expected sess-2 to remain")
+	}
+}
+
+func TestDeleteReturnsFalseWhenSessionMissing(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(Settings{
+		StateRoot: t.TempDir(),
+		StorePath: "agents/{agentId}/sessions/sessions.json",
+	})
+
+	removed, err := store.Delete(context.Background(), "alpha", "does-not-exist")
+	if err != nil {
+		t.Fatalf("delete missing session: %v", err)
+	}
+	if removed {
+		t.Fatalf("expected removed=false for missing session")
+	}
+}

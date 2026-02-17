@@ -11,11 +11,15 @@ Implementation location:
 - `PromptStream` executes:
   - `claude -p <input> --output-format stream-json --verbose --mcp-config <run-scoped.json>`
   - with `--strict-mcp-config` when enabled
+  - with session continuation args based on config and persisted provider session state:
+    - start mode default: `--session-id <generated-id>`
+    - resume mode default: `--resume <provider-session-id>`
   - via `exec.CommandContext`.
 - stdout JSONL stream is parsed into provider-agnostic events:
   - assistant text blocks -> `StreamEventDelta`
   - assistant tool-use blocks -> `StreamEventToolCall`
   - user tool-result blocks -> `StreamEventToolResult`
+  - discovered provider session IDs -> `StreamEventProviderMetadata` (`provider=claudecode`, `session_id=...`)
   - result event `result` field -> `StreamEventFinal`
 - if a line is not valid JSON, adapter falls back to treating it as raw delta text.
 - stderr is captured and included in surfaced execution errors.
@@ -46,6 +50,12 @@ Client appends environment values when configured:
 
 - `llm.provider` supports `claudecode` and `codex`.
 - `localclaw` does not implement direct network model clients.
+- session continuation config:
+  - `llm.claude_code.extra_args` for provider flags (defaults to a LocalClaw MCP `--allowed-tools` list so first-run memory/workspace/session/cron calls do not prompt for permission)
+  - `llm.claude_code.session_mode` (`always | existing | none`)
+  - `llm.claude_code.session_arg` for start mode (default `--session-id`)
+  - `llm.claude_code.resume_args` with `{sessionId}` placeholder
+  - `llm.claude_code.session_id_fields` for parsing provider output fields
 
 ## Error behavior
 

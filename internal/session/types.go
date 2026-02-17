@@ -21,18 +21,19 @@ type DeliveryMetadata struct {
 
 // SessionEntry stores durable metadata for one session.
 type SessionEntry struct {
-	ID                         string           `json:"id"`
-	Key                        string           `json:"key,omitempty"`
-	AgentID                    string           `json:"agentId"`
-	Origin                     Origin           `json:"origin,omitempty"`
-	Delivery                   DeliveryMetadata `json:"delivery,omitempty"`
-	TranscriptPath             string           `json:"transcriptPath,omitempty"`
-	TotalTokens                int              `json:"totalTokens,omitempty"`
-	CompactionCount            int              `json:"compactionCount,omitempty"`
-	BootstrapInjected          bool             `json:"bootstrapInjected,omitempty"`
-	BootstrapCompactionCount   int              `json:"bootstrapCompactionCount,omitempty"`
-	MemoryFlushAt              string           `json:"memoryFlushAt,omitempty"`
-	MemoryFlushCompactionCount int              `json:"memoryFlushCompactionCount,omitempty"`
-	CreatedAt                  string           `json:"createdAt"`
-	UpdatedAt                  string           `json:"updatedAt"`
+	ID                         string            `json:"id"`
+	Key                        string            `json:"key,omitempty"`
+	AgentID                    string            `json:"agentId"`
+	Origin                     Origin            `json:"origin,omitempty"`
+	Delivery                   DeliveryMetadata  `json:"delivery,omitempty"`
+	TranscriptPath             string            `json:"transcriptPath,omitempty"`
+	TotalTokens                int               `json:"totalTokens,omitempty"`
+	CompactionCount            int               `json:"compactionCount,omitempty"`
+	BootstrapInjected          bool              `json:"bootstrapInjected,omitempty"`
+	BootstrapCompactionCount   int               `json:"bootstrapCompactionCount,omitempty"`
+	MemoryFlushAt              string            `json:"memoryFlushAt,omitempty"`
+	MemoryFlushCompactionCount int               `json:"memoryFlushCompactionCount,omitempty"`
+	ProviderSessionIDs         map[string]string `json:"providerSessionIds,omitempty"`
+	CreatedAt                  string            `json:"createdAt"`
+	UpdatedAt                  string            `json:"updatedAt"`
 }

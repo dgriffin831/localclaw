@@ -549,8 +549,23 @@ func TestAbortRunClearsToolCallOwnershipCache(t *testing.T) {
 	}
 }
 
-func TestNewProgramEnablesMouseCellMotion(t *testing.T) {
+func TestNewProgramSkipsMouseCellMotionByDefault(t *testing.T) {
 	got := startupOptionBits(t, newProgram(newModel(context.Background(), nil, config.Default())))
+
+	expectedProgram := tea.NewProgram(nil)
+	tea.WithAltScreen()(expectedProgram)
+	expected := startupOptionBits(t, expectedProgram)
+
+	if got != expected {
+		t.Fatalf("unexpected startup options: got=%d want=%d", got, expected)
+	}
+}
+
+func TestNewProgramEnablesMouseCellMotionWhenConfiguredOn(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.Default.Mouse = true
+
+	got := startupOptionBits(t, newProgram(newModel(context.Background(), nil, cfg)))
 
 	expectedProgram := tea.NewProgram(nil)
 	tea.WithAltScreen()(expectedProgram)

@@ -251,6 +251,41 @@ func (s *Store) Update(ctx context.Context, agentID, sessionID string, updateFn 
 	return entry, nil
 }
 
+func (s *Store) Delete(ctx context.Context, agentID, sessionID string) (bool, error) {
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return false, errors.New("session id is required")
+	}
+
+	path, err := s.ResolveSessionsPath(agentID)
+	if err != nil {
+		return false, err
+	}
+	if err := s.ensureStoreFile(ctx, agentID); err != nil {
+		return false, err
+	}
+
+	release, err := s.acquireFileLock(ctx, path)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+
+	sessions, err := s.readSessionsFile(path)
+	if err != nil {
+		return false, err
+	}
+	if _, exists := sessions[normalizedSessionID]; !exists {
+		return false, nil
+	}
+
+	delete(sessions, normalizedSessionID)
+	if err := s.writeSessions(path, sessions); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) ensureStoreFile(ctx context.Context, agentID string) error {
 	path, err := s.ResolveSessionsPath(agentID)
 	if err != nil {

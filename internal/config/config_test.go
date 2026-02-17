@@ -19,6 +19,15 @@ func TestDefaultConfigIncludesAppRootAndAgentScaffolding(t *testing.T) {
 	if strings.TrimSpace(cfg.App.Root) == "" {
 		t.Fatalf("expected app.root default")
 	}
+	if cfg.App.Default.Verbose {
+		t.Fatalf("expected app.default.verbose default false")
+	}
+	if cfg.App.Default.Mouse {
+		t.Fatalf("expected app.default.mouse default false")
+	}
+	if cfg.App.Default.Tools {
+		t.Fatalf("expected app.default.tools default false")
+	}
 	if strings.TrimSpace(cfg.Agents.Defaults.Workspace) == "" {
 		t.Fatalf("expected agents.defaults.workspace default")
 	}
@@ -42,6 +51,56 @@ func TestDefaultConfigIncludesAppRootAndAgentScaffolding(t *testing.T) {
 	}
 	if !cfg.Agents.Defaults.Memory.Tools.Grep {
 		t.Fatalf("expected agents.defaults.memory.tools.grep default true")
+	}
+}
+
+func TestLoadSupportsAppDefaultFlags(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"app": {
+			"default": {
+				"verbose": true,
+				"mouse": false,
+				"tools": true
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.App.Default.Verbose {
+		t.Fatalf("expected app.default.verbose=true from config")
+	}
+	if cfg.App.Default.Mouse {
+		t.Fatalf("expected app.default.mouse=false from config")
+	}
+	if !cfg.App.Default.Tools {
+		t.Fatalf("expected app.default.tools=true from config")
+	}
+}
+
+func TestLoadRejectsRemovedAppDefaultThinkingToggle(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"app": {
+			"default": {
+				"thinking": false
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected app.default.thinking to be rejected")
 	}
 }
 
@@ -381,6 +440,29 @@ func TestLoadRejectsLegacyGovCloudFields(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsRemovedCodexMCPIsolatedHomeFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"llm": {
+			"provider": "codex",
+			"codex": {
+				"mcp": {
+					"use_isolated_home": true,
+					"home_path": "~/.localclaw/runtime/codex/home"
+				}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected removed codex mcp isolated-home fields to be rejected")
+	}
+}
+
 func TestValidateRejectsUnsupportedChannel(t *testing.T) {
 	cfg := Default()
 	cfg.Channels.Enabled = []string{"slack", "teams"}
@@ -431,6 +513,33 @@ func TestLoadSupportsCodexExtraArgs(t *testing.T) {
 	}
 }
 
+func TestLoadSupportsClaudeCodeExtraArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"llm": {
+			"provider": "claudecode",
+			"claude_code": {
+				"extra_args": ["--dangerously-skip-permissions", "--allowed-tools", "mcp__localclaw__localclaw_memory_search"]
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.LLM.ClaudeCode.ExtraArgs) != 3 {
+		t.Fatalf("expected 3 claude_code extra args, got %d", len(cfg.LLM.ClaudeCode.ExtraArgs))
+	}
+	if cfg.LLM.ClaudeCode.ExtraArgs[0] != "--dangerously-skip-permissions" {
+		t.Fatalf("unexpected first claude_code extra arg: %q", cfg.LLM.ClaudeCode.ExtraArgs[0])
+	}
+}
+
 func TestValidateRejectsWhitespaceAgentWorkspaceOverride(t *testing.T) {
 	cfg := Default()
 	cfg.Agents.List = []AgentConfig{{ID: "agent-a", Workspace: "   "}}
@@ -464,5 +573,109 @@ func TestValidateRejectsBlankThinkingMessages(t *testing.T) {
 	cfg.App.ThinkingMessages = []string{"thinking", "   "}
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected blank thinking message error")
+	}
+}
+
+func TestDefaultConfigIncludesProviderSessionContinuationDefaults(t *testing.T) {
+	cfg := Default()
+	if cfg.LLM.ClaudeCode.SessionMode != "always" {
+		t.Fatalf("expected claude_code.session_mode=always, got %q", cfg.LLM.ClaudeCode.SessionMode)
+	}
+	if cfg.LLM.Codex.SessionMode != "existing" {
+		t.Fatalf("expected codex.session_mode=existing, got %q", cfg.LLM.Codex.SessionMode)
+	}
+}
+
+func TestDefaultConfigIncludesCodexSkipGitRepoCheckArg(t *testing.T) {
+	cfg := Default()
+	if len(cfg.LLM.Codex.ExtraArgs) == 0 {
+		t.Fatalf("expected default codex extra args to include --skip-git-repo-check")
+	}
+	if cfg.LLM.Codex.ExtraArgs[0] != "--skip-git-repo-check" {
+		t.Fatalf("expected default codex extra args to start with --skip-git-repo-check, got %q", cfg.LLM.Codex.ExtraArgs[0])
+	}
+}
+
+func TestDefaultConfigUsesJSONResumeOutputForCodex(t *testing.T) {
+	cfg := Default()
+	if cfg.LLM.Codex.ResumeOutput != "json" {
+		t.Fatalf("expected default codex.resume_output=json, got %q", cfg.LLM.Codex.ResumeOutput)
+	}
+}
+
+func TestDefaultConfigIncludesClaudeAllowedMCPTools(t *testing.T) {
+	cfg := Default()
+	if len(cfg.LLM.ClaudeCode.ExtraArgs) != 2 {
+		t.Fatalf("expected 2 default claude_code extra args, got %d (%v)", len(cfg.LLM.ClaudeCode.ExtraArgs), cfg.LLM.ClaudeCode.ExtraArgs)
+	}
+	if cfg.LLM.ClaudeCode.ExtraArgs[0] != "--allowed-tools" {
+		t.Fatalf("expected default claude_code extra args to start with --allowed-tools, got %q", cfg.LLM.ClaudeCode.ExtraArgs[0])
+	}
+	allowed := cfg.LLM.ClaudeCode.ExtraArgs[1]
+	required := []string{
+		"mcp__localclaw__localclaw_memory_search",
+		"mcp__localclaw__localclaw_memory_get",
+		"mcp__localclaw__localclaw_memory_grep",
+		"mcp__localclaw__localclaw_workspace_status",
+		"mcp__localclaw__localclaw_cron_list",
+		"mcp__localclaw__localclaw_cron_add",
+		"mcp__localclaw__localclaw_cron_remove",
+		"mcp__localclaw__localclaw_cron_run",
+		"mcp__localclaw__localclaw_sessions_list",
+		"mcp__localclaw__localclaw_sessions_history",
+		"mcp__localclaw__localclaw_sessions_delete",
+		"mcp__localclaw__localclaw_session_status",
+	}
+	for _, tool := range required {
+		if !strings.Contains(allowed, tool) {
+			t.Fatalf("expected default allowed-tools to include %q, got %q", tool, allowed)
+		}
+	}
+	notExpected := []string{
+		"mcp__localclaw__localclaw_workspace_bootstrap_context",
+		"mcp__localclaw__localclaw_sessions_send",
+	}
+	for _, tool := range notExpected {
+		if strings.Contains(allowed, tool) {
+			t.Fatalf("expected default allowed-tools to exclude %q, got %q", tool, allowed)
+		}
+	}
+}
+
+func TestValidateRejectsInvalidProviderSessionModes(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.ClaudeCode.SessionMode = "invalid"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid claude_code.session_mode error")
+	}
+
+	cfg = Default()
+	cfg.LLM.Codex.SessionMode = "bad"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid codex.session_mode error")
+	}
+}
+
+func TestValidateRejectsResumeArgsWithoutSessionIDPlaceholderForExistingMode(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.ClaudeCode.SessionMode = "existing"
+	cfg.LLM.ClaudeCode.ResumeArgs = []string{"--resume", "fixed-id"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected claude_code.resume_args placeholder validation error")
+	}
+
+	cfg = Default()
+	cfg.LLM.Codex.SessionMode = "existing"
+	cfg.LLM.Codex.ResumeArgs = []string{"resume", "fixed-id"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected codex.resume_args placeholder validation error")
+	}
+}
+
+func TestValidateRejectsInvalidCodexResumeOutputMode(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.Codex.ResumeOutput = "yaml"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected codex.resume_output validation error")
 	}
 }

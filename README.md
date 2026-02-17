@@ -12,7 +12,7 @@
 
 ## Current implementation snapshot
 
-- Command modes: `check` (default), `tui`, `memory`, `mcp`.
+- Command modes: `doctor`, `tui`, `memory`, `mcp`.
 - Agent-aware workspace resolution and bootstrap templates.
 - Per-agent session metadata + transcript files under the configured `app.root`.
 - SQLite-backed memory indexing/search/grep with CLI tooling (`memory status/index/search/grep`).
@@ -24,6 +24,8 @@
 ```bash
 go test ./...
 go run ./cmd/localclaw
+go run ./cmd/localclaw doctor
+go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw mcp serve
@@ -32,7 +34,8 @@ go run ./cmd/localclaw mcp serve
 Run specific command modes:
 
 ```bash
-go run ./cmd/localclaw check
+go run ./cmd/localclaw doctor
+go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
@@ -44,13 +47,15 @@ go run ./cmd/localclaw mcp serve
 Run with an explicit config file:
 
 ```bash
-go run ./cmd/localclaw -config ./localclaw.json check
+go run ./cmd/localclaw -config ./localclaw.json doctor
 go run ./cmd/localclaw -config ./localclaw.json tui
 go run ./cmd/localclaw -config ./localclaw.json memory status
 go run ./cmd/localclaw -config ./localclaw.json mcp serve
 ```
 
-On startup, `localclaw` creates `~/.localclaw/localclaw.json` if it does not exist.
+Running `localclaw` with no command prints the detailed CLI help page.
+
+On startup commands (`doctor`, `tui`, `memory`), `localclaw` creates `~/.localclaw/localclaw.json` if it does not exist.
 This scaffold file is not auto-loaded unless you pass `-config`.
 
 ## TUI controls
@@ -63,7 +68,6 @@ This scaffold file is not auto-loaded unless you pass `-config`.
 - `Ctrl+P` / `Ctrl+N` (also `Alt+Up` / `Alt+Down`) navigate prompt history
 - `Mouse wheel` scroll transcript viewport
 - `Esc` abort active run
-- `Ctrl+T` toggle thinking visibility
 - `Ctrl+O` expand/collapse tool-card details in the transcript
 - `Ctrl+Y` toggle mouse capture (off enables standard text selection)
 - `Ctrl+C` clear input (press twice quickly to exit)
@@ -78,16 +82,18 @@ TUI slash commands:
 - `/clear`
 - `/reset`
 - `/new`
-- `/thinking <on|off>`
+- `/sessions`
+- `/resume <session_id>`
+- `/delete <session_id>`
 - `/verbose <on|off>`
 - `/mouse <on|off>`
 - `/model <name>` (`/model default` or `/model off` clears override)
 - `/exit`
 - `/quit`
 
-`/tools` shows ownership split sections:
-- `provider_native` (provider-discovered native tools)
-- `localclaw_mcp` (localclaw MCP-exposed tools for the active agent)
+`/tools` shows provider-reported tools only (source of truth for current session).
+If tools are not yet discovered, `/tools` triggers a background probe and refreshes once metadata arrives.
+For providers that omit explicit tool metadata in stream events (for example Codex), localclaw runs a provider-side JSON self-report probe as a fallback.
 
 `/verbose on` adds `[verbose]` system diagnostics to the transcript, including:
 - prompt/session summary at run start
@@ -103,6 +109,12 @@ Optional waiting-text customization:
 - Set `app.thinking_messages` in config to rotate custom waiting text.
 - Messages rotate once per submitted prompt while status is waiting and no stream delta has arrived.
 - If unset, default waiting text is `thinking`.
+
+Optional TUI startup defaults:
+
+- Set `app.default.verbose` to control initial verbose diagnostics mode (`false` by default).
+- Set `app.default.mouse` to control initial mouse capture (`false` by default).
+- Set `app.default.tools` to control initial tool-card expansion (`false` by default).
 
 ## Documentation map
 
