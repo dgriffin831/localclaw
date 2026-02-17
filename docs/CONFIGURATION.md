@@ -78,7 +78,15 @@
       "cli_path": "signal-cli",
       "account": "+10000000000",
       "default_recipient": "",
-      "timeout_seconds": 10
+      "timeout_seconds": 10,
+      "inbound": {
+        "enabled": false,
+        "allow_from": [],
+        "agent_by_sender": {},
+        "default_agent": "default",
+        "poll_timeout_seconds": 5,
+        "max_messages_per_poll": 10
+      }
     }
   },
   "agents": {
@@ -166,6 +174,13 @@ General:
   - `channels.signal.cli_path` is required.
   - `channels.signal.account` is required.
   - `channels.signal.timeout_seconds` must be `> 0`.
+- when `channels.signal.inbound.enabled=true`:
+  - `channels.signal.inbound.allow_from` must contain at least one E.164 sender.
+  - `channels.signal.inbound.default_agent` must be `default` or a configured `agents.list[].id`.
+  - `channels.signal.inbound.agent_by_sender` senders must also appear in `allow_from`.
+  - `channels.signal.inbound.agent_by_sender` agents must be valid agent ids.
+  - `channels.signal.inbound.poll_timeout_seconds` must be `> 0`.
+  - `channels.signal.inbound.max_messages_per_poll` must be `> 0`.
 - `agents.defaults.workspace` and `session.store` are required.
 - each `agents.list[].id` is required and unique.
 - `agents.list[].workspace` cannot be blank-whitespace.
@@ -173,6 +188,7 @@ General:
   - `thresholdTokens`
   - `triggerWindowTokens`
   - `timeoutSeconds`
+- `cron.enabled` toggles scheduler startup and MCP cron methods.
 - if heartbeat is enabled, `heartbeat.interval_seconds` must be `> 0`.
 
 Local-only boundary:
@@ -222,11 +238,35 @@ Signal (`channels.signal`):
 - `account`: sender account passed to `signal-cli -a`.
 - `default_recipient`: fallback destination when `localclaw_signal_send` omits `recipient`.
 - `timeout_seconds`: subprocess timeout for send calls.
+- `inbound.enabled`: enables inbound Signal polling worker mode (`channels serve`).
+- `inbound.allow_from`: allowlist of direct sender numbers permitted to trigger agent runs.
+- `inbound.agent_by_sender`: optional sender -> agent routing map.
+- `inbound.default_agent`: fallback agent for allowlisted senders without explicit mapping.
+- `inbound.poll_timeout_seconds`: `signal-cli receive` timeout per poll.
+- `inbound.max_messages_per_poll`: max messages consumed per receive poll.
+- group messages are always dropped in inbound mode.
 
 MCP channel tools:
 
 - `localclaw_slack_send` (required `text`; optional `channel`, `thread_id`, `agent_id`, `session_id`)
 - `localclaw_signal_send` (required `text`; optional `recipient`, `agent_id`, `session_id`)
+
+## Cron configuration notes
+
+- `cron.enabled=true` starts the in-process scheduler during `App.Run`.
+- persisted store path is `<app.root>/cron/jobs.json`.
+- supported schedules:
+  - 5-field cron (`minute hour day-of-month month day-of-week`) with `*`, `,`, `-`, `/`, and integer values
+  - macros: `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@hourly`, `@reboot`
+- commands run locally using `/bin/sh -lc <command>`.
+- jobs run only while runtime is active; missed windows while offline are not backfilled.
+
+## Heartbeat configuration notes
+
+- `heartbeat.enabled=true` starts recurring heartbeat ticks during `App.Run`.
+- `heartbeat.interval_seconds` sets the tick cadence in seconds.
+- each tick runs a local prompt in the default agent/session and references workspace `HEARTBEAT.md`.
+- missing or unreadable `HEARTBEAT.md` skips that tick (logged) and later ticks continue.
 
 ## Memory configuration notes
 

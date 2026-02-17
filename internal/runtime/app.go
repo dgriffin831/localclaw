@@ -39,6 +39,7 @@ type App struct {
 	heartbeat       heartbeat.Monitor
 	slack           slack.Client
 	signal          signal.Client
+	signalReceive   func(ctx context.Context, settings signal.ReceiveSettings) ([]signal.ReceiveMessage, error)
 	llm             llm.Client
 	llmClients      map[string]llm.Client
 	transcript      *session.TranscriptWriter
@@ -59,6 +60,8 @@ type skillsSessionSnapshot struct {
 const (
 	DefaultAgentID   = "default"
 	DefaultSessionID = "main"
+	// Keep this prompt aligned with OpenClaw heartbeat defaults so behavior is consistent.
+	defaultHeartbeatPrompt = "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
 )
 
 type SessionResolution struct {
@@ -219,12 +222,16 @@ func New(cfg config.Config) (*App, error) {
 				return workspaceManager.ResolveWorkspace(agentID)
 			},
 		}),
-		cron:       cron.NewInProcessScheduler(cfg.Cron.Enabled),
-		heartbeat:  heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
-		slack:      slackAdapter,
-		signal:     signalAdapter,
-		llm:        llmClient,
-		llmClients: llmClients,
+		cron: cron.NewInProcessSchedulerWithSettings(cron.Settings{
+			Enabled:   cfg.Cron.Enabled,
+			StateRoot: resolvedStateRoot,
+		}),
+		heartbeat:     heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
+		slack:         slackAdapter,
+		signal:        signalAdapter,
+		signalReceive: signal.ReceiveBatch,
+		llm:           llmClient,
+		llmClients:    llmClients,
 		// TODO: Wire transcript appends into memory autosync (StartAutoSync/HandleTranscriptUpdate) via a runtime event bus so session delta indexing is active at startup.
 		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
 		now:                 time.Now,
@@ -287,7 +294,34 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.heartbeat.Ping(ctx, "localclaw startup heartbeat"); err != nil {
 		return fmt.Errorf("heartbeat ping: %w", err)
 	}
+	a.heartbeat.Start(ctx, func(runCtx context.Context) error {
+		return a.runHeartbeatTick(runCtx)
+	})
 	return nil
+}
+
+func (a *App) runHeartbeatTick(ctx context.Context) error {
+	workspacePath, err := a.ResolveWorkspacePath(DefaultAgentID)
+	if err != nil {
+		return fmt.Errorf("resolve heartbeat workspace: %w", err)
+	}
+	heartbeatPath := filepath.Join(workspacePath, "HEARTBEAT.md")
+	if _, err := os.ReadFile(heartbeatPath); err != nil {
+		log.Printf("heartbeat: skipped tick; unable to read %s: %v", heartbeatPath, err)
+		return nil
+	}
+	if _, err := a.PromptForSession(ctx, DefaultAgentID, DefaultSessionID, buildHeartbeatPrompt(heartbeatPath)); err != nil {
+		return fmt.Errorf("prompt heartbeat: %w", err)
+	}
+	return nil
+}
+
+func buildHeartbeatPrompt(heartbeatPath string) string {
+	trimmed := strings.TrimSpace(heartbeatPath)
+	if trimmed == "" {
+		return defaultHeartbeatPrompt
+	}
+	return fmt.Sprintf("%s\nUse workspace heartbeat file: %s", defaultHeartbeatPrompt, trimmed)
 }
 
 func (a *App) bootstrapDefaultConfigFile() error {

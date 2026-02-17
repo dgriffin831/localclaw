@@ -202,6 +202,30 @@ func TestRunDoesNotOverwriteExistingBootstrappedConfigFile(t *testing.T) {
 	}
 }
 
+func TestRunFailsWhenCronStateLoadIsInvalid(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.Root = t.TempDir()
+	cronPath := filepath.Join(cfg.App.Root, "cron", "jobs.json")
+	if err := os.MkdirAll(filepath.Dir(cronPath), 0o700); err != nil {
+		t.Fatalf("mkdir cron dir: %v", err)
+	}
+	if err := os.WriteFile(cronPath, []byte("{invalid-json"), 0o600); err != nil {
+		t.Fatalf("write invalid cron store: %v", err)
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	err = app.Run(context.Background())
+	if err == nil {
+		t.Fatalf("expected app.Run to fail when cron store is invalid")
+	}
+	if !strings.Contains(err.Error(), "cron start: load cron jobs") {
+		t.Fatalf("expected wrapped cron load error, got %v", err)
+	}
+}
+
 func TestNewConfiguresClaudeMCPConfigPathUnderStateRoot(t *testing.T) {
 	stateRoot := t.TempDir()
 	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")

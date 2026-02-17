@@ -4,6 +4,10 @@
 
 Draft
 
+## Follow-up Scope
+
+Inbound Signal routing/policy is tracked separately in `docs/specs/channels-inbound.md`.
+
 ## V1 Build Policy
 
 `localclaw` is still in v1 build-out. This spec intentionally avoids rollback plans, fallback execution paths, and legacy compatibility requirements. Implementation should be clean and forward-only.

@@ -31,7 +31,7 @@ localclaw binary (single process)
   |- runtime wiring
   |   |- workspace manager (resolve + bootstrap templates)
   |   |- session store + transcript writer
-  |   |- runtime tool registry (memory_search/memory_grep/memory_get)
+  |   |- runtime tool registry (memory + cron + channel MCP tools)
   |   |- skills registry
   |   |- cron scheduler
   |   |- heartbeat monitor
@@ -56,7 +56,7 @@ No server, gateway, or listener process exists.
 2. bootstrap `~/.localclaw/localclaw.json` if missing
 3. `sessions.Init`
 4. `skills.Load`
-5. `cron.Start`
+5. `cron.Start` (load persisted cron jobs + start in-process scheduling loop)
 6. `heartbeat.Ping("localclaw startup heartbeat")`
 
 Any failure aborts startup.
@@ -81,6 +81,7 @@ Memory/runtime tool behavior:
 
 - Memory retrieval is keyword/FTS + grep/file-read based (`memory_search`, `memory_grep`, `memory_get`).
 - Runtime and memory CLI construct managers on demand using resolved workspace + `app.root`-based paths.
+- Cron scheduler stores jobs under `app.root` and executes local commands while runtime modes are active.
 
 ## 5. Storage model
 
@@ -90,6 +91,7 @@ Default state root: `~/.localclaw`
 ~/.localclaw/
   localclaw.json                        # scaffolded config file if missing
   memory/<agentId>.sqlite              # SQLite memory index store
+  cron/jobs.json                       # persisted cron jobs + latest run metadata
   agents/<agentId>/sessions/sessions.json
   agents/<agentId>/sessions/<sessionId>.jsonl
   workspace/                            # when workspace config is "." for default agent

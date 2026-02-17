@@ -556,6 +556,46 @@ func TestValidateAllowsBlankDisabledChannelConfig(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsSignalInboundWithoutAllowlist(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{"signal"}
+	cfg.Channels.Signal.Inbound.Enabled = true
+	cfg.Channels.Signal.Inbound.AllowFrom = nil
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected signal inbound allowlist validation error")
+	}
+}
+
+func TestValidateRejectsSignalInboundAgentMappingToUnknownAgent(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{"signal"}
+	cfg.Channels.Signal.Inbound.Enabled = true
+	cfg.Channels.Signal.Inbound.AllowFrom = []string{"+15557654321"}
+	cfg.Channels.Signal.Inbound.AgentBySender = map[string]string{
+		"+15557654321": "agent-missing",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected unknown agent mapping validation error")
+	}
+}
+
+func TestValidateAllowsSignalInboundWithAllowlistAndAgentMapping(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{"signal"}
+	cfg.Agents.List = []AgentConfig{
+		{ID: "agent-ops"},
+	}
+	cfg.Channels.Signal.Inbound.Enabled = true
+	cfg.Channels.Signal.Inbound.AllowFrom = []string{"+15557654321"}
+	cfg.Channels.Signal.Inbound.AgentBySender = map[string]string{
+		"+15557654321": "agent-ops",
+	}
+	cfg.Channels.Signal.Inbound.DefaultAgent = "default"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid inbound signal config, got %v", err)
+	}
+}
+
 func TestValidateSupportsCodexProviderAndRequiresBinaryPath(t *testing.T) {
 	cfg := Default()
 	cfg.LLM.Provider = "codex"

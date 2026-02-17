@@ -3,8 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/dgriffin831/localclaw/internal/cron"
 	"github.com/dgriffin831/localclaw/internal/mcp/protocol"
@@ -19,12 +17,16 @@ const (
 )
 
 type CronJob struct {
-	ID        string `json:"id"`
-	Schedule  string `json:"schedule"`
-	Command   string `json:"command"`
-	CreatedAt string `json:"createdAt,omitempty"`
-	UpdatedAt string `json:"updatedAt,omitempty"`
-	LastRunAt string `json:"lastRunAt,omitempty"`
+	ID                string `json:"id"`
+	Schedule          string `json:"schedule"`
+	Command           string `json:"command"`
+	CreatedAt         string `json:"createdAt,omitempty"`
+	UpdatedAt         string `json:"updatedAt,omitempty"`
+	LastRunAt         string `json:"lastRunAt,omitempty"`
+	LastRunStatus     string `json:"lastRunStatus,omitempty"`
+	LastRunExitCode   *int   `json:"lastRunExitCode,omitempty"`
+	LastRunError      string `json:"lastRunError,omitempty"`
+	LastRunDurationMs int64  `json:"lastRunDurationMs,omitempty"`
 }
 
 type CronListRequest struct{}
@@ -46,6 +48,9 @@ type CronRunRequest struct {
 type CronRunResult struct {
 	ID          string `json:"id"`
 	TriggeredAt string `json:"triggeredAt"`
+	Status      string `json:"status"`
+	ExitCode    *int   `json:"exitCode,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 type CronBackend interface {
@@ -136,7 +141,7 @@ func (t CronAddTool) Call(ctx context.Context, args map[string]interface{}) prot
 	if len(command) > 2048 {
 		return errorResult(fmt.Errorf("command cannot exceed 2048 characters"))
 	}
-	if err := validateCronSchedule(schedule); err != nil {
+	if err := cron.ValidateSchedule(schedule); err != nil {
 		return errorResult(err)
 	}
 	job, runErr := t.backend.Add(ctx, CronAddRequest{ID: id, Schedule: schedule, Command: command})
@@ -203,129 +208,20 @@ func (b RuntimeCronBackend) Run(ctx context.Context, req CronRunRequest) (CronRu
 	if err != nil {
 		return CronRunResult{}, err
 	}
-	return CronRunResult{ID: res.ID, TriggeredAt: res.TriggeredAt}, nil
+	return CronRunResult{ID: res.ID, TriggeredAt: res.TriggeredAt, Status: res.Status, ExitCode: res.ExitCode, Error: res.Error}, nil
 }
 
 func fromCronEntry(entry cron.Entry) CronJob {
 	return CronJob{
-		ID:        entry.ID,
-		Schedule:  entry.Schedule,
-		Command:   entry.Command,
-		CreatedAt: entry.CreatedAt,
-		UpdatedAt: entry.UpdatedAt,
-		LastRunAt: entry.LastRunAt,
+		ID:                entry.ID,
+		Schedule:          entry.Schedule,
+		Command:           entry.Command,
+		CreatedAt:         entry.CreatedAt,
+		UpdatedAt:         entry.UpdatedAt,
+		LastRunAt:         entry.LastRunAt,
+		LastRunStatus:     entry.LastRunStatus,
+		LastRunExitCode:   entry.LastRunExitCode,
+		LastRunError:      entry.LastRunError,
+		LastRunDurationMs: entry.LastRunDurationMs,
 	}
-}
-
-func validateCronSchedule(schedule string) error {
-	value := strings.TrimSpace(schedule)
-	if value == "" {
-		return fmt.Errorf("schedule is required")
-	}
-	if strings.HasPrefix(value, "@") {
-		switch value {
-		case "@yearly", "@annually", "@monthly", "@weekly", "@daily", "@hourly", "@reboot":
-			return nil
-		default:
-			return fmt.Errorf("schedule %q is not a supported macro", value)
-		}
-	}
-	parts := strings.Fields(value)
-	if len(parts) != 5 {
-		return fmt.Errorf("schedule must use 5-field cron format")
-	}
-	ranges := [][2]int{
-		{0, 59}, // minute
-		{0, 23}, // hour
-		{1, 31}, // day of month
-		{1, 12}, // month
-		{0, 7},  // day of week
-	}
-	for i, part := range parts {
-		if err := validateCronField(part, ranges[i][0], ranges[i][1]); err != nil {
-			return fmt.Errorf("invalid cron field %d: %w", i+1, err)
-		}
-	}
-	return nil
-}
-
-func validateCronField(field string, min, max int) error {
-	value := strings.TrimSpace(field)
-	if value == "" {
-		return fmt.Errorf("field cannot be blank")
-	}
-	for _, token := range strings.Split(value, ",") {
-		if err := validateCronToken(strings.TrimSpace(token), min, max); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateCronToken(token string, min, max int) error {
-	if token == "" {
-		return fmt.Errorf("empty token")
-	}
-	if token == "*" {
-		return nil
-	}
-
-	base := token
-	step := 0
-	if strings.Contains(token, "/") {
-		parts := strings.Split(token, "/")
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid step syntax %q", token)
-		}
-		base = strings.TrimSpace(parts[0])
-		if base == "" {
-			return fmt.Errorf("invalid step base in %q", token)
-		}
-		parsedStep, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if err != nil || parsedStep <= 0 {
-			return fmt.Errorf("step must be a positive integer in %q", token)
-		}
-		step = parsedStep
-	}
-
-	if base == "*" {
-		return nil
-	}
-	if strings.Contains(base, "-") {
-		parts := strings.Split(base, "-")
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid range %q", token)
-		}
-		start, err := parseCronInt(strings.TrimSpace(parts[0]), min, max)
-		if err != nil {
-			return err
-		}
-		end, err := parseCronInt(strings.TrimSpace(parts[1]), min, max)
-		if err != nil {
-			return err
-		}
-		if start > end {
-			return fmt.Errorf("range start %d exceeds end %d in %q", start, end, token)
-		}
-		if step > 0 && step > (end-start+1) {
-			return fmt.Errorf("step %d is too large for range %q", step, token)
-		}
-		return nil
-	}
-
-	if _, err := parseCronInt(base, min, max); err != nil {
-		return err
-	}
-	return nil
-}
-
-func parseCronInt(value string, min, max int) (int, error) {
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("value %q must be an integer", value)
-	}
-	if parsed < min || parsed > max {
-		return 0, fmt.Errorf("value %d is out of range [%d,%d]", parsed, min, max)
-	}
-	return parsed, nil
 }

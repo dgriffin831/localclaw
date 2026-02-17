@@ -105,3 +105,21 @@ func TestCronAddToolRejectsZeroStep(t *testing.T) {
 		t.Fatalf("unexpected error: %v", res.StructuredContent["error"])
 	}
 }
+
+func TestCronAddToolAcceptsRebootMacro(t *testing.T) {
+	called := false
+	h := NewCronAddTool(stubCronBackend{addFn: func(ctx context.Context, req CronAddRequest) (CronJob, error) {
+		called = true
+		if req.Schedule != "@reboot" {
+			t.Fatalf("expected @reboot schedule, got %q", req.Schedule)
+		}
+		return CronJob{ID: "job-1", Schedule: req.Schedule, Command: req.Command}, nil
+	}})
+	res := h.Call(context.Background(), map[string]interface{}{"schedule": "@reboot", "command": "echo hi"})
+	if res.IsError {
+		t.Fatalf("expected @reboot macro to be accepted: %v", res.StructuredContent["error"])
+	}
+	if !called {
+		t.Fatalf("expected backend add to be called")
+	}
+}

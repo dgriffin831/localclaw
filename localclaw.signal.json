@@ -1,4 +1,18 @@
 {
+  "app": {
+    "root": "./.localclaw"
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "."
+    }
+  },
+  "cron": {
+    "enabled": true
+  },
+  "session": {
+    "store": "agents/{agentId}/sessions/sessions.json"
+  },
   "channels": {
     "enabled": ["signal"],
     "signal": {

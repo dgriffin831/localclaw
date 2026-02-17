@@ -13,6 +13,7 @@ Supported command modes:
 - `doctor --deep`: runs `doctor` checks plus deep checks (currently an LLM prompt probe).
 - `tui`: runs startup initialization, then starts Bubble Tea UI.
 - `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`, `grep`).
+- `channels`: runs startup initialization, then runs channel workers (`serve` subcommand).
 - `mcp`: runs startup initialization, then serves stdio JSON-RPC MCP requests (`serve` subcommand).
 
 Examples:
@@ -26,6 +27,7 @@ go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
 go run ./cmd/localclaw memory grep "incident-1234"
+go run ./cmd/localclaw channels serve
 go run ./cmd/localclaw mcp serve
 ```
 
@@ -41,7 +43,7 @@ go run ./cmd/localclaw mcp serve
 - workspace manager (`internal/workspace`)
 - session store + transcript writer (`internal/session`)
 - runtime tool registry (`internal/skills` + `internal/runtime/tools.go`)
-- cron scheduler and heartbeat monitor
+- cron scheduler (persistent recurring jobs) and heartbeat monitor
 - channel adapters (`slack`, `signal`) wired only when present in `channels.enabled`
 - provider-agnostic LLM client contract (`internal/llm`) with local CLI adapters:
   - Claude Code (`internal/llm/claudecode`)
@@ -55,8 +57,11 @@ go run ./cmd/localclaw mcp serve
 2. bootstrap default config file at `~/.localclaw/localclaw.json` when missing
 3. `sessions.Init`
 4. `skills.Load`
-5. `cron.Start`
+5. `cron.Start` (loads `<app.root>/cron/jobs.json` and starts background scheduling loop)
 6. `heartbeat.Ping("localclaw startup heartbeat")`
+7. start heartbeat background loop (when enabled) using `heartbeat.interval_seconds`
+   - each tick submits a local prompt that references workspace `HEARTBEAT.md`
+   - heartbeat tick errors are logged and do not fail runtime startup
 
 Any step failure aborts startup with wrapped context.
 
@@ -99,6 +104,10 @@ Supported tools:
 - `memory_search`
 - `memory_grep`
 - `memory_get`
+- `localclaw_cron_list`
+- `localclaw_cron_add`
+- `localclaw_cron_remove`
+- `localclaw_cron_run`
 - `localclaw_slack_send`
 - `localclaw_signal_send`
 
@@ -118,6 +127,36 @@ Channel dispatch behavior:
 - Calls are gated by `channels.enabled`.
 - Disabled channel sends return `channel \"<name>\" is disabled`.
 - When `agent_id`/`session_id` are provided, runtime persists channel delivery metadata into session entries.
+
+Signal inbound behavior:
+
+- `channels serve` currently runs Signal inbound processing only.
+- Runtime polls `signal-cli receive` using JSON output (`-o json`) and local subprocess execution.
+- Allowed inbound senders are enforced by `channels.signal.inbound.allow_from`.
+- Group messages are always dropped (never routed/executed).
+- Accepted direct messages are routed to agent sessions using:
+  - `channels.signal.inbound.agent_by_sender`
+  - fallback `channels.signal.inbound.default_agent`
+- Session ids are derived per sender (`signal-<digits>`) to keep per-sender thread continuity.
+
+Cron behavior:
+
+- `cron.enabled=false` disables scheduler startup and all MCP cron methods (`cron scheduler is disabled`).
+- schedules support 5-field cron expressions plus macros: `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@hourly`, `@reboot`.
+- job metadata persists latest run outcome fields (`lastRunAt`, `lastRunStatus`, `lastRunExitCode`, `lastRunError`, `lastRunDurationMs`).
+- commands execute locally via subprocess (`/bin/sh -lc <command>`).
+- `localclaw_cron_run` uses the same execution/status path as scheduled runs.
+- `@reboot` jobs run once per scheduler start.
+- missed schedules while runtime is offline are not backfilled.
+
+Heartbeat behavior:
+
+- `heartbeat.enabled=false` disables recurring heartbeat ticks.
+- `heartbeat.interval_seconds` controls recurring heartbeat cadence.
+- each tick resolves default workspace `HEARTBEAT.md` and skips/logs when file read fails.
+- each successful tick submits a local prompt in `default/main` that references `HEARTBEAT.md`.
+- overlapping heartbeat executions are skipped while a prior tick is still running.
+- heartbeat tick failures are non-fatal; future ticks continue.
 
 Skills snapshot behavior:
 
