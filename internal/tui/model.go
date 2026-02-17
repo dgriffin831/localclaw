@@ -79,6 +79,11 @@ type providerToolsDiscoveredMsg struct {
 	Err      error
 }
 
+type providerModelsDiscoveredMsg struct {
+	Catalogs map[string]llm.ProviderModelCatalog
+	Errors   map[string]string
+}
+
 type model struct {
 	ctx context.Context
 	app *runtime.App
@@ -104,19 +109,24 @@ type model struct {
 	running         bool
 	hasStreamDelta  bool
 
-	verbose                        bool
-	toolsExpanded                  bool
-	mouseEnabled                   bool
-	thinkingMessages               []string
-	thinkingMessageIdx             int
-	activeThinkingMessage          string
-	providerName                   string
-	providerModel                  string
-	modelOverride                  string
-	providerTools                  []string
-	providerToolsDiscoveryInFlight bool
-	toolCallOwnershipByID          map[string]llm.ToolClass
-	toolCardIndexByCallID          map[string]int
+	verbose                         bool
+	toolsExpanded                   bool
+	mouseEnabled                    bool
+	thinkingMessages                []string
+	thinkingMessageIdx              int
+	activeThinkingMessage           string
+	providerName                    string
+	providerModel                   string
+	providerOverride                string
+	modelOverride                   string
+	reasoningOverride               string
+	providerTools                   []string
+	providerToolsDiscoveryInFlight  bool
+	providerModelCatalogs           map[string]llm.ProviderModelCatalog
+	providerModelCatalogErrors      map[string]string
+	providerModelsDiscoveryInFlight bool
+	toolCallOwnershipByID           map[string]llm.ToolClass
+	toolCardIndexByCallID           map[string]int
 
 	streamDeltaEvents int
 	streamDeltaChars  int
@@ -255,26 +265,28 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	vp.MouseWheelEnabled = true
 
 	m := model{
-		ctx:                   ctx,
-		app:                   app,
-		cfg:                   cfg,
-		agentID:               resolution.AgentID,
-		sessionID:             resolution.SessionID,
-		sessionKey:            resolution.SessionKey,
-		workspacePath:         workspacePath,
-		viewport:              vp,
-		input:                 input,
-		spinner:               sp,
-		status:                statusIdle,
-		verbose:               cfg.App.Default.Verbose,
-		toolsExpanded:         cfg.App.Default.Tools,
-		mouseEnabled:          cfg.App.Default.Mouse,
-		historyIdx:            -1,
-		activeAssistantIdx:    -1,
-		thinkingMessages:      resolveThinkingMessages(cfg.App.ThinkingMessages),
-		providerName:          strings.TrimSpace(cfg.LLM.Provider),
-		toolCallOwnershipByID: map[string]llm.ToolClass{},
-		toolCardIndexByCallID: map[string]int{},
+		ctx:                        ctx,
+		app:                        app,
+		cfg:                        cfg,
+		agentID:                    resolution.AgentID,
+		sessionID:                  resolution.SessionID,
+		sessionKey:                 resolution.SessionKey,
+		workspacePath:              workspacePath,
+		viewport:                   vp,
+		input:                      input,
+		spinner:                    sp,
+		status:                     statusIdle,
+		verbose:                    cfg.App.Default.Verbose,
+		toolsExpanded:              cfg.App.Default.Tools,
+		mouseEnabled:               cfg.App.Default.Mouse,
+		historyIdx:                 -1,
+		activeAssistantIdx:         -1,
+		thinkingMessages:           resolveThinkingMessages(cfg.App.ThinkingMessages),
+		providerName:               strings.TrimSpace(cfg.LLM.Provider),
+		providerModelCatalogs:      map[string]llm.ProviderModelCatalog{},
+		providerModelCatalogErrors: map[string]string{},
+		toolCallOwnershipByID:      map[string]llm.ToolClass{},
+		toolCardIndexByCallID:      map[string]int{},
 	}
 	m.syncSessionMetadata()
 	m.addSystem("localclaw ready. Type /help for commands.")

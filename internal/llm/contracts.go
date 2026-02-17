@@ -52,6 +52,23 @@ type ProviderMetadata struct {
 	SessionID string   `json:"session_id,omitempty"`
 }
 
+type ReasoningMetadata struct {
+	Supported bool     `json:"supported,omitempty"`
+	Levels    []string `json:"levels,omitempty"`
+	Default   string   `json:"default,omitempty"`
+}
+
+type ProviderModelDescriptor struct {
+	Name      string            `json:"name"`
+	Reasoning ReasoningMetadata `json:"reasoning,omitempty"`
+}
+
+type ProviderModelCatalog struct {
+	Provider string                    `json:"provider"`
+	Models   []ProviderModelDescriptor `json:"models,omitempty"`
+	Partial  bool                      `json:"partial,omitempty"`
+}
+
 type StreamEvent struct {
 	Type             StreamEventType
 	Text             string
@@ -83,7 +100,9 @@ type SessionMetadata struct {
 }
 
 type PromptOptions struct {
-	ModelOverride string `json:"model_override,omitempty"`
+	ProviderOverride  string `json:"provider_override,omitempty"`
+	ModelOverride     string `json:"model_override,omitempty"`
+	ReasoningOverride string `json:"reasoning_override,omitempty"`
 }
 
 type Request struct {
@@ -111,6 +130,11 @@ type Client interface {
 type RequestClient interface {
 	PromptRequest(ctx context.Context, req Request) (string, error)
 	PromptStreamRequest(ctx context.Context, req Request) (<-chan StreamEvent, <-chan error)
+}
+
+// ModelCatalogClient adds provider-native model discovery support.
+type ModelCatalogClient interface {
+	DiscoverModelCatalog(ctx context.Context) (ProviderModelCatalog, error)
 }
 
 // NOTE: ComposePromptFallback is intentionally retained as the central prompt composition fallback for now.

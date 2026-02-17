@@ -27,6 +27,14 @@ var defaultClaudeAllowedMCPTools = []string{
 	"mcp__localclaw__localclaw_session_status",
 }
 
+var allowedCodexReasoningLevels = []string{
+	"xlow",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+}
+
 // Config contains all runtime configuration for localclaw.
 type Config struct {
 	App       AppConfig       `json:"app"`
@@ -68,16 +76,17 @@ type ClaudeCodeConfig struct {
 }
 
 type CodexConfig struct {
-	BinaryPath      string         `json:"binary_path"`
-	Profile         string         `json:"profile"`
-	Model           string         `json:"model"`
-	ExtraArgs       []string       `json:"extra_args"`
-	SessionMode     string         `json:"session_mode"`
-	SessionArg      string         `json:"session_arg"`
-	ResumeArgs      []string       `json:"resume_args"`
-	SessionIDFields []string       `json:"session_id_fields"`
-	ResumeOutput    string         `json:"resume_output"`
-	MCP             CodexMCPConfig `json:"mcp"`
+	BinaryPath       string         `json:"binary_path"`
+	Profile          string         `json:"profile"`
+	Model            string         `json:"model"`
+	ReasoningDefault string         `json:"reasoning_default"`
+	ExtraArgs        []string       `json:"extra_args"`
+	SessionMode      string         `json:"session_mode"`
+	SessionArg       string         `json:"session_arg"`
+	ResumeArgs       []string       `json:"resume_args"`
+	SessionIDFields  []string       `json:"session_id_fields"`
+	ResumeOutput     string         `json:"resume_output"`
+	MCP              CodexMCPConfig `json:"mcp"`
 }
 
 type CodexMCPConfig struct {
@@ -218,10 +227,11 @@ func Default() Config {
 				},
 			},
 			Codex: CodexConfig{
-				BinaryPath:  "codex",
-				ExtraArgs:   []string{"--skip-git-repo-check"},
-				SessionMode: "existing",
-				ResumeArgs:  []string{"resume", "{sessionId}"},
+				BinaryPath:       "codex",
+				ReasoningDefault: "medium",
+				ExtraArgs:        []string{"--skip-git-repo-check"},
+				SessionMode:      "existing",
+				ResumeArgs:       []string{"resume", "{sessionId}"},
 				SessionIDFields: []string{
 					"thread_id",
 					"threadId",
@@ -363,6 +373,9 @@ func (c Config) Validate() error {
 	if err := validateCodexResumeOutput(c.LLM.Codex.ResumeOutput); err != nil {
 		return err
 	}
+	if err := validateCodexReasoningDefault(c.LLM.Codex.ReasoningDefault); err != nil {
+		return err
+	}
 	// TODO: Keep this validation aligned with runtime wiring: channels.enabled is validated here, but runtime must also gate actual adapter wiring/usage by this allowlist.
 	if len(c.Channels.Enabled) == 0 {
 		return errors.New("channels.enabled must include at least one channel")
@@ -473,4 +486,15 @@ func validateCodexResumeOutput(value string) error {
 	default:
 		return errors.New("llm.codex.resume_output must be one of: json, jsonl, text")
 	}
+}
+
+func validateCodexReasoningDefault(value string) error {
+	level := strings.ToLower(strings.TrimSpace(value))
+	if level == "" {
+		return errors.New("llm.codex.reasoning_default is required")
+	}
+	if !containsString(allowedCodexReasoningLevels, level) {
+		return fmt.Errorf("llm.codex.reasoning_default must be one of: %s", strings.Join(allowedCodexReasoningLevels, ", "))
+	}
+	return nil
 }

@@ -346,6 +346,9 @@ func (c *LocalClient) buildCommandArgs(input string) []string {
 
 func (c *LocalClient) buildCommandArgsForRequest(req llm.Request, mcpConfigPath string) []string {
 	args := c.buildCommandArgs(strings.TrimSpace(req.Input))
+	if model := strings.TrimSpace(req.Options.ModelOverride); model != "" {
+		args = append(args, "--model", model)
+	}
 	args = append(args, c.buildSessionArgsForRequest(req)...)
 	args = append(args, "--mcp-config", mcpConfigPath)
 	if c.settings.StrictMCPConfig {

@@ -82,9 +82,10 @@ func (m *model) startRun(input string) {
 
 	runCtx, cancel := context.WithCancel(m.ctx)
 	m.runCancel = cancel
-	opts := llm.PromptOptions{}
-	if m.providerSupportsModelOverride() {
-		opts.ModelOverride = strings.TrimSpace(m.modelOverride)
+	opts := llm.PromptOptions{
+		ProviderOverride:  strings.TrimSpace(m.providerOverride),
+		ModelOverride:     strings.TrimSpace(m.modelOverride),
+		ReasoningOverride: strings.TrimSpace(m.reasoningOverride),
 	}
 	m.streamEvents, m.streamErrs = m.app.PromptStreamForSessionWithOptions(runCtx, m.agentID, m.sessionID, input, opts)
 	m.setStatus(statusWaiting)
@@ -185,7 +186,11 @@ func (m *model) runSessionReset(startNew bool, source string) {
 		m.sessionTokens = 0
 	}
 	m.messages = nil
+	m.providerOverride = ""
 	m.modelOverride = ""
+	m.reasoningOverride = ""
+	m.providerTools = nil
+	m.providerToolsDiscoveryInFlight = false
 	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 	if startNew {
 		m.addSystem(fmt.Sprintf("started new session %s", m.sessionID))

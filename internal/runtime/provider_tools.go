@@ -20,7 +20,7 @@ const (
 // without persisting provider session IDs into localclaw session state.
 func (a *App) DiscoverProviderMetadata(ctx context.Context, agentID string, opts llm.PromptOptions) (llm.ProviderMetadata, error) {
 	resolvedAgentID := ResolveAgentID(agentID)
-	configuredProvider := strings.ToLower(strings.TrimSpace(a.cfg.LLM.Provider))
+	configuredProvider := a.resolveProvider(opts.ProviderOverride)
 	resolution := ResolveSession(resolvedAgentID, ProviderToolsProbeSessionID)
 
 	req := llm.Request{
@@ -32,7 +32,9 @@ func (a *App) DiscoverProviderMetadata(ctx context.Context, agentID string, opts
 			Provider:   configuredProvider,
 		},
 		Options: llm.PromptOptions{
-			ModelOverride: strings.TrimSpace(opts.ModelOverride),
+			ProviderOverride:  configuredProvider,
+			ModelOverride:     strings.TrimSpace(opts.ModelOverride),
+			ReasoningOverride: strings.TrimSpace(opts.ReasoningOverride),
 		},
 	}
 
@@ -102,7 +104,9 @@ func (a *App) discoverCodexToolsViaJSONProbe(ctx context.Context, agentID string
 			Provider:   probeProvider,
 		},
 		Options: llm.PromptOptions{
-			ModelOverride: strings.TrimSpace(opts.ModelOverride),
+			ProviderOverride:  probeProvider,
+			ModelOverride:     strings.TrimSpace(opts.ModelOverride),
+			ReasoningOverride: strings.TrimSpace(opts.ReasoningOverride),
 		},
 	}
 

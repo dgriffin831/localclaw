@@ -23,6 +23,7 @@ var slashCommandDefs = []slashCommandDef{
 	{Name: "help", Description: "show this help"},
 	{Name: "status", Description: "show current status and session info"},
 	{Name: "tools", Description: "show provider-reported tools", Shortcut: "Ctrl+O"},
+	{Name: "models", Args: "[refresh]", Description: "show discovered provider models"},
 	{Name: "clear", Description: "clear the visible transcript"},
 	{Name: "reset", Description: "reset the current session"},
 	{Name: "new", Description: "start a new session"},
@@ -32,7 +33,7 @@ var slashCommandDefs = []slashCommandDef{
 	{Name: "verbose", Args: "<on|off>", Description: "toggle verbose mode"},
 	{Name: "mouse", Args: "<on|off>", Description: "toggle mouse capture (wheel/selection tradeoff)", Shortcut: "Ctrl+Y"},
 	{Name: "shortcuts", Description: "show keyboard shortcuts"},
-	{Name: "model", Args: "<name>", Description: "set model override for this TUI session"},
+	{Name: "model", Args: "<provider>/<model>[/<reasoning>]", Description: "set active selector for this TUI session"},
 	{Name: "exit", Description: "exit the TUI", Shortcut: "Ctrl+D"},
 	{Name: "quit", Description: "alias for /exit", Shortcut: "Ctrl+D"},
 }
@@ -46,14 +47,31 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 	case "shortcuts":
 		m.addSystem(keyboardShortcutsText())
 	case "status":
-		override := strings.TrimSpace(m.modelOverride)
-		if override == "" {
+		override := m.selectorOverride()
+		if strings.TrimSpace(override) == "" {
 			override = "none"
 		}
-		m.addSystem(fmt.Sprintf("status=%s provider=%s configured_model=%s effective_model=%s model_override=%s agent=%s session=%s workspace=%s verbose=%s mouse=%s", m.status, m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a"), valueOrDefault(m.effectiveModel(), "n/a"), override, m.agentID, m.sessionID, m.workspacePath, onOff(m.verbose), onOff(m.mouseEnabled)))
+		m.addSystem(fmt.Sprintf("status=%s provider=%s configured_model=%s effective_model=%s effective_selector=%s selector_override=%s agent=%s session=%s workspace=%s verbose=%s mouse=%s", m.status, m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a"), valueOrDefault(m.effectiveModel(), "n/a"), valueOrDefault(m.effectiveSelector(), "n/a"), override, m.agentID, m.sessionID, m.workspacePath, onOff(m.verbose), onOff(m.mouseEnabled)))
 	case "tools":
 		followUp = m.startProviderToolsDiscoveryIfNeeded()
 		m.addSystem(m.toolsSummary())
+	case "models":
+		requested := strings.ToLower(strings.TrimSpace(arg))
+		refresh := false
+		if requested == "" {
+			refresh = false
+		} else if requested == "refresh" {
+			refresh = true
+		} else {
+			m.addSystem("usage: /models [refresh]")
+			break
+		}
+		if m.app == nil {
+			m.addSystem("runtime unavailable")
+			break
+		}
+		followUp = m.startProviderModelDiscovery(refresh)
+		m.addSystem(m.modelsSummary())
 	case "clear":
 		m.messages = nil
 		resetToolCardIndexByCallID(m.toolCardIndexByCallID)
@@ -95,24 +113,7 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 			m.addSystem("usage: /mouse <on|off>")
 		}
 	case "model":
-		requested := strings.TrimSpace(arg)
-		if requested == "" {
-			m.addSystem("usage: /model <name>")
-			break
-		}
-		normalized := strings.ToLower(requested)
-		if normalized == "default" || normalized == "off" {
-			m.modelOverride = ""
-			m.addSystem(fmt.Sprintf("model override cleared; using configured model %s", valueOrDefault(m.configuredModel(), "n/a")))
-			break
-		}
-		if !m.providerSupportsModelOverride() {
-			m.modelOverride = ""
-			m.addSystem(fmt.Sprintf("provider %s does not support model override; using configured model %s", m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a")))
-		} else {
-			m.modelOverride = requested
-			m.addSystem(fmt.Sprintf("model override set to %s", requested))
-		}
+		m.handleModelSelectionSlash(arg)
 	default:
 		m.addSystem(fmt.Sprintf("unknown command: /%s", name))
 	}
@@ -181,7 +182,11 @@ func (m *model) handleSessionResume(rawSessionID string) {
 	m.sessionKey = resolution.SessionKey
 	m.sessionTokens = max(0, entry.TotalTokens)
 	m.messages = nil
+	m.providerOverride = ""
 	m.modelOverride = ""
+	m.reasoningOverride = ""
+	m.providerTools = nil
+	m.providerToolsDiscoveryInFlight = false
 	resetToolCardIndexByCallID(m.toolCardIndexByCallID)
 
 	history, err := m.app.MCPSessionsHistory(m.ctx, resolution.AgentID, resolution.SessionID, 0, 0)
@@ -240,20 +245,11 @@ func (m *model) handleSessionDelete(rawSessionID string) {
 }
 
 func (m *model) toolsSummary() string {
-	provider := m.activeProvider()
-
-	lines := []string{fmt.Sprintf("provider=%s", provider)}
-	if model := strings.TrimSpace(m.effectiveModel()); model != "" {
-		lines = append(lines, "effective model: "+model)
+	lines := []string{
+		fmt.Sprintf("provider=%s", m.activeProvider()),
+		"effective selector: " + valueOrDefault(m.effectiveSelector(), "n/a"),
+		"tools:",
 	}
-	if strings.TrimSpace(m.providerModel) != "" {
-		lines = append(lines, "provider model: "+m.providerModel)
-	}
-	if override := strings.TrimSpace(m.modelOverride); override != "" {
-		lines = append(lines, "model override: "+override)
-	}
-
-	lines = append(lines, "tools:")
 	if len(m.providerTools) == 0 {
 		if m.app == nil {
 			lines = append(lines, "- runtime unavailable")
@@ -270,6 +266,57 @@ func (m *model) toolsSummary() string {
 	return strings.Join(lines, "\n")
 }
 
+func (m *model) modelsSummary() string {
+	lines := []string{
+		"models:",
+		"active selector: " + valueOrDefault(m.effectiveSelector(), "n/a"),
+	}
+	if m.app == nil {
+		lines = append(lines, "- runtime unavailable")
+		return strings.Join(lines, "\n")
+	}
+	if m.providerModelsDiscoveryInFlight {
+		lines = append(lines, "- discovering...")
+	}
+
+	providers := m.knownProviders()
+	if len(providers) == 0 {
+		lines = append(lines, "- none")
+		return strings.Join(lines, "\n")
+	}
+	for _, provider := range providers {
+		lines = append(lines, provider+":")
+		if errText, ok := m.providerModelCatalogErrors[provider]; ok && strings.TrimSpace(errText) != "" {
+			lines = append(lines, "- discovery failed: "+errText)
+			continue
+		}
+		catalog, ok := m.providerModelCatalogs[provider]
+		if !ok || len(catalog.Models) == 0 {
+			lines = append(lines, "- no models discovered")
+			continue
+		}
+		for _, model := range catalog.Models {
+			reasoning := "reasoning: n/a"
+			if model.Reasoning.Supported {
+				levels := strings.Join(model.Reasoning.Levels, ",")
+				if levels == "" {
+					levels = "supported"
+				}
+				reasoning = "reasoning: " + levels
+				if defaultLevel := strings.TrimSpace(model.Reasoning.Default); defaultLevel != "" {
+					reasoning += " (default: " + defaultLevel + ")"
+				}
+			}
+			marker := "-"
+			if strings.EqualFold(provider, m.activeProvider()) && strings.EqualFold(model.Name, m.effectiveModel()) {
+				marker = "*"
+			}
+			lines = append(lines, fmt.Sprintf("%s %s (%s)", marker, model.Name, reasoning))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m *model) startProviderToolsDiscoveryIfNeeded() tea.Cmd {
 	if m.app == nil {
 		return nil
@@ -278,9 +325,10 @@ func (m *model) startProviderToolsDiscoveryIfNeeded() tea.Cmd {
 		return nil
 	}
 	m.providerToolsDiscoveryInFlight = true
-	opts := llm.PromptOptions{}
-	if m.providerSupportsModelOverride() {
-		opts.ModelOverride = strings.TrimSpace(m.modelOverride)
+	opts := llm.PromptOptions{
+		ProviderOverride:  strings.TrimSpace(m.providerOverride),
+		ModelOverride:     strings.TrimSpace(m.modelOverride),
+		ReasoningOverride: strings.TrimSpace(m.reasoningOverride),
 	}
 	app := m.app
 	ctx := m.ctx
@@ -296,19 +344,63 @@ func (m *model) startProviderToolsDiscoveryIfNeeded() tea.Cmd {
 	}
 }
 
+func (m *model) startProviderModelDiscovery(refresh bool) tea.Cmd {
+	if m.app == nil {
+		return nil
+	}
+	if m.providerModelsDiscoveryInFlight {
+		return nil
+	}
+	if !refresh && len(m.providerModelCatalogs) > 0 {
+		return nil
+	}
+	m.providerModelsDiscoveryInFlight = true
+	app := m.app
+	ctx := m.ctx
+	return func() tea.Msg {
+		catalogs, errs := app.DiscoverProviderModelCatalogs(ctx, refresh)
+		serializedErrs := map[string]string{}
+		for provider, err := range errs {
+			if err == nil {
+				continue
+			}
+			serializedErrs[provider] = err.Error()
+		}
+		return providerModelsDiscoveredMsg{
+			Catalogs: catalogs,
+			Errors:   serializedErrs,
+		}
+	}
+}
+
 func (m *model) activeProvider() string {
-	provider := strings.TrimSpace(m.providerName)
+	provider := strings.TrimSpace(m.providerOverride)
 	if provider == "" {
-		provider = strings.TrimSpace(m.cfg.LLM.Provider)
+		provider = strings.TrimSpace(m.providerName)
+	}
+	if provider == "" {
+		provider = m.configuredProvider()
 	}
 	if provider == "" {
 		return "unknown"
 	}
-	return provider
+	return strings.ToLower(provider)
+}
+
+func (m *model) configuredProvider() string {
+	provider := strings.TrimSpace(m.cfg.LLM.Provider)
+	if provider == "" {
+		return "unknown"
+	}
+	return strings.ToLower(provider)
 }
 
 func (m *model) configuredModel() string {
-	switch strings.ToLower(strings.TrimSpace(m.cfg.LLM.Provider)) {
+	return m.configuredModelForProvider(m.configuredProvider())
+}
+
+func (m *model) configuredModelForProvider(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "codex":
 		return strings.TrimSpace(m.cfg.LLM.Codex.Model)
 	case "claudecode":
@@ -319,12 +411,15 @@ func (m *model) configuredModel() string {
 }
 
 func (m *model) effectiveModel() string {
-	if m.providerSupportsModelOverride() {
-		if override := strings.TrimSpace(m.modelOverride); override != "" {
-			return override
+	if override := strings.TrimSpace(m.modelOverride); override != "" {
+		return override
+	}
+	if strings.EqualFold(m.providerName, m.activeProvider()) {
+		if model := strings.TrimSpace(m.providerModel); model != "" {
+			return model
 		}
 	}
-	if model := strings.TrimSpace(m.providerModel); model != "" {
+	if model := strings.TrimSpace(m.configuredModelForProvider(m.activeProvider())); model != "" {
 		return model
 	}
 	if model := strings.TrimSpace(m.configuredModel()); model != "" {
@@ -333,8 +428,169 @@ func (m *model) effectiveModel() string {
 	return ""
 }
 
-func (m *model) providerSupportsModelOverride() bool {
-	return strings.EqualFold(m.activeProvider(), "codex")
+func (m *model) effectiveReasoning() string {
+	if override := strings.TrimSpace(m.reasoningOverride); override != "" {
+		return strings.ToLower(override)
+	}
+	if m.hasReasoningSupport(m.activeProvider()) {
+		return strings.ToLower(strings.TrimSpace(m.configuredReasoningDefault(m.activeProvider())))
+	}
+	return ""
+}
+
+func (m *model) effectiveSelector() string {
+	provider := strings.TrimSpace(m.activeProvider())
+	model := strings.TrimSpace(m.effectiveModel())
+	reasoning := strings.TrimSpace(m.effectiveReasoning())
+	if provider == "" || model == "" {
+		return ""
+	}
+	if reasoning == "" {
+		return fmt.Sprintf("%s/%s", provider, model)
+	}
+	return fmt.Sprintf("%s/%s/%s", provider, model, reasoning)
+}
+
+func (m *model) selectorOverride() string {
+	provider := strings.TrimSpace(m.providerOverride)
+	model := strings.TrimSpace(m.modelOverride)
+	reasoning := strings.TrimSpace(m.reasoningOverride)
+	if provider == "" || model == "" {
+		return ""
+	}
+	if reasoning == "" {
+		return fmt.Sprintf("%s/%s", provider, model)
+	}
+	return fmt.Sprintf("%s/%s/%s", provider, model, reasoning)
+}
+
+func (m *model) knownProviders() []string {
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			return
+		}
+		seen[normalized] = struct{}{}
+	}
+	add("claudecode")
+	add("codex")
+	add(m.cfg.LLM.Provider)
+	for provider := range m.providerModelCatalogs {
+		add(provider)
+	}
+	for provider := range m.providerModelCatalogErrors {
+		add(provider)
+	}
+	out := make([]string, 0, len(seen))
+	for provider := range seen {
+		out = append(out, provider)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (m *model) hasReasoningSupport(provider string) bool {
+	return strings.EqualFold(strings.TrimSpace(provider), "codex")
+}
+
+func (m *model) configuredReasoningDefault(provider string) string {
+	if strings.EqualFold(strings.TrimSpace(provider), "codex") {
+		return strings.TrimSpace(m.cfg.LLM.Codex.ReasoningDefault)
+	}
+	return ""
+}
+
+func (m *model) handleModelSelectionSlash(raw string) {
+	if m.running {
+		m.addSystem("cannot change selector while a run is active; abort first")
+		return
+	}
+
+	requested := strings.TrimSpace(raw)
+	if requested == "" {
+		m.addSystem("usage: /model <provider>/<model>[/<reasoning>]")
+		return
+	}
+	switch strings.ToLower(requested) {
+	case "default", "off":
+		m.providerOverride = ""
+		m.modelOverride = ""
+		m.reasoningOverride = ""
+		m.providerTools = nil
+		m.providerToolsDiscoveryInFlight = false
+		m.addSystem("selector reset to defaults")
+		return
+	}
+
+	provider, modelName, reasoning, err := parseModelSelector(requested, m.activeProvider())
+	if err != nil {
+		m.addSystem("invalid selector: " + err.Error() + " (usage: /model <provider>/<model>[/<reasoning>])")
+		return
+	}
+	if !containsString(m.knownProviders(), provider) {
+		m.addSystem(fmt.Sprintf("unknown provider %q", provider))
+		return
+	}
+	if reasoning != "" && !m.hasReasoningSupport(provider) {
+		m.addSystem(fmt.Sprintf("provider %s does not support reasoning selectors", provider))
+		return
+	}
+
+	notValidated := false
+	if catalog, ok := m.providerModelCatalogs[provider]; ok && len(catalog.Models) > 0 {
+		found := false
+		for _, discovered := range catalog.Models {
+			if !strings.EqualFold(discovered.Name, modelName) {
+				continue
+			}
+			found = true
+			if discovered.Reasoning.Supported {
+				if reasoning == "" {
+					if defaultLevel := strings.TrimSpace(discovered.Reasoning.Default); defaultLevel != "" {
+						reasoning = strings.ToLower(defaultLevel)
+					}
+				}
+				if reasoning == "" {
+					reasoning = strings.ToLower(strings.TrimSpace(m.configuredReasoningDefault(provider)))
+				}
+				if len(discovered.Reasoning.Levels) > 0 && reasoning != "" && !containsString(discovered.Reasoning.Levels, reasoning) {
+					m.addSystem(fmt.Sprintf("reasoning %q is not supported for %s/%s", reasoning, provider, discovered.Name))
+					return
+				}
+			} else if reasoning != "" {
+				m.addSystem(fmt.Sprintf("reasoning is not supported for %s/%s", provider, discovered.Name))
+				return
+			}
+			modelName = discovered.Name
+			break
+		}
+		if !found {
+			m.addSystem(fmt.Sprintf("model %q is not available for provider %s", modelName, provider))
+			return
+		}
+	} else {
+		notValidated = true
+	}
+
+	if reasoning == "" && m.hasReasoningSupport(provider) {
+		reasoning = strings.ToLower(strings.TrimSpace(m.configuredReasoningDefault(provider)))
+	}
+
+	m.providerOverride = provider
+	m.modelOverride = modelName
+	m.reasoningOverride = strings.ToLower(strings.TrimSpace(reasoning))
+	m.providerTools = nil
+	m.providerToolsDiscoveryInFlight = false
+	selector := m.selectorOverride()
+	if selector == "" {
+		selector = m.effectiveSelector()
+	}
+	if notValidated {
+		m.addSystem(fmt.Sprintf("active selector set to %s (provider catalog unavailable; not validated)", selector))
+		return
+	}
+	m.addSystem(fmt.Sprintf("active selector set to %s", selector))
 }
 
 func toolOwnershipLabel(class llm.ToolClass) string {
@@ -397,6 +653,68 @@ func parseSlash(raw string) (string, string) {
 		return strings.ToLower(parts[0]), ""
 	}
 	return strings.ToLower(parts[0]), strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))
+}
+
+func parseModelSelector(raw, currentProvider string) (string, string, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", "", "", fmt.Errorf("selector is required")
+	}
+	if strings.Contains(trimmed, " ") {
+		return "", "", "", fmt.Errorf("selector cannot contain spaces")
+	}
+	parts := strings.Split(trimmed, "/")
+	switch len(parts) {
+	case 1:
+		provider := strings.ToLower(strings.TrimSpace(currentProvider))
+		model := strings.TrimSpace(parts[0])
+		if provider == "" {
+			return "", "", "", fmt.Errorf("provider is required")
+		}
+		if model == "" {
+			return "", "", "", fmt.Errorf("model is required")
+		}
+		return provider, model, "", nil
+	case 2:
+		provider := strings.ToLower(strings.TrimSpace(parts[0]))
+		model := strings.TrimSpace(parts[1])
+		if provider == "" {
+			return "", "", "", fmt.Errorf("provider is required")
+		}
+		if model == "" {
+			return "", "", "", fmt.Errorf("model is required")
+		}
+		return provider, model, "", nil
+	case 3:
+		provider := strings.ToLower(strings.TrimSpace(parts[0]))
+		model := strings.TrimSpace(parts[1])
+		reasoning := strings.ToLower(strings.TrimSpace(parts[2]))
+		if provider == "" {
+			return "", "", "", fmt.Errorf("provider is required")
+		}
+		if model == "" {
+			return "", "", "", fmt.Errorf("model is required")
+		}
+		if reasoning == "" {
+			return "", "", "", fmt.Errorf("reasoning is required when selector includes third segment")
+		}
+		return provider, model, reasoning, nil
+	default:
+		return "", "", "", fmt.Errorf("selector must be <model> or <provider>/<model>[/<reasoning>]")
+	}
+}
+
+func containsString(values []string, value string) bool {
+	needle := strings.ToLower(strings.TrimSpace(value))
+	if needle == "" {
+		return false
+	}
+	for _, candidate := range values {
+		if strings.EqualFold(strings.TrimSpace(candidate), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *model) updateSlashAutocomplete() {

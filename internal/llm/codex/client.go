@@ -20,6 +20,7 @@ type Settings struct {
 	BinaryPath       string
 	Profile          string
 	Model            string
+	ReasoningDefault string
 	ExtraArgs        []string
 	SessionMode      string
 	SessionArg       string
@@ -68,6 +69,9 @@ func NewClient(settings Settings) *LocalClient {
 	}
 	if strings.TrimSpace(settings.ResumeOutput) == "" {
 		settings.ResumeOutput = "text"
+	}
+	if strings.TrimSpace(settings.ReasoningDefault) == "" {
+		settings.ReasoningDefault = "medium"
 	}
 	return &LocalClient{settings: settings}
 }
@@ -191,6 +195,9 @@ func (c *LocalClient) buildCommandArgsForRequest(req llm.Request) []string {
 	if model := c.resolveModelForRequest(req); model != "" {
 		args = append(args, "-m", model)
 	}
+	if reasoning := c.resolveReasoningForRequest(req); reasoning != "" {
+		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", reasoning))
+	}
 	args = append(args, normalizeNonBlankArgs(c.settings.ExtraArgs)...)
 	args = append(args, "-")
 	return args
@@ -201,6 +208,13 @@ func (c *LocalClient) resolveModelForRequest(req llm.Request) string {
 		return override
 	}
 	return strings.TrimSpace(c.settings.Model)
+}
+
+func (c *LocalClient) resolveReasoningForRequest(req llm.Request) string {
+	if override := strings.ToLower(strings.TrimSpace(req.Options.ReasoningOverride)); override != "" {
+		return override
+	}
+	return strings.ToLower(strings.TrimSpace(c.settings.ReasoningDefault))
 }
 
 func (c *LocalClient) resolveEffectiveMCPConfigPath() (string, map[string]string, error) {

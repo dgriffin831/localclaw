@@ -42,6 +42,34 @@ type captureRequestLLMClient struct {
 	streamFn    func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error)
 }
 
+type captureCatalogLLMClient struct {
+	catalog llm.ProviderModelCatalog
+	err     error
+}
+
+func (c *captureCatalogLLMClient) Prompt(ctx context.Context, input string) (string, error) {
+	return "ok", nil
+}
+
+func (c *captureCatalogLLMClient) PromptStream(ctx context.Context, input string) (<-chan llm.StreamEvent, <-chan error) {
+	events := make(chan llm.StreamEvent)
+	errs := make(chan error)
+	close(events)
+	close(errs)
+	return events, errs
+}
+
+func (c *captureCatalogLLMClient) Capabilities() llm.Capabilities {
+	return llm.Capabilities{SupportsRequestOptions: true}
+}
+
+func (c *captureCatalogLLMClient) DiscoverModelCatalog(ctx context.Context) (llm.ProviderModelCatalog, error) {
+	if c.err != nil {
+		return llm.ProviderModelCatalog{}, c.err
+	}
+	return c.catalog, nil
+}
+
 func (c *captureRequestLLMClient) Capabilities() llm.Capabilities {
 	return llm.Capabilities{SupportsRequestOptions: true}
 }
@@ -166,6 +194,99 @@ func TestPromptStreamForSessionWithOptionsPassesModelOverride(t *testing.T) {
 	}
 }
 
+func TestPromptStreamForSessionWithOptionsPassesProviderOverrideAndReasoning(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
+	app.llmClients = map[string]llm.Client{
+		"claudecode": llmClient,
+		"codex":      llmClient,
+	}
+
+	events, errs := app.PromptStreamForSessionWithOptions(ctx, "agent-2", "s-42", "hello", llm.PromptOptions{
+		ProviderOverride:  "codex",
+		ModelOverride:     "gpt-5-mini",
+		ReasoningOverride: "high",
+	})
+	for range events {
+	}
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+	}
+
+	if llmClient.lastRequest.Session.Provider != "codex" {
+		t.Fatalf("expected provider override in session metadata, got %q", llmClient.lastRequest.Session.Provider)
+	}
+	if llmClient.lastRequest.Options.ModelOverride != "gpt-5-mini" {
+		t.Fatalf("expected model override in request options, got %q", llmClient.lastRequest.Options.ModelOverride)
+	}
+	if llmClient.lastRequest.Options.ReasoningOverride != "high" {
+		t.Fatalf("expected reasoning override in request options, got %q", llmClient.lastRequest.Options.ReasoningOverride)
+	}
+}
+
+func TestPromptStreamForSessionWithOptionsAppliesCodexReasoningDefaultWhenOmitted(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	app.cfg.LLM.Codex.ReasoningDefault = "medium"
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
+	app.llmClients = map[string]llm.Client{
+		"claudecode": llmClient,
+		"codex":      llmClient,
+	}
+
+	events, errs := app.PromptStreamForSessionWithOptions(ctx, "agent-2", "s-42", "hello", llm.PromptOptions{
+		ProviderOverride: "codex",
+		ModelOverride:    "gpt-5-mini",
+	})
+	for range events {
+	}
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+	}
+
+	if llmClient.lastRequest.Options.ReasoningOverride != "medium" {
+		t.Fatalf("expected codex default reasoning to be applied, got %q", llmClient.lastRequest.Options.ReasoningOverride)
+	}
+}
+
+func TestPromptStreamRoutesToSelectedProviderClient(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	defaultClient := &captureRequestLLMClient{}
+	codexClient := &captureRequestLLMClient{}
+	app.llm = defaultClient
+	app.llmClients = map[string]llm.Client{
+		"claudecode": defaultClient,
+		"codex":      codexClient,
+	}
+
+	events, errs := app.PromptStreamForSessionWithOptions(ctx, "agent-2", "s-42", "hello", llm.PromptOptions{
+		ProviderOverride: "codex",
+		ModelOverride:    "gpt-5-mini",
+	})
+	for range events {
+	}
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+	}
+
+	if len(defaultClient.requests) != 0 {
+		t.Fatalf("expected default provider client to be skipped, got %d requests", len(defaultClient.requests))
+	}
+	if len(codexClient.requests) != 1 {
+		t.Fatalf("expected codex provider client to handle request, got %d requests", len(codexClient.requests))
+	}
+}
+
 func TestDiscoverProviderMetadataReturnsProviderToolsWithoutPersistingProbeSession(t *testing.T) {
 	ctx := context.Background()
 	_, app, _ := newToolTestApp(t, true)
@@ -274,6 +395,55 @@ func TestDiscoverProviderMetadataUsesCodexJSONProbeFallbackWhenMetadataOmitsTool
 	}
 }
 
+func TestDiscoverProviderMetadataUsesProviderOverride(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	app.llm = nil
+
+	codexClient := &captureRequestLLMClient{
+		streamFn: func(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
+			events := make(chan llm.StreamEvent, 1)
+			errs := make(chan error)
+			events <- llm.StreamEvent{
+				Type: llm.StreamEventProviderMetadata,
+				ProviderMetadata: &llm.ProviderMetadata{
+					Provider: "codex",
+					Model:    "gpt-5.3-codex",
+					Tools:    []string{"Bash"},
+				},
+			}
+			close(events)
+			close(errs)
+			return events, errs
+		},
+	}
+
+	app.llmClients = map[string]llm.Client{
+		"codex":      codexClient,
+		"claudecode": &captureRequestLLMClient{},
+	}
+
+	meta, err := app.DiscoverProviderMetadata(ctx, "agent-2", llm.PromptOptions{
+		ProviderOverride: "codex",
+		ModelOverride:    "gpt-5.3-codex",
+	})
+	if err != nil {
+		t.Fatalf("discover provider metadata: %v", err)
+	}
+	if len(codexClient.requests) != 1 {
+		t.Fatalf("expected one codex probe request, got %d", len(codexClient.requests))
+	}
+	if codexClient.lastRequest.Session.Provider != "codex" {
+		t.Fatalf("expected provider override codex in probe request, got %q", codexClient.lastRequest.Session.Provider)
+	}
+	if meta.Provider != "codex" {
+		t.Fatalf("expected codex metadata provider, got %q", meta.Provider)
+	}
+	if meta.Model != "gpt-5.3-codex" {
+		t.Fatalf("expected codex metadata model, got %q", meta.Model)
+	}
+}
+
 func TestParseToolNamesFromJSONProbeOutput(t *testing.T) {
 	cases := []struct {
 		name string
@@ -314,6 +484,42 @@ func TestParseToolNamesFromJSONProbeOutput(t *testing.T) {
 				t.Fatalf("unexpected parsed tools: got %q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDiscoverProviderModelCatalogsIsolatesFailures(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	app.llm = nil
+	app.llmClients = map[string]llm.Client{
+		"codex": &captureCatalogLLMClient{
+			catalog: llm.ProviderModelCatalog{
+				Provider: "codex",
+				Models: []llm.ProviderModelDescriptor{
+					{Name: "gpt-5.3-codex"},
+				},
+			},
+		},
+		"claudecode": &captureCatalogLLMClient{
+			err: fmt.Errorf("provider unavailable"),
+		},
+	}
+
+	catalogs, errs := app.DiscoverProviderModelCatalogs(ctx, true)
+	if len(catalogs) != 1 {
+		t.Fatalf("expected one successful catalog result, got %d", len(catalogs))
+	}
+	if catalogs["codex"].Provider != "codex" {
+		t.Fatalf("expected codex catalog, got %#v", catalogs["codex"])
+	}
+	if len(catalogs["codex"].Models) != 1 || catalogs["codex"].Models[0].Name != "gpt-5.3-codex" {
+		t.Fatalf("unexpected codex models catalog: %#v", catalogs["codex"].Models)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("expected one provider discovery error, got %d", len(errs))
+	}
+	if _, ok := errs["claudecode"]; !ok {
+		t.Fatalf("expected claudecode discovery error, got %#v", errs)
 	}
 }
 

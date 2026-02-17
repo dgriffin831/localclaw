@@ -188,14 +188,14 @@ func TestStatusViewHidesRightMetadataWhenMouseOn(t *testing.T) {
 
 func TestComposerFooterShowsShortcutsAndRuntimeSettings(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
-	m.width = 140
+	m.width = 220
 	m.mouseEnabled = false
 
 	got := ansiEscapePattern.ReplaceAllString(m.composerFooterView(), "")
 	if !strings.Contains(got, "Ctrl+J newline") || !strings.Contains(got, "/shortcuts") {
 		t.Fatalf("expected composer footer left side to include shortcuts hint, got %q", got)
 	}
-	if !strings.Contains(got, "provider:") || !strings.Contains(got, "mouse:off") {
+	if !strings.Contains(got, "provider:") || !strings.Contains(got, "model:") || !strings.Contains(got, "reasoning:") || !strings.Contains(got, "mouse:off") {
 		t.Fatalf("expected composer footer right side to include runtime settings, got %q", got)
 	}
 }
@@ -991,64 +991,106 @@ func TestProviderToolsDiscoveredMessageUpdatesToolsList(t *testing.T) {
 	}
 }
 
-func TestHandleSlashModelSetsOverrideForCodex(t *testing.T) {
+func TestHandleSlashModelSetsCanonicalSelector(t *testing.T) {
 	cfg := config.Default()
 	cfg.LLM.Provider = "codex"
 	cfg.LLM.Codex.Model = "gpt-5-codex"
+	cfg.LLM.Codex.ReasoningDefault = "medium"
 
 	m := newModel(context.Background(), nil, cfg)
-	_ = m.handleSlash("/model gpt-5-mini")
+	_ = m.handleSlash("/model codex/gpt-5-mini/high")
 
+	if m.providerOverride != "codex" {
+		t.Fatalf("expected provider override to be set, got %q", m.providerOverride)
+	}
 	if m.modelOverride != "gpt-5-mini" {
 		t.Fatalf("expected model override to be set, got %q", m.modelOverride)
 	}
+	if m.reasoningOverride != "high" {
+		t.Fatalf("expected reasoning override to be set, got %q", m.reasoningOverride)
+	}
 	got := m.messages[len(m.messages)-1].Raw
-	if !strings.Contains(got, "model override set to gpt-5-mini") {
+	if !strings.Contains(got, "active selector set to codex/gpt-5-mini/high") {
 		t.Fatalf("expected model set acknowledgement, got %q", got)
 	}
 }
 
-func TestHandleSlashModelClearsOverrideWithDefault(t *testing.T) {
+func TestHandleSlashModelShorthandKeepsCurrentProvider(t *testing.T) {
 	cfg := config.Default()
 	cfg.LLM.Provider = "codex"
 	cfg.LLM.Codex.Model = "gpt-5-codex"
+	cfg.LLM.Codex.ReasoningDefault = "medium"
 
 	m := newModel(context.Background(), nil, cfg)
 	_ = m.handleSlash("/model gpt-5-mini")
-	_ = m.handleSlash("/model default")
 
-	if m.modelOverride != "" {
-		t.Fatalf("expected model override to be cleared, got %q", m.modelOverride)
+	if m.providerOverride != "codex" {
+		t.Fatalf("expected shorthand selector to keep codex provider, got %q", m.providerOverride)
 	}
-	got := m.messages[len(m.messages)-1].Raw
-	if !strings.Contains(got, "model override cleared") {
-		t.Fatalf("expected model clear acknowledgement, got %q", got)
+	if m.modelOverride != "gpt-5-mini" {
+		t.Fatalf("expected shorthand selector to set model override, got %q", m.modelOverride)
+	}
+	if m.reasoningOverride != "medium" {
+		t.Fatalf("expected shorthand selector to apply default reasoning, got %q", m.reasoningOverride)
 	}
 }
 
-func TestHandleSlashModelRejectsUnsupportedProvider(t *testing.T) {
+func TestHandleSlashModelClearsSelectorWithDefault(t *testing.T) {
+	cfg := config.Default()
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.Model = "gpt-5-codex"
+	cfg.LLM.Codex.ReasoningDefault = "medium"
+
+	m := newModel(context.Background(), nil, cfg)
+	_ = m.handleSlash("/model codex/gpt-5-mini/high")
+	_ = m.handleSlash("/model default")
+
+	if m.providerOverride != "" || m.modelOverride != "" || m.reasoningOverride != "" {
+		t.Fatalf("expected selector overrides to be cleared, got provider=%q model=%q reasoning=%q", m.providerOverride, m.modelOverride, m.reasoningOverride)
+	}
+	got := m.messages[len(m.messages)-1].Raw
+	if !strings.Contains(got, "selector reset to defaults") {
+		t.Fatalf("expected selector clear acknowledgement, got %q", got)
+	}
+}
+
+func TestHandleSlashModelRejectsUnknownProvider(t *testing.T) {
 	cfg := config.Default()
 	cfg.LLM.Provider = "claudecode"
 
 	m := newModel(context.Background(), nil, cfg)
-	_ = m.handleSlash("/model gpt-5-mini")
+	_ = m.handleSlash("/model unknown/model-a")
 
-	if m.modelOverride != "" {
-		t.Fatalf("expected model override to remain unset for unsupported provider, got %q", m.modelOverride)
+	if m.providerOverride != "" || m.modelOverride != "" || m.reasoningOverride != "" {
+		t.Fatalf("expected selector overrides to remain unset for invalid provider")
 	}
 	got := m.messages[len(m.messages)-1].Raw
-	if !strings.Contains(got, "does not support model override") {
-		t.Fatalf("expected unsupported provider notice, got %q", got)
+	if !strings.Contains(got, "unknown provider") {
+		t.Fatalf("expected unknown provider notice, got %q", got)
 	}
 }
 
-func TestHandleSlashStatusIncludesConfiguredAndEffectiveModel(t *testing.T) {
+func TestHandleSlashModelsReportsRuntimeUnavailable(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	_ = m.handleSlash("/models")
+
+	if len(m.messages) == 0 {
+		t.Fatalf("expected /models to add a system message")
+	}
+	got := m.messages[len(m.messages)-1].Raw
+	if !strings.Contains(got, "runtime unavailable") {
+		t.Fatalf("expected /models runtime unavailable message, got %q", got)
+	}
+}
+
+func TestHandleSlashStatusIncludesEffectiveSelector(t *testing.T) {
 	cfg := config.Default()
 	cfg.LLM.Provider = "codex"
 	cfg.LLM.Codex.Model = "gpt-5-codex"
+	cfg.LLM.Codex.ReasoningDefault = "medium"
 
 	m := newModel(context.Background(), nil, cfg)
-	_ = m.handleSlash("/model gpt-5-mini")
+	_ = m.handleSlash("/model codex/gpt-5-mini/high")
 	_ = m.handleSlash("/status")
 
 	got := m.messages[len(m.messages)-1].Raw
@@ -1061,27 +1103,32 @@ func TestHandleSlashStatusIncludesConfiguredAndEffectiveModel(t *testing.T) {
 	if !strings.Contains(got, "effective_model=gpt-5-mini") {
 		t.Fatalf("expected status to include effective model override, got %q", got)
 	}
-	if !strings.Contains(got, "model_override=gpt-5-mini") {
-		t.Fatalf("expected status to include active model override, got %q", got)
+	if !strings.Contains(got, "effective_selector=codex/gpt-5-mini/high") {
+		t.Fatalf("expected status to include effective selector, got %q", got)
 	}
 }
 
-func TestRunSessionResetClearsModelOverride(t *testing.T) {
+func TestRunSessionResetClearsSelectorOverrides(t *testing.T) {
 	cfg := config.Default()
 	cfg.LLM.Provider = "codex"
 	cfg.LLM.Codex.Model = "gpt-5-codex"
+	cfg.LLM.Codex.ReasoningDefault = "medium"
 
 	m := newModel(context.Background(), nil, cfg)
+	m.providerOverride = "codex"
 	m.modelOverride = "gpt-5-mini"
+	m.reasoningOverride = "high"
 
 	m.runSessionReset(false, "/reset")
-	if m.modelOverride != "" {
-		t.Fatalf("expected /reset to clear model override, got %q", m.modelOverride)
+	if m.providerOverride != "" || m.modelOverride != "" || m.reasoningOverride != "" {
+		t.Fatalf("expected /reset to clear selector overrides, got provider=%q model=%q reasoning=%q", m.providerOverride, m.modelOverride, m.reasoningOverride)
 	}
 
+	m.providerOverride = "codex"
 	m.modelOverride = "gpt-5-mini"
+	m.reasoningOverride = "high"
 	m.runSessionReset(true, "/new")
-	if m.modelOverride != "" {
-		t.Fatalf("expected /new to clear model override, got %q", m.modelOverride)
+	if m.providerOverride != "" || m.modelOverride != "" || m.reasoningOverride != "" {
+		t.Fatalf("expected /new to clear selector overrides, got provider=%q model=%q reasoning=%q", m.providerOverride, m.modelOverride, m.reasoningOverride)
 	}
 }

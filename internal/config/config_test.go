@@ -14,6 +14,22 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigIncludesCodexReasoningDefault(t *testing.T) {
+	cfg := Default()
+	if strings.TrimSpace(cfg.LLM.Codex.ReasoningDefault) == "" {
+		t.Fatalf("expected llm.codex.reasoning_default default")
+	}
+}
+
+func TestValidateRejectsUnsupportedCodexReasoningDefault(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.ReasoningDefault = "ultra"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid llm.codex.reasoning_default to fail validation")
+	}
+}
+
 func TestDefaultConfigIncludesAppRootAndAgentScaffolding(t *testing.T) {
 	cfg := Default()
 	if strings.TrimSpace(cfg.App.Root) == "" {

@@ -118,6 +118,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addSystem(m.toolsSummary())
 		m.refreshViewport(true)
 		return m, nil
+
+	case providerModelsDiscoveredMsg:
+		m.providerModelsDiscoveryInFlight = false
+		if msg.Catalogs != nil {
+			m.providerModelCatalogs = msg.Catalogs
+		}
+		if msg.Errors != nil {
+			m.providerModelCatalogErrors = msg.Errors
+		}
+		m.addSystem(m.modelsSummary())
+		m.refreshViewport(true)
+		return m, nil
 	}
 
 	var inputCmd tea.Cmd

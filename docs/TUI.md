@@ -55,7 +55,7 @@ Composer behavior:
 - `Ctrl+P` / `Ctrl+N`: prompt history navigation
 - `Alt+Up` / `Alt+Down`: history navigation aliases
 - `Mouse wheel`: transcript scroll
-- Footer row: left side shows keyboard shortcuts hint, right side shows `provider/model/verbose/tools/mouse` runtime settings.
+- Footer row: left side shows keyboard shortcuts hint, right side shows `provider/model/reasoning/verbose/tools/mouse` runtime settings.
 
 Global controls:
 
@@ -78,6 +78,7 @@ Implemented command set:
 - `/shortcuts`
 - `/status`
 - `/tools`
+- `/models [refresh]`
 - `/clear`
 - `/reset`
 - `/new`
@@ -86,17 +87,19 @@ Implemented command set:
 - `/delete <session_id>`
 - `/verbose <on|off>`
 - `/mouse <on|off>`
-- `/model <name>`
+- `/model <provider>/<model>[/<reasoning>]`
 - `/exit`
 - `/quit`
 
 Command behavior details:
 
 - `/shortcuts` prints all available keyboard shortcuts and their behavior.
-- `/status` prints one system line containing status, provider, configured model/profile, effective model, model override state, agent, session, workspace, verbose, and mouse-capture flags.
+- `/status` prints one system line containing status, provider, configured model/profile, effective model, effective selector, selector override state, agent, session, workspace, verbose, and mouse-capture flags.
 - `/tools` prints provider plus provider-reported `tools` only (no runtime fallback list).
 - when provider tools are not yet discovered, `/tools` starts a background probe and refreshes the summary when metadata arrives.
 - for providers that do not emit a tool list in metadata events (for example Codex), localclaw uses a provider-side JSON self-report probe as fallback.
+- `/models` prints discovered provider model catalogs grouped by provider and marks the active selector.
+- `/models refresh` forces provider model catalog re-discovery.
 - `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
 - `/verbose off` suppresses the additional `[verbose]` diagnostics.
 - `/mouse off` disables mouse capture so the terminal can highlight/select text normally.
@@ -105,11 +108,12 @@ Command behavior details:
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
 - `/sessions` lists persisted sessions for the active agent and marks the current session.
-- `/resume <session_id>` switches to an existing session, reloads transcript history, and clears any active model override.
+- `/resume <session_id>` switches to an existing session, reloads transcript history, and clears any active selector override.
 - `/delete <session_id>` removes session metadata + transcript for non-active sessions.
-- `/model <name>` sets a session-local model override for providers that support override flags (currently `codex`).
-- `/model default` or `/model off` clears the active override.
-- unsupported providers (for example `claudecode`) return an explicit notice and continue with configured defaults.
+- `/model <provider>/<model>[/<reasoning>]` sets a session-local selector used for subsequent prompts and metadata probes.
+- `/model <model>` shorthand keeps the current provider and updates only model/reasoning.
+- `/model default` or `/model off` clears the active selector override.
+- selector validation uses discovered provider catalogs when available; if discovery is unavailable, selector is accepted with explicit non-validated notice.
 - `/exit` and `/quit` abort active run and quit.
 
 Slash-menu behavior:
@@ -135,7 +139,7 @@ On `/new`:
 - Aborts active run if needed.
 - Invokes runtime `ResetSession` with `StartNew=true`.
 - Clears transcript and shows `started new session <id>`.
-- Clears any active `/model` override.
+- Clears any active `/model` selector override.
 - Re-renders workspace `WELCOME.md` if present.
 
 On `/reset`:
@@ -143,7 +147,7 @@ On `/reset`:
 - Aborts active run if needed.
 - Invokes runtime `ResetSession` with `StartNew=false`.
 - Clears transcript and shows `session reset`.
-- Clears any active `/model` override.
+- Clears any active `/model` selector override.
 
 ## Run lifecycle
 

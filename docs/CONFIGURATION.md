@@ -52,6 +52,7 @@
       "binary_path": "codex",
       "profile": "",
       "model": "",
+      "reasoning_default": "medium",
       "extra_args": ["--skip-git-repo-check"],
       "session_mode": "existing",
       "session_arg": "",
@@ -141,6 +142,7 @@ General:
 - for `session_mode=existing`, configured `resume_args` must include `{sessionId}`.
 - `llm.claude_code.session_id_fields[]` and `llm.codex.session_id_fields[]` entries cannot be blank.
 - `llm.codex.resume_output` must be one of `json`, `jsonl`, or `text` when set.
+- `llm.codex.reasoning_default` is required and must be one of `xlow`, `low`, `medium`, `high`, `xhigh`.
 - `channels.enabled` must contain at least one value.
 - `channels.enabled` allowlist: `slack`, `signal`.
 - duplicate channel names are rejected.
@@ -163,6 +165,7 @@ Codex-specific fields:
 
 - `llm.codex.profile` optionally sets Codex profile (`-p`).
 - `llm.codex.model` sets the default Codex model (`-m`) when no runtime override is present.
+- `llm.codex.reasoning_default` sets the default Codex reasoning level used when selector input omits reasoning.
 - `llm.codex.extra_args` appends provider-specific flags directly to `codex exec` arguments.
   - default includes `--skip-git-repo-check` so Codex runs in non-git/trust-unregistered directories.
 - `llm.codex.session_mode` controls continuation behavior:

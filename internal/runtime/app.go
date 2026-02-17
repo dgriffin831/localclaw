@@ -39,11 +39,15 @@ type App struct {
 	slack      slack.Client  // TODO: Wire outbound Slack dispatch once channel execution is implemented.
 	signal     signal.Client // TODO: Wire outbound Signal dispatch once channel execution is implemented.
 	llm        llm.Client
+	llmClients map[string]llm.Client
 	transcript *session.TranscriptWriter
 	now        func() time.Time
 
 	snapshotMu          sync.Mutex
 	skillPromptSnapshot map[string]skillsSessionSnapshot
+
+	providerModelsMu    sync.Mutex
+	providerModelsCache map[string]llm.ProviderModelCatalog
 }
 
 type skillsSessionSnapshot struct {
@@ -116,51 +120,58 @@ func New(cfg config.Config) (*App, error) {
 		DefaultWorkspace: cfg.Agents.Defaults.Workspace,
 		AgentWorkspaces:  agentWorkspaces,
 	})
-	var llmClient llm.Client
-	switch strings.TrimSpace(cfg.LLM.Provider) {
+	claudeClient := claudecode.NewClient(claudecode.Settings{
+		BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
+		Profile:             cfg.LLM.ClaudeCode.Profile,
+		ExtraArgs:           cfg.LLM.ClaudeCode.ExtraArgs,
+		SessionMode:         cfg.LLM.ClaudeCode.SessionMode,
+		SessionArg:          cfg.LLM.ClaudeCode.SessionArg,
+		ResumeArgs:          cfg.LLM.ClaudeCode.ResumeArgs,
+		SessionIDFields:     cfg.LLM.ClaudeCode.SessionIDFields,
+		StrictMCPConfig:     true,
+		MCPConfigDir:        filepath.Join(resolvedStateRoot, "runtime", "mcp"),
+		MCPServerBinaryPath: "localclaw",
+		MCPServerArgs:       []string{"mcp", "serve"},
+	})
+	codexClient := codex.NewClient(codex.Settings{
+		BinaryPath:       cfg.LLM.Codex.BinaryPath,
+		Profile:          cfg.LLM.Codex.Profile,
+		Model:            cfg.LLM.Codex.Model,
+		ReasoningDefault: cfg.LLM.Codex.ReasoningDefault,
+		ExtraArgs:        cfg.LLM.Codex.ExtraArgs,
+		SessionMode:      cfg.LLM.Codex.SessionMode,
+		SessionArg:       cfg.LLM.Codex.SessionArg,
+		ResumeArgs:       cfg.LLM.Codex.ResumeArgs,
+		SessionIDFields:  cfg.LLM.Codex.SessionIDFields,
+		ResumeOutput:     cfg.LLM.Codex.ResumeOutput,
+		WorkingDirectory: cfg.Agents.Defaults.Workspace,
+		MCP: codex.MCPSettings{
+			ConfigPath:       cfg.LLM.Codex.MCP.ConfigPath,
+			ServerName:       cfg.LLM.Codex.MCP.ServerName,
+			ServerBinaryPath: "localclaw",
+			ServerArgs:       []string{"mcp", "serve"},
+		},
+	})
+
+	llmClients := map[string]llm.Client{
+		"claudecode": claudeClient,
+		"codex":      codexClient,
+	}
+
+	provider := strings.ToLower(strings.TrimSpace(cfg.LLM.Provider))
+	llmClient, ok := llmClients[provider]
+	if !ok {
+		return nil, fmt.Errorf("unsupported llm provider %q", cfg.LLM.Provider)
+	}
+	switch provider {
 	case "claudecode":
-		claudeClient := claudecode.NewClient(claudecode.Settings{
-			BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
-			Profile:             cfg.LLM.ClaudeCode.Profile,
-			ExtraArgs:           cfg.LLM.ClaudeCode.ExtraArgs,
-			SessionMode:         cfg.LLM.ClaudeCode.SessionMode,
-			SessionArg:          cfg.LLM.ClaudeCode.SessionArg,
-			ResumeArgs:          cfg.LLM.ClaudeCode.ResumeArgs,
-			SessionIDFields:     cfg.LLM.ClaudeCode.SessionIDFields,
-			StrictMCPConfig:     true,
-			MCPConfigDir:        filepath.Join(resolvedStateRoot, "runtime", "mcp"),
-			MCPServerBinaryPath: "localclaw",
-			MCPServerArgs:       []string{"mcp", "serve"},
-		})
 		if err := claudeClient.ValidateMCPWiring(); err != nil {
 			return nil, fmt.Errorf("invalid claude mcp wiring: %w", err)
 		}
-		llmClient = claudeClient
 	case "codex":
-		codexClient := codex.NewClient(codex.Settings{
-			BinaryPath:       cfg.LLM.Codex.BinaryPath,
-			Profile:          cfg.LLM.Codex.Profile,
-			Model:            cfg.LLM.Codex.Model,
-			ExtraArgs:        cfg.LLM.Codex.ExtraArgs,
-			SessionMode:      cfg.LLM.Codex.SessionMode,
-			SessionArg:       cfg.LLM.Codex.SessionArg,
-			ResumeArgs:       cfg.LLM.Codex.ResumeArgs,
-			SessionIDFields:  cfg.LLM.Codex.SessionIDFields,
-			ResumeOutput:     cfg.LLM.Codex.ResumeOutput,
-			WorkingDirectory: cfg.Agents.Defaults.Workspace,
-			MCP: codex.MCPSettings{
-				ConfigPath:       cfg.LLM.Codex.MCP.ConfigPath,
-				ServerName:       cfg.LLM.Codex.MCP.ServerName,
-				ServerBinaryPath: "localclaw",
-				ServerArgs:       []string{"mcp", "serve"},
-			},
-		})
 		if err := codexClient.ValidateMCPWiring(); err != nil {
 			return nil, fmt.Errorf("invalid codex mcp wiring: %w", err)
 		}
-		llmClient = codexClient
-	default:
-		return nil, fmt.Errorf("unsupported llm provider %q", cfg.LLM.Provider)
 	}
 
 	return &App{
@@ -181,13 +192,15 @@ func New(cfg config.Config) (*App, error) {
 		cron:      cron.NewInProcessScheduler(cfg.Cron.Enabled),
 		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
 		// TODO: Honor channels.enabled by gating adapter wiring and channel usage per configured allowlist instead of unconditionally wiring both adapters.
-		slack:  slack.NewLocalAdapter(),
-		signal: signal.NewLocalAdapter(),
-		llm:    llmClient,
+		slack:      slack.NewLocalAdapter(),
+		signal:     signal.NewLocalAdapter(),
+		llm:        llmClient,
+		llmClients: llmClients,
 		// TODO: Wire transcript appends into memory autosync (StartAutoSync/HandleTranscriptUpdate) via a runtime event bus so session delta indexing is active at startup.
 		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
 		now:                 time.Now,
 		skillPromptSnapshot: map[string]skillsSessionSnapshot{},
+		providerModelsCache: map[string]llm.ProviderModelCatalog{},
 	}, nil
 }
 

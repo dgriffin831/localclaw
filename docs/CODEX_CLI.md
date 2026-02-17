@@ -12,6 +12,7 @@ Implementation location:
   - `codex exec --json -C <workspace> ... -`
   - optional `-p <profile>` from `llm.codex.profile`
   - optional `-m <model>` from `llm.codex.model` or runtime override
+  - optional `-c model_reasoning_effort="<level>"` from runtime/default selector reasoning
   - optional passthrough args from `llm.codex.extra_args`
     - default config includes `--skip-git-repo-check`
 - prompt text is written to stdin (`-` argument) using `exec.CommandContext`.
@@ -36,6 +37,16 @@ Implementation location:
 - Runtime request options can include `model_override`.
 - Codex adapter applies `model_override` first when present.
 - If no override is provided, configured `llm.codex.model` is used.
+- Runtime request options can include `reasoning_override`.
+- If no reasoning override is provided, configured `llm.codex.reasoning_default` is used.
+
+## Model catalog discovery
+
+- Adapter supports provider model-catalog discovery for `/models`.
+- Discovery path:
+  - reads Codex config (`model` + `notice.model_migrations`) from resolved Codex config TOML
+  - runs a constrained JSON probe prompt for provider-reported model catalog and reasoning metadata
+  - merges/deduplicates probe + config results and marks partial results when probe/config data is incomplete
 
 ## MCP wiring and config
 

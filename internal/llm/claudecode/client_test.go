@@ -141,6 +141,21 @@ func TestBuildCommandArgsForRequestUsesResumeArgsWhenPersistedSessionExists(t *t
 	}
 }
 
+func TestBuildCommandArgsForRequestUsesModelOverride(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath: "claude",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Options: llm.PromptOptions{
+			ModelOverride: "claude-opus-4-6",
+		},
+	}, "/tmp/mcp.json")
+	if !containsArgSequence(args, []string{"--model", "claude-opus-4-6"}) {
+		t.Fatalf("expected model override args, got %v", args)
+	}
+}
+
 func TestGenerateSessionIDProducesUUIDv4(t *testing.T) {
 	id := generateSessionID()
 	pattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -516,6 +531,37 @@ func TestParseStreamJSONLineExtractsProviderSessionMetadata(t *testing.T) {
 	}
 	if events[0].ProviderMetadata.SessionID != "session-abc" {
 		t.Fatalf("expected session id session-abc, got %q", events[0].ProviderMetadata.SessionID)
+	}
+}
+
+func TestParseClaudeModelCatalogProbeOutput(t *testing.T) {
+	raw := "```json\n{\"models\":[\"claude-sonnet-4-5\",{\"name\":\"claude-opus-4-6\"}]}\n```"
+	models := parseClaudeModelCatalogProbeOutput(raw)
+	if len(models) != 2 {
+		t.Fatalf("expected 2 parsed models, got %d", len(models))
+	}
+	if models[0].Name != "claude-opus-4-6" {
+		t.Fatalf("expected sorted first model claude-opus-4-6, got %q", models[0].Name)
+	}
+	if models[0].Reasoning.Supported {
+		t.Fatalf("expected claude models to report reasoning unsupported")
+	}
+}
+
+func TestBuildFallbackModelDescriptorsUsesProfile(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath: "claude",
+		Profile:    "default",
+	})
+	models := client.buildFallbackModelDescriptors()
+	if len(models) != 1 {
+		t.Fatalf("expected one fallback model from profile, got %d", len(models))
+	}
+	if models[0].Name != "default" {
+		t.Fatalf("expected fallback model name default, got %q", models[0].Name)
+	}
+	if models[0].Reasoning.Supported {
+		t.Fatalf("expected fallback claude model reasoning unsupported")
 	}
 }
 

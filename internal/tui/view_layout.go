@@ -55,16 +55,18 @@ func (m *model) statusView() string {
 func (m *model) statusSettings(innerWidth int) string {
 	provider := m.activeProvider()
 	model := valueOrDefault(m.effectiveModel(), "n/a")
+	reasoning := valueOrDefault(m.effectiveReasoning(), "n/a")
 	settings := fmt.Sprintf(
-		"provider:%s  model:%s  verbose:%s  tools:%s  mouse:%s",
+		"provider:%s  model:%s  reasoning:%s  verbose:%s  tools:%s  mouse:%s",
 		provider,
 		model,
+		reasoning,
 		onOff(m.verbose),
 		mapBool(m.toolsExpanded, "expanded", "collapsed"),
 		onOff(m.mouseEnabled),
 	)
 	if innerWidth < 70 {
-		settings = fmt.Sprintf("p:%s m:%s v:%s mouse:%s", provider, model, onOff(m.verbose), onOff(m.mouseEnabled))
+		settings = fmt.Sprintf("p:%s m:%s r:%s v:%s mouse:%s", provider, model, reasoning, onOff(m.verbose), onOff(m.mouseEnabled))
 	}
 	if innerWidth < 42 {
 		settings = fmt.Sprintf("mouse:%s", onOff(m.mouseEnabled))

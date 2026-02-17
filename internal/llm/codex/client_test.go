@@ -172,7 +172,7 @@ func TestBuildCommandArgsForRequestIncludesExpectedShape(t *testing.T) {
 		SystemContext: "system",
 		SkillPrompt:   "skill",
 	})
-	want := []string{"exec", "--json", "-C", "/tmp/workspace", "-p", "dev", "-m", "gpt-5-codex", "--sandbox", "workspace-write", "-"}
+	want := []string{"exec", "--json", "-C", "/tmp/workspace", "-p", "dev", "-m", "gpt-5-codex", "-c", "model_reasoning_effort=\"medium\"", "--sandbox", "workspace-write", "-"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("unexpected args:\n got: %#v\nwant: %#v", args, want)
 	}
@@ -191,9 +191,32 @@ func TestBuildCommandArgsForRequestUsesModelOverride(t *testing.T) {
 			ModelOverride: "gpt-5-mini",
 		},
 	})
-	want := []string{"exec", "--json", "-C", "/tmp/workspace", "-p", "dev", "-m", "gpt-5-mini", "-"}
+	want := []string{"exec", "--json", "-C", "/tmp/workspace", "-p", "dev", "-m", "gpt-5-mini", "-c", "model_reasoning_effort=\"medium\"", "-"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("unexpected args:\n got: %#v\nwant: %#v", args, want)
+	}
+}
+
+func TestBuildCommandArgsForRequestUsesReasoningOverride(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		Profile:          "dev",
+		Model:            "gpt-5-codex",
+		WorkingDirectory: "/tmp/workspace",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Options: llm.PromptOptions{
+			ModelOverride:     "gpt-5-mini",
+			ReasoningOverride: "high",
+		},
+	})
+
+	if !containsArgSequence(args, []string{"-m", "gpt-5-mini"}) {
+		t.Fatalf("expected model override args, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"-c", "model_reasoning_effort=\"high\""}) {
+		t.Fatalf("expected reasoning override args, got %v", args)
 	}
 }
 
@@ -353,6 +376,71 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	if gotEnv != "" && gotEnv != "CODEX_HOME=" {
 		t.Fatalf("expected no non-empty CODEX_HOME override, got %q", gotEnv)
 	}
+}
+
+func TestParseCodexModelCatalogProbeOutput(t *testing.T) {
+	raw := "```json\n{\"models\":[{\"name\":\"gpt-5.3-codex\",\"reasoning\":{\"supported\":true,\"levels\":[\"low\",\"medium\",\"high\"],\"default\":\"medium\"}},\"gpt-5.2-codex\"]}\n```"
+	models := parseCodexModelCatalogProbeOutput(raw, "medium")
+	if len(models) != 2 {
+		t.Fatalf("expected 2 parsed models, got %d", len(models))
+	}
+	if models[0].Name != "gpt-5.2-codex" {
+		t.Fatalf("expected sorted first model gpt-5.2-codex, got %q", models[0].Name)
+	}
+	if !models[0].Reasoning.Supported {
+		t.Fatalf("expected codex reasoning metadata to be marked supported")
+	}
+	if models[1].Reasoning.Default == "" {
+		t.Fatalf("expected codex reasoning default to be set")
+	}
+}
+
+func TestDiscoverModelsFromConfigReadsModelMigrations(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "codex.toml")
+	payload := `model = "gpt-5.3-codex"
+
+[notice.model_migrations]
+"gpt-5.2" = "gpt-5.2-codex"
+"gpt-5.1" = "gpt-5.1-codex"
+`
+	if err := os.WriteFile(configPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write codex config: %v", err)
+	}
+
+	client := NewClient(Settings{
+		BinaryPath: "codex",
+		MCP: MCPSettings{
+			ConfigPath: configPath,
+		},
+	})
+	models, err := client.discoverModelsFromConfig()
+	if err != nil {
+		t.Fatalf("discoverModelsFromConfig: %v", err)
+	}
+	joined := strings.Join(models, ",")
+	if joined != "gpt-5.1,gpt-5.1-codex,gpt-5.2,gpt-5.2-codex,gpt-5.3-codex" {
+		t.Fatalf("unexpected discovered models from config: %s", joined)
+	}
+}
+
+func containsArgSequence(args []string, seq []string) bool {
+	if len(seq) == 0 {
+		return true
+	}
+	for i := 0; i <= len(args)-len(seq); i++ {
+		match := true
+		for j := 0; j < len(seq); j++ {
+			if args[i+j] != seq[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPromptStreamRequestReturnsErrorWhenBinaryMissing(t *testing.T) {

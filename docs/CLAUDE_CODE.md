@@ -10,6 +10,7 @@ Implementation location:
 
 - `PromptStream` executes:
   - `claude -p <input> --output-format stream-json --verbose --mcp-config <run-scoped.json>`
+  - optional `--model <model>` when runtime selector sets model override
   - with `--strict-mcp-config` when enabled
   - with session continuation args based on config and persisted provider session state:
     - start mode default: `--session-id <generated-id>`
@@ -56,6 +57,12 @@ Client appends environment values when configured:
   - `llm.claude_code.session_arg` for start mode (default `--session-id`)
   - `llm.claude_code.resume_args` with `{sessionId}` placeholder
   - `llm.claude_code.session_id_fields` for parsing provider output fields
+
+## Model catalog discovery
+
+- Adapter supports provider model-catalog discovery for `/models`.
+- Discovery uses a constrained JSON probe prompt and falls back to configured `llm.claude_code.profile` when probe data is unavailable.
+- Claude Code models are currently reported with `reasoning: n/a` unless provider metadata adds explicit reasoning support.
 
 ## Error behavior
 

@@ -36,8 +36,12 @@ func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResoluti
 	trimmedInput := strings.TrimSpace(input)
 	bootstrapSection := a.buildBootstrapPromptSection(ctx, resolution)
 	skillsSection := a.buildSkillsPromptSection(ctx, resolution)
+	provider := a.resolveProvider(opts.ProviderOverride)
 	modelOverride := strings.TrimSpace(opts.ModelOverride)
-	provider := strings.ToLower(strings.TrimSpace(a.cfg.LLM.Provider))
+	reasoningOverride := strings.TrimSpace(opts.ReasoningOverride)
+	if strings.EqualFold(provider, "codex") && reasoningOverride == "" {
+		reasoningOverride = strings.TrimSpace(a.cfg.LLM.Codex.ReasoningDefault)
+	}
 	providerSessionID := a.loadPersistedProviderSessionID(ctx, resolution, provider)
 
 	var system strings.Builder
@@ -57,7 +61,8 @@ func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResoluti
 			ProviderSessionID: providerSessionID,
 		},
 		Options: llm.PromptOptions{
-			ModelOverride: modelOverride,
+			ModelOverride:     modelOverride,
+			ReasoningOverride: reasoningOverride,
 		},
 	}
 }

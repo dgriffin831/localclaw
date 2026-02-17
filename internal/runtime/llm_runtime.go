@@ -9,13 +9,53 @@ import (
 	"github.com/dgriffin831/localclaw/internal/session"
 )
 
+func (a *App) configuredProvider() string {
+	provider := strings.ToLower(strings.TrimSpace(a.cfg.LLM.Provider))
+	if provider == "" {
+		return "claudecode"
+	}
+	return provider
+}
+
+func (a *App) resolveProvider(provider string) string {
+	normalized := strings.ToLower(strings.TrimSpace(provider))
+	if normalized == "" {
+		return a.configuredProvider()
+	}
+	return normalized
+}
+
+func (a *App) clientForProvider(provider string) (llm.Client, error) {
+	resolved := a.resolveProvider(provider)
+	if a.llm != nil && strings.EqualFold(resolved, a.configuredProvider()) {
+		return a.llm, nil
+	}
+	if len(a.llmClients) > 0 {
+		if client, ok := a.llmClients[resolved]; ok && client != nil {
+			return client, nil
+		}
+	}
+	return nil, fmt.Errorf("provider %q is not configured", resolved)
+}
+
 func (a *App) promptStreamFromClient(ctx context.Context, req llm.Request) (<-chan llm.StreamEvent, <-chan error) {
-	client, ok := a.llm.(llm.RequestClient)
-	if !ok || !a.llm.Capabilities().SupportsRequestOptions {
+	provider := a.resolveProvider(req.Session.Provider)
+	req.Session.Provider = provider
+	clientInstance, err := a.clientForProvider(provider)
+	if err != nil {
 		events := make(chan llm.StreamEvent)
 		errs := make(chan error, 1)
 		close(events)
-		errs <- fmt.Errorf("llm client does not support request-based prompt streaming")
+		errs <- err
+		close(errs)
+		return events, errs
+	}
+	client, ok := clientInstance.(llm.RequestClient)
+	if !ok || !clientInstance.Capabilities().SupportsRequestOptions {
+		events := make(chan llm.StreamEvent)
+		errs := make(chan error, 1)
+		close(events)
+		errs <- fmt.Errorf("llm provider %q does not support request-based prompt streaming", provider)
 		close(errs)
 		return events, errs
 	}
