@@ -468,9 +468,6 @@ func (c Config) Validate() error {
 	if err := validateSecurityManagedExtraArgs("codex", c.LLM.Codex.ExtraArgs); err != nil {
 		return err
 	}
-	if len(c.Channels.Enabled) == 0 {
-		return errors.New("channels.enabled must include at least one channel")
-	}
 	if strings.TrimSpace(c.Agents.Defaults.Workspace) == "" {
 		return errors.New("agents.defaults.workspace is required")
 	}

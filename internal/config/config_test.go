@@ -609,6 +609,23 @@ func TestLoadRejectsRemovedMemoryQueryMinScore(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsNoEnabledChannels(t *testing.T) {
+	cfg := Default()
+	cfg.Channels.Enabled = []string{}
+	cfg.Channels.Slack.BotTokenEnv = ""
+	cfg.Channels.Slack.APIBaseURL = ""
+	cfg.Channels.Slack.TimeoutSeconds = 0
+	cfg.Channels.Signal.CLIPath = ""
+	cfg.Channels.Signal.Account = ""
+	cfg.Channels.Signal.TimeoutSeconds = 0
+	cfg.Channels.Signal.Inbound.Enabled = true
+	cfg.Channels.Signal.Inbound.AllowFrom = nil
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no enabled channels to be valid, got %v", err)
+	}
+}
+
 func TestValidateRejectsUnsupportedChannel(t *testing.T) {
 	cfg := Default()
 	cfg.Channels.Enabled = []string{"slack", "teams"}

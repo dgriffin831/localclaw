@@ -185,8 +185,8 @@ General:
   - configure execution mode using `security.mode` instead.
   - rejected Codex flags in `llm.codex.extra_args`: `--dangerously-bypass-approvals-and-sandbox`, `--yolo`, `--sandbox`, `--add-dir`.
   - rejected Claude Code flags in `llm.claude_code.extra_args`: `--dangerously-skip-permissions`, `--permission-mode`, `--add-dir`.
-- `channels.enabled` must contain at least one value.
-- `channels.enabled` allowlist: `slack`, `signal`.
+- `channels.enabled` may be empty when channel integrations are not needed.
+- `channels.enabled` allowlist (when values are present): `slack`, `signal`.
 - duplicate channel names are rejected.
 - when `slack` is enabled:
   - `channels.slack.bot_token_env` is required.
@@ -196,7 +196,7 @@ General:
   - `channels.signal.cli_path` is required.
   - `channels.signal.account` is required.
   - `channels.signal.timeout_seconds` must be `> 0`.
-- when `channels.signal.inbound.enabled=true`:
+- when `signal` is enabled and `channels.signal.inbound.enabled=true`:
   - `channels.signal.inbound.allow_from` must contain at least one E.164 sender.
   - `channels.signal.inbound.default_agent` must be `default` or a configured `agents.list[].id`.
   - `channels.signal.inbound.agent_by_sender` senders must also appear in `allow_from`.
