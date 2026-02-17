@@ -79,6 +79,9 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 		m.runSessionReset(false, "/reset")
 	case "new":
 		m.runSessionReset(true, "/new")
+		if m.bootstrapSeedPendingForSession() {
+			followUp = emitBootstrapSeedTrigger()
+		}
 	case "sessions":
 		m.handleSessionsList()
 	case "resume":

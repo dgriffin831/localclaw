@@ -34,7 +34,11 @@ func newProgram(m model) *tea.Program {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, tickStatus())
+	cmds := []tea.Cmd{textarea.Blink, tickStatus()}
+	if m.bootstrapSeedPendingForSession() {
+		cmds = append(cmds, emitBootstrapSeedTrigger())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -44,6 +48,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ctxDoneMsg:
 		m.abortRun("context cancelled")
 		return m, tea.Quit
+
+	case bootstrapSeedTriggerMsg:
+		if cmd := m.runBootstrapSeedPrompt(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

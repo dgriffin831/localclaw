@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,7 +35,48 @@ func (m *model) submitInput() tea.Cmd {
 	}
 	m.startRun(value)
 	m.refreshViewport(true)
+	return m.activeRunCommands()
+}
 
+func emitBootstrapSeedTrigger() tea.Cmd {
+	return func() tea.Msg {
+		return bootstrapSeedTriggerMsg{}
+	}
+}
+
+func (m *model) bootstrapSeedPendingForSession() bool {
+	if m.app == nil {
+		return false
+	}
+	if strings.TrimSpace(m.workspacePath) == "" {
+		return false
+	}
+	bootstrapPath := filepath.Join(m.workspacePath, bootstrapFileName)
+	if _, err := os.Stat(bootstrapPath); err != nil {
+		return false
+	}
+
+	transcriptPath, err := m.app.ResolveTranscriptPath(m.agentID, m.sessionID)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(transcriptPath)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	return info.Size() == 0
+}
+
+func (m *model) runBootstrapSeedPrompt() tea.Cmd {
+	if !m.bootstrapSeedPendingForSession() || m.running {
+		return nil
+	}
+	m.startRun(bootstrapSeedText)
+	m.refreshViewport(true)
+	return m.activeRunCommands()
+}
+
+func (m *model) activeRunCommands() tea.Cmd {
 	cmds := []tea.Cmd{m.spinner.Tick, tickStatus()}
 	if m.streamEvents != nil {
 		cmds = append(cmds, waitStreamEvent(m.activeRunID, m.streamEvents))

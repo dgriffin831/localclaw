@@ -133,6 +133,7 @@ For providers that omit explicit tool metadata in stream events (for example Cod
 - detailed tool call/result metadata
 
 On TUI startup and on `/new`, `localclaw` renders workspace `WELCOME.md` (if present) as a system message.
+When workspace `BOOTSTRAP.md` exists and the active session has no transcript yet, TUI auto-submits a first onboarding seed prompt: `Wake up, my friend!`.
 
 Optional waiting-text customization:
 

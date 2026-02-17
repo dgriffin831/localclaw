@@ -107,6 +107,7 @@ Command behavior details:
 - `/clear` clears transcript messages without adding a confirmation line.
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
+- `/new` schedules an automatic onboarding seed run (`Wake up, my friend!`) when `BOOTSTRAP.md` exists and the new session has no transcript yet.
 - `/sessions` lists persisted sessions for the active agent and marks the current session.
 - `/resume <session_id>` switches to an existing session, reloads transcript history, and clears any active selector override.
 - `/delete <session_id>` removes session metadata + transcript for non-active sessions.
@@ -129,6 +130,7 @@ On TUI model creation:
 
 - Adds `localclaw ready. Type /help for commands.` system line.
 - Loads and renders workspace `WELCOME.md` (if present) as markdown system content.
+- Schedules automatic onboarding seed run (`Wake up, my friend!`) when `BOOTSTRAP.md` exists and the active session has no transcript yet.
 - Applies startup toggles from `app.default`:
   - `verbose` -> verbose diagnostics mode
   - `mouse` -> mouse capture
@@ -141,6 +143,7 @@ On `/new`:
 - Clears transcript and shows `started new session <id>`.
 - Clears any active `/model` selector override.
 - Re-renders workspace `WELCOME.md` if present.
+- Schedules automatic onboarding seed run (`Wake up, my friend!`) when `BOOTSTRAP.md` exists and the new session has no transcript yet.
 
 On `/reset`:
 
@@ -185,6 +188,7 @@ Current tests in `internal/tui/app_test.go` cover:
 
 - slash parsing and autocomplete behavior
 - `/help`, `/tools`, `/new`, `/reset`, `/sessions`, `/resume`, `/delete` command effects
+- bootstrap seed scheduling on startup and `/new` when `BOOTSTRAP.md` is pending
 - welcome message startup/new rendering
 - status lifecycle/metadata behavior
 - history navigation keybindings

@@ -58,6 +58,30 @@ func startupOptionBits(t *testing.T, p *tea.Program) uint64 {
 	return field.Uint()
 }
 
+func cmdEmitsBootstrapSeedTrigger(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	switch msg.(type) {
+	case bootstrapSeedTriggerMsg:
+		return true
+	}
+	value := reflect.ValueOf(msg)
+	if value.IsValid() && value.Kind() == reflect.Slice {
+		for i := 0; i < value.Len(); i++ {
+			nested, ok := value.Index(i).Interface().(tea.Cmd)
+			if !ok {
+				continue
+			}
+			if cmdEmitsBootstrapSeedTrigger(nested) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func newRuntimeBackedModel(t *testing.T) (model, *runtime.App) {
 	t.Helper()
 
@@ -400,6 +424,47 @@ func TestHandleSlashNewShowsWorkspaceWelcomeMessage(t *testing.T) {
 	}
 	if m.messages[1].Raw != welcomeContent {
 		t.Fatalf("unexpected welcome message %q", m.messages[1].Raw)
+	}
+}
+
+func TestInitSchedulesBootstrapSeedWhenPendingAndSessionIsEmpty(t *testing.T) {
+	m, _ := newRuntimeBackedModel(t)
+
+	if !cmdEmitsBootstrapSeedTrigger(m.Init()) {
+		t.Fatalf("expected init command batch to include bootstrap seed trigger")
+	}
+}
+
+func TestInitDoesNotScheduleBootstrapSeedWhenSessionHasTranscript(t *testing.T) {
+	m, app := newRuntimeBackedModel(t)
+	if err := app.AppendSessionTranscriptMessage(context.Background(), m.agentID, m.sessionID, "user", "already initialized"); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+
+	if cmdEmitsBootstrapSeedTrigger(m.Init()) {
+		t.Fatalf("did not expect init command batch to include bootstrap seed trigger when transcript exists")
+	}
+}
+
+func TestHandleSlashNewSchedulesBootstrapSeedWhenPending(t *testing.T) {
+	m, _ := newRuntimeBackedModel(t)
+
+	cmd := m.handleSlash("/new")
+	if !cmdEmitsBootstrapSeedTrigger(cmd) {
+		t.Fatalf("expected /new to schedule bootstrap seed trigger when bootstrap is pending")
+	}
+}
+
+func TestHandleSlashNewDoesNotScheduleBootstrapSeedWhenBootstrapMissing(t *testing.T) {
+	m, _ := newRuntimeBackedModel(t)
+	bootstrapPath := filepath.Join(m.workspacePath, bootstrapFileName)
+	if err := os.Remove(bootstrapPath); err != nil {
+		t.Fatalf("remove BOOTSTRAP.md: %v", err)
+	}
+
+	cmd := m.handleSlash("/new")
+	if cmdEmitsBootstrapSeedTrigger(cmd) {
+		t.Fatalf("did not expect /new bootstrap seed trigger when BOOTSTRAP.md is missing")
 	}
 }
 

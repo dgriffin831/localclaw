@@ -19,14 +19,16 @@ import (
 )
 
 const (
-	statusIdle      = "idle"
-	statusSending   = "sending"
-	statusWaiting   = "waiting"
-	statusStreaming = "streaming"
-	statusAborted   = "aborted"
-	statusError     = "error"
-	slashMenuLimit  = 6
-	welcomeFileName = "WELCOME.md"
+	statusIdle        = "idle"
+	statusSending     = "sending"
+	statusWaiting     = "waiting"
+	statusStreaming   = "streaming"
+	statusAborted     = "aborted"
+	statusError       = "error"
+	slashMenuLimit    = 6
+	welcomeFileName   = "WELCOME.md"
+	bootstrapFileName = "BOOTSTRAP.md"
+	bootstrapSeedText = "Wake up, my friend!"
 )
 
 type messageRole string
@@ -71,6 +73,7 @@ type streamErrMsg struct {
 
 type statusTickMsg time.Time
 type ctxDoneMsg struct{}
+type bootstrapSeedTriggerMsg struct{}
 type providerToolsDiscoveredMsg struct {
 	Provider string
 	Model    string
