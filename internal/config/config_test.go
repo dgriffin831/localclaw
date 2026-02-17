@@ -21,6 +21,29 @@ func TestDefaultConfigIncludesCodexReasoningDefault(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigIncludesSecurityMode(t *testing.T) {
+	cfg := Default()
+	if cfg.Security.Mode != "sandbox-write" {
+		t.Fatalf("expected default security.mode=sandbox-write, got %q", cfg.Security.Mode)
+	}
+}
+
+func TestDefaultConfigIncludesBackupDefaults(t *testing.T) {
+	cfg := Default()
+	if !cfg.Backup.AutoSave {
+		t.Fatalf("expected backup.auto_save default true")
+	}
+	if !cfg.Backup.AutoClean {
+		t.Fatalf("expected backup.auto_clean default true")
+	}
+	if cfg.Backup.Interval != "1d" {
+		t.Fatalf("expected backup.interval default 1d, got %q", cfg.Backup.Interval)
+	}
+	if cfg.Backup.RetainCount != 3 {
+		t.Fatalf("expected backup.retain_count default 3, got %d", cfg.Backup.RetainCount)
+	}
+}
+
 func TestValidateRejectsUnsupportedCodexReasoningDefault(t *testing.T) {
 	cfg := Default()
 	cfg.LLM.Provider = "codex"
@@ -432,6 +455,72 @@ func TestLoadRejectsLegacySecurityFields(t *testing.T) {
 	}
 }
 
+func TestLoadSupportsSecurityModes(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "full-access", mode: "full-access"},
+		{name: "sandbox-write", mode: "sandbox-write"},
+		{name: "read-only", mode: "read-only"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "config.json")
+			payload := `{
+				"security": {
+					"mode": "` + tt.mode + `"
+				}
+			}`
+			if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("load config: %v", err)
+			}
+			if cfg.Security.Mode != tt.mode {
+				t.Fatalf("expected security.mode=%q, got %q", tt.mode, cfg.Security.Mode)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnsupportedSecurityMode(t *testing.T) {
+	cfg := Default()
+	cfg.Security.Mode = "wild-west"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid security.mode to fail validation")
+	}
+}
+
+func TestValidateRejectsBlankBackupInterval(t *testing.T) {
+	cfg := Default()
+	cfg.Backup.Interval = "   "
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected blank backup.interval to fail validation")
+	}
+}
+
+func TestValidateRejectsInvalidBackupInterval(t *testing.T) {
+	cfg := Default()
+	cfg.Backup.Interval = "1fortnight"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected invalid backup.interval to fail validation")
+	}
+}
+
+func TestValidateRejectsNonPositiveBackupRetainCount(t *testing.T) {
+	cfg := Default()
+	cfg.Backup.RetainCount = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected backup.retain_count <= 0 to fail validation")
+	}
+}
+
 func TestLoadRejectsLegacyGovCloudFields(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
@@ -629,7 +718,7 @@ func TestLoadSupportsCodexExtraArgs(t *testing.T) {
 		"llm": {
 			"provider": "codex",
 			"codex": {
-				"extra_args": ["--sandbox", "workspace-write"]
+				"extra_args": ["--skip-git-repo-check", "--no-color"]
 			}
 		}
 	}`
@@ -644,7 +733,7 @@ func TestLoadSupportsCodexExtraArgs(t *testing.T) {
 	if len(cfg.LLM.Codex.ExtraArgs) != 2 {
 		t.Fatalf("expected 2 codex extra args, got %d", len(cfg.LLM.Codex.ExtraArgs))
 	}
-	if cfg.LLM.Codex.ExtraArgs[0] != "--sandbox" || cfg.LLM.Codex.ExtraArgs[1] != "workspace-write" {
+	if cfg.LLM.Codex.ExtraArgs[0] != "--skip-git-repo-check" || cfg.LLM.Codex.ExtraArgs[1] != "--no-color" {
 		t.Fatalf("unexpected codex extra args: %v", cfg.LLM.Codex.ExtraArgs)
 	}
 }
@@ -656,7 +745,7 @@ func TestLoadSupportsClaudeCodeExtraArgs(t *testing.T) {
 		"llm": {
 			"provider": "claudecode",
 			"claude_code": {
-				"extra_args": ["--dangerously-skip-permissions", "--allowed-tools", "mcp__localclaw__localclaw_memory_search"]
+				"extra_args": ["--allowed-tools", "mcp__localclaw__localclaw_memory_search"]
 			}
 		}
 	}`
@@ -668,11 +757,51 @@ func TestLoadSupportsClaudeCodeExtraArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if len(cfg.LLM.ClaudeCode.ExtraArgs) != 3 {
-		t.Fatalf("expected 3 claude_code extra args, got %d", len(cfg.LLM.ClaudeCode.ExtraArgs))
+	if len(cfg.LLM.ClaudeCode.ExtraArgs) != 2 {
+		t.Fatalf("expected 2 claude_code extra args, got %d", len(cfg.LLM.ClaudeCode.ExtraArgs))
 	}
-	if cfg.LLM.ClaudeCode.ExtraArgs[0] != "--dangerously-skip-permissions" {
+	if cfg.LLM.ClaudeCode.ExtraArgs[0] != "--allowed-tools" {
 		t.Fatalf("unexpected first claude_code extra arg: %q", cfg.LLM.ClaudeCode.ExtraArgs[0])
+	}
+}
+
+func TestValidateRejectsCodexSecurityFlagsInExtraArgs(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.Codex.ExtraArgs = []string{"--skip-git-repo-check", "--sandbox", "workspace-write"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected codex security flag conflict to fail validation")
+	}
+
+	cfg = Default()
+	cfg.LLM.Codex.ExtraArgs = []string{"--yolo"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected codex --yolo conflict to fail validation")
+	}
+
+	cfg = Default()
+	cfg.LLM.Codex.ExtraArgs = []string{"--add-dir", "/tmp/workspace"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected codex --add-dir conflict to fail validation")
+	}
+}
+
+func TestValidateRejectsClaudeSecurityFlagsInExtraArgs(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.ClaudeCode.ExtraArgs = []string{"--dangerously-skip-permissions"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected claude security flag conflict to fail validation")
+	}
+
+	cfg = Default()
+	cfg.LLM.ClaudeCode.ExtraArgs = []string{"--permission-mode", "plan"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected claude --permission-mode conflict to fail validation")
+	}
+
+	cfg = Default()
+	cfg.LLM.ClaudeCode.ExtraArgs = []string{"--add-dir", "/tmp/workspace"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected claude --add-dir conflict to fail validation")
 	}
 }
 

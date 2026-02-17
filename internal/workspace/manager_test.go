@@ -109,6 +109,7 @@ func TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles(t *testing.T) {
 		"TOOLS.md",
 		"IDENTITY.md",
 		"USER.md",
+		"SECURITY.md",
 		"HEARTBEAT.md",
 		"WELCOME.md",
 		"BOOTSTRAP.md",
@@ -121,6 +122,21 @@ func TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles(t *testing.T) {
 		if strings.HasPrefix(string(content), "---\n") {
 			t.Fatalf("expected frontmatter to be stripped in %s", name)
 		}
+	}
+
+	securityContent, err := os.ReadFile(filepath.Join(workspacePath, "SECURITY.md"))
+	if err != nil {
+		t.Fatalf("read SECURITY.md: %v", err)
+	}
+	securityText := string(securityContent)
+	if !strings.Contains(securityText, "never delete data") {
+		t.Fatalf("expected SECURITY.md to include delete-data guardrail")
+	}
+	if !strings.Contains(securityText, "never read secret-bearing files") {
+		t.Fatalf("expected SECURITY.md to include secret-file guardrail")
+	}
+	if !strings.Contains(securityText, "never exfiltrate local data externally") {
+		t.Fatalf("expected SECURITY.md to include exfiltration guardrail")
 	}
 }
 
@@ -156,6 +172,114 @@ func TestEnsureWorkspaceDoesNotOverwriteExistingBootstrapFiles(t *testing.T) {
 	}
 	if string(got) != "custom content\n" {
 		t.Fatalf("AGENTS.md should not be overwritten, got %q", string(got))
+	}
+}
+
+func TestEnsureWorkspaceCreatesBootstrapWhenWorkspaceExistsButCoreFilesMissing(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	workspacePath := filepath.Join(stateRoot, "workspace")
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
+	mgr := NewLocalManager(Settings{
+		StateRoot:        stateRoot,
+		DefaultWorkspace: ".",
+	})
+
+	info, err := mgr.EnsureWorkspace(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+	if info.Created {
+		t.Fatalf("workspace should not be marked created when directory already exists")
+	}
+
+	bootstrapPath := filepath.Join(workspacePath, "BOOTSTRAP.md")
+	if _, err := os.Stat(bootstrapPath); err != nil {
+		t.Fatalf("expected BOOTSTRAP.md to be created in pre-existing empty workspace: %v", err)
+	}
+
+	createdBootstrap := false
+	for _, name := range info.BootstrapCreated {
+		if name == "BOOTSTRAP.md" {
+			createdBootstrap = true
+			break
+		}
+	}
+	if !createdBootstrap {
+		t.Fatalf("expected BOOTSTRAP.md in bootstrap created list")
+	}
+}
+
+func TestEnsureWorkspaceDoesNotCreateBootstrapWhenCoreFilesExist(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	workspacePath := filepath.Join(stateRoot, "workspace")
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, "AGENTS.md"), []byte("existing agent setup\n"), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	mgr := NewLocalManager(Settings{
+		StateRoot:        stateRoot,
+		DefaultWorkspace: ".",
+	})
+
+	info, err := mgr.EnsureWorkspace(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+
+	bootstrapPath := filepath.Join(workspacePath, "BOOTSTRAP.md")
+	if _, err := os.Stat(bootstrapPath); !os.IsNotExist(err) {
+		t.Fatalf("expected BOOTSTRAP.md to be absent when core files exist, err=%v", err)
+	}
+
+	for _, name := range info.BootstrapCreated {
+		if name == "BOOTSTRAP.md" {
+			t.Fatalf("did not expect BOOTSTRAP.md in bootstrap created list")
+		}
+	}
+}
+
+func TestEnsureWorkspaceDoesNotRecreateBootstrapAfterDeletion(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	mgr := NewLocalManager(Settings{
+		StateRoot:        stateRoot,
+		DefaultWorkspace: ".",
+	})
+
+	info, err := mgr.EnsureWorkspace(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("ensure workspace first run: %v", err)
+	}
+
+	bootstrapPath := filepath.Join(info.Path, "BOOTSTRAP.md")
+	if err := os.Remove(bootstrapPath); err != nil {
+		t.Fatalf("remove BOOTSTRAP.md: %v", err)
+	}
+
+	second, err := mgr.EnsureWorkspace(context.Background(), "", true)
+	if err != nil {
+		t.Fatalf("ensure workspace second run: %v", err)
+	}
+
+	if _, err := os.Stat(bootstrapPath); !os.IsNotExist(err) {
+		t.Fatalf("expected BOOTSTRAP.md to remain absent after deletion, err=%v", err)
+	}
+
+	for _, name := range second.BootstrapCreated {
+		if name == "BOOTSTRAP.md" {
+			t.Fatalf("did not expect BOOTSTRAP.md to be recreated")
+		}
 	}
 }
 
@@ -232,6 +356,36 @@ func TestLoadBootstrapFilesExcludesWelcomeFileFromPromptContext(t *testing.T) {
 	}
 }
 
+func TestLoadBootstrapFilesIncludesSecurityFileInPromptContext(t *testing.T) {
+	t.Parallel()
+
+	stateRoot := t.TempDir()
+	mgr := NewLocalManager(Settings{
+		StateRoot:        stateRoot,
+		DefaultWorkspace: ".",
+	})
+
+	info, err := mgr.EnsureWorkspace(context.Background(), "", false)
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Path, "SECURITY.md"), []byte("security baseline\n"), 0o644); err != nil {
+		t.Fatalf("write SECURITY.md: %v", err)
+	}
+
+	files, err := mgr.LoadBootstrapFiles(context.Background(), "", "main")
+	if err != nil {
+		t.Fatalf("load bootstrap files: %v", err)
+	}
+
+	for _, file := range files {
+		if file.Name == "SECURITY.md" {
+			return
+		}
+	}
+	t.Fatalf("expected SECURITY.md in bootstrap prompt files")
+}
+
 func TestLoadBootstrapFilesAppliesSubagentAllowlist(t *testing.T) {
 	t.Parallel()
 
@@ -250,6 +404,9 @@ func TestLoadBootstrapFilesAppliesSubagentAllowlist(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(info.Path, "TOOLS.md"), []byte("tools\n"), 0o644); err != nil {
 		t.Fatalf("write TOOLS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Path, "SECURITY.md"), []byte("security\n"), 0o644); err != nil {
+		t.Fatalf("write SECURITY.md: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(info.Path, "USER.md"), []byte("user\n"), 0o644); err != nil {
 		t.Fatalf("write USER.md: %v", err)
@@ -274,5 +431,8 @@ func TestLoadBootstrapFilesAppliesSubagentAllowlist(t *testing.T) {
 	}
 	if _, ok := byName["memory.md"]; ok {
 		t.Fatalf("memory.md should only be included for subagent sessions when present")
+	}
+	if _, ok := byName["SECURITY.md"]; !ok {
+		t.Fatalf("SECURITY.md should be included for subagent sessions")
 	}
 }

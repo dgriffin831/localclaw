@@ -32,7 +32,7 @@ func (a *App) ToolDefinitions(agentID string) []skills.ToolDefinition {
 	return filtered
 }
 
-func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResolution, input string, opts llm.PromptOptions) llm.Request {
+func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResolution, input string, opts llm.PromptOptions) (llm.Request, error) {
 	trimmedInput := strings.TrimSpace(input)
 	bootstrapSection := a.buildBootstrapPromptSection(ctx, resolution)
 	skillsSection := a.buildSkillsPromptSection(ctx, resolution)
@@ -43,6 +43,10 @@ func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResoluti
 		reasoningOverride = strings.TrimSpace(a.cfg.LLM.Codex.ReasoningDefault)
 	}
 	providerSessionID := a.loadPersistedProviderSessionID(ctx, resolution, provider)
+	workspacePath, securityMode, err := a.resolveSecurityRequestContext(resolution.AgentID)
+	if err != nil {
+		return llm.Request{}, fmt.Errorf("resolve workspace: %w", err)
+	}
 
 	var system strings.Builder
 	if bootstrapSection != "" {
@@ -59,12 +63,22 @@ func (a *App) buildPromptRequest(ctx context.Context, resolution SessionResoluti
 			SessionKey:        resolution.SessionKey,
 			Provider:          provider,
 			ProviderSessionID: providerSessionID,
+			WorkspacePath:     workspacePath,
+			SecurityMode:      securityMode,
 		},
 		Options: llm.PromptOptions{
 			ModelOverride:     modelOverride,
 			ReasoningOverride: reasoningOverride,
 		},
+	}, nil
+}
+
+func (a *App) resolveSecurityRequestContext(agentID string) (workspacePath string, securityMode string, err error) {
+	resolvedWorkspacePath, resolveErr := a.ResolveWorkspacePath(agentID)
+	if resolveErr != nil {
+		return "", "", resolveErr
 	}
+	return resolvedWorkspacePath, strings.ToLower(strings.TrimSpace(a.cfg.Security.Mode)), nil
 }
 
 func (a *App) loadPersistedProviderSessionID(ctx context.Context, resolution SessionResolution, provider string) string {

@@ -53,8 +53,19 @@ var workspaceTemplateOrder = []string{
 	"TOOLS.md",
 	"IDENTITY.md",
 	"USER.md",
+	"SECURITY.md",
 	"HEARTBEAT.md",
 	"WELCOME.md",
+}
+
+var bootstrapCoreSetupFiles = []string{
+	"AGENTS.md",
+	"SOUL.md",
+	"TOOLS.md",
+	"IDENTITY.md",
+	"USER.md",
+	"SECURITY.md",
+	"HEARTBEAT.md",
 }
 
 var bootstrapPromptOrder = []string{
@@ -63,6 +74,7 @@ var bootstrapPromptOrder = []string{
 	"TOOLS.md",
 	"IDENTITY.md",
 	"USER.md",
+	"SECURITY.md",
 	"HEARTBEAT.md",
 }
 
@@ -70,6 +82,7 @@ var subagentBootstrapAllowlist = map[string]struct{}{
 	"AGENTS.md":    {},
 	"TOOLS.md":     {},
 	"IDENTITY.md":  {},
+	"SECURITY.md":  {},
 	"BOOTSTRAP.md": {},
 	"MEMORY.md":    {},
 	"memory.md":    {},
@@ -161,8 +174,13 @@ func (m *LocalManager) EnsureWorkspace(ctx context.Context, agentID string, ensu
 		return info, nil
 	}
 
+	brandNewWorkspace, err := isBrandNewWorkspace(workspacePath)
+	if err != nil {
+		return WorkspaceInfo{}, err
+	}
+
 	files := append([]string{}, workspaceTemplateOrder...)
-	if info.Created {
+	if brandNewWorkspace {
 		files = append(files, "BOOTSTRAP.md")
 	}
 	for _, fileName := range files {
@@ -185,6 +203,18 @@ func (m *LocalManager) EnsureWorkspace(ctx context.Context, agentID string, ensu
 	}
 
 	return info, nil
+}
+
+func isBrandNewWorkspace(workspacePath string) (bool, error) {
+	for _, fileName := range bootstrapCoreSetupFiles {
+		targetPath := filepath.Join(workspacePath, fileName)
+		if _, err := os.Stat(targetPath); err == nil {
+			return false, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("stat core setup file %s: %w", fileName, err)
+		}
+	}
+	return true, nil
 }
 
 func (m *LocalManager) LoadBootstrapFiles(ctx context.Context, agentID, sessionKey string) ([]BootstrapFile, error) {

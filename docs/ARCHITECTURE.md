@@ -70,6 +70,7 @@ Prompt flow:
 - `Prompt` and `PromptStream` call session-aware variants.
 - `buildPromptRequest` injects workspace bootstrap context on first prompt for a session.
 - Bootstrap context re-injects after compaction count increases.
+- Request metadata carries resolved workspace path + `security.mode` for provider-side sandbox flag translation.
 - Prompt streaming is request-based only; runtime does not use compatibility fallback prompt composition.
 
 Session lifecycle:
@@ -102,8 +103,9 @@ Default state root: `~/.localclaw`
 
 Workspace bootstrap templates created when missing:
 
-- `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `WELCOME.md`
-- `BOOTSTRAP.md` only when a workspace is newly created
+- `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `SECURITY.md`, `HEARTBEAT.md`, `WELCOME.md`
+- `BOOTSTRAP.md` only when a workspace is brand new (none of `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `SECURITY.md`, `HEARTBEAT.md` exist when `EnsureWorkspace` starts)
+- bootstrap pending state is file-driven: `BOOTSTRAP.md` present => pending; `BOOTSTRAP.md` absent => complete/skipped
 
 ## 6. Local-only boundary
 

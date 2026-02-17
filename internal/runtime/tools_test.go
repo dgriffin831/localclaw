@@ -167,8 +167,35 @@ func TestPromptStreamForSessionUsesRequestPathAndSessionMetadata(t *testing.T) {
 	if llmClient.lastRequest.Session.SessionKey != "agent-2/s-42" {
 		t.Fatalf("expected session_key in request metadata, got %q", llmClient.lastRequest.Session.SessionKey)
 	}
+	if llmClient.lastRequest.Session.WorkspacePath == "" {
+		t.Fatalf("expected resolved workspace path in request metadata")
+	}
+	if llmClient.lastRequest.Session.SecurityMode != app.cfg.Security.Mode {
+		t.Fatalf("expected security mode %q in request metadata, got %q", app.cfg.Security.Mode, llmClient.lastRequest.Session.SecurityMode)
+	}
 	if len(llmClient.lastRequest.ToolDefinitions) != 0 {
 		t.Fatalf("expected no runtime tool definitions in request, got %d", len(llmClient.lastRequest.ToolDefinitions))
+	}
+}
+
+func TestPromptStreamForSessionFailsWhenWorkspaceResolutionFails(t *testing.T) {
+	ctx := context.Background()
+	_, app, _ := newToolTestApp(t, true)
+	app.workspace = failingWorkspaceManager{}
+	llmClient := &captureRequestLLMClient{}
+	app.llm = llmClient
+
+	events, errs := app.PromptStreamForSession(ctx, "default", "main", "hello")
+	for range events {
+	}
+	seenErr := ""
+	for err := range errs {
+		if err != nil {
+			seenErr = err.Error()
+		}
+	}
+	if !strings.Contains(seenErr, "resolve workspace") {
+		t.Fatalf("expected resolve workspace error, got %q", seenErr)
 	}
 }
 

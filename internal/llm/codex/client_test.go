@@ -178,6 +178,68 @@ func TestBuildCommandArgsForRequestIncludesExpectedShape(t *testing.T) {
 	}
 }
 
+func TestBuildCommandArgsForRequestUsesSecurityModeSandboxWrite(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		WorkingDirectory: "/tmp/workspace",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			WorkspacePath: "/resolved/workspace",
+			SecurityMode:  "sandbox-write",
+		},
+	})
+	if !containsArgSequence(args, []string{"--sandbox", "workspace-write"}) {
+		t.Fatalf("expected sandbox-write args, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--add-dir", "/resolved/workspace"}) {
+		t.Fatalf("expected --add-dir for sandbox-write mode, got %v", args)
+	}
+}
+
+func TestBuildCommandArgsForRequestUsesSecurityModeReadOnly(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		WorkingDirectory: "/tmp/workspace",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			WorkspacePath: "/resolved/workspace",
+			SecurityMode:  "read-only",
+		},
+	})
+	if !containsArgSequence(args, []string{"--sandbox", "read-only"}) {
+		t.Fatalf("expected read-only sandbox args, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--add-dir", "/resolved/workspace"}) {
+		t.Fatalf("expected --add-dir for read-only mode, got %v", args)
+	}
+}
+
+func TestBuildCommandArgsForRequestUsesSecurityModeFullAccess(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		WorkingDirectory: "/tmp/workspace",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			WorkspacePath: "/resolved/workspace",
+			SecurityMode:  "full-access",
+		},
+	})
+	if !containsArgSequence(args, []string{"--dangerously-bypass-approvals-and-sandbox"}) {
+		t.Fatalf("expected full-access dangerous flag, got %v", args)
+	}
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--add-dir" {
+			t.Fatalf("did not expect --add-dir in full-access mode: %v", args)
+		}
+	}
+}
+
 func TestBuildCommandArgsForRequestUsesModelOverride(t *testing.T) {
 	client := NewClient(Settings{
 		BinaryPath:       "codex",

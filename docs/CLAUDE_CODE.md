@@ -11,6 +11,10 @@ Implementation location:
 - `PromptStream` executes:
   - `claude -p <input> --output-format stream-json --verbose --mcp-config <run-scoped.json>`
   - optional `--model <model>` when runtime selector sets model override
+  - security-mode flags derived from runtime request metadata:
+    - `full-access` -> `--dangerously-skip-permissions`
+    - `sandbox-write` -> `--permission-mode acceptEdits --add-dir <resolved-workspace-path>`
+    - `read-only` -> `--permission-mode plan --add-dir <resolved-workspace-path>`
   - with `--strict-mcp-config` when enabled
   - with session continuation args based on config and persisted provider session state:
     - start mode default: `--session-id <generated-id>`
@@ -56,6 +60,7 @@ Client appends environment values when configured:
 - `localclaw` does not implement direct network model clients.
 - session continuation config:
   - `llm.claude_code.extra_args` for provider flags (defaults to a LocalClaw MCP `--allowed-tools` list so first-run memory/workspace/session/cron/channel calls do not prompt for permission)
+    - security-managed flags (`--dangerously-skip-permissions`, `--permission-mode`, `--add-dir`) are rejected in config; use `security.mode` instead.
   - `llm.claude_code.session_mode` (`always | existing | none`)
   - `llm.claude_code.session_arg` for start mode (default `--session-id`)
   - `llm.claude_code.resume_args` with `{sessionId}` placeholder

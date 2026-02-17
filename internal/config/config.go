@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/dgriffin831/localclaw/internal/backup"
 )
 
 var allowedChannels = []string{"slack", "signal"}
@@ -37,15 +39,27 @@ var allowedCodexReasoningLevels = []string{
 	"xhigh",
 }
 
+var allowedSecurityModes = []string{
+	"full-access",
+	"sandbox-write",
+	"read-only",
+}
+
 // Config contains all runtime configuration for localclaw.
 type Config struct {
 	App       AppConfig       `json:"app"`
+	Security  SecurityConfig  `json:"security"`
 	LLM       LLMConfig       `json:"llm"`
 	Channels  ChannelsConfig  `json:"channels"`
 	Agents    AgentsConfig    `json:"agents"`
 	Session   SessionConfig   `json:"session"`
+	Backup    BackupConfig    `json:"backup"`
 	Cron      CronConfig      `json:"cron"`
 	Heartbeat HeartbeatConfig `json:"heartbeat"`
+}
+
+type SecurityConfig struct {
+	Mode string `json:"mode"`
 }
 
 type AppConfig struct {
@@ -223,6 +237,13 @@ type CronConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+type BackupConfig struct {
+	AutoSave    bool   `json:"auto_save"`
+	AutoClean   bool   `json:"auto_clean"`
+	Interval    string `json:"interval"`
+	RetainCount int    `json:"retain_count"`
+}
+
 type HeartbeatConfig struct {
 	Enabled         bool `json:"enabled"`
 	IntervalSeconds int  `json:"interval_seconds"`
@@ -238,6 +259,9 @@ func Default() Config {
 				Mouse:   false,
 				Tools:   false,
 			},
+		},
+		Security: SecurityConfig{
+			Mode: "sandbox-write",
 		},
 		LLM: LLMConfig{
 			Provider: "claudecode",
@@ -345,6 +369,12 @@ func Default() Config {
 		Session: SessionConfig{
 			Store: "~/.localclaw/agents/{agentId}/sessions/sessions.json",
 		},
+		Backup: BackupConfig{
+			AutoSave:    true,
+			AutoClean:   true,
+			Interval:    "1d",
+			RetainCount: 3,
+		},
 		Cron:      CronConfig{Enabled: true},
 		Heartbeat: HeartbeatConfig{Enabled: true, IntervalSeconds: 30},
 	}
@@ -395,6 +425,9 @@ func (c Config) Validate() error {
 	if c.LLM.Provider != "claudecode" && c.LLM.Provider != "codex" {
 		return fmt.Errorf("unsupported llm.provider %q", c.LLM.Provider)
 	}
+	if err := validateSecurityMode(c.Security.Mode); err != nil {
+		return err
+	}
 	if c.LLM.Provider == "claudecode" {
 		if strings.TrimSpace(c.LLM.ClaudeCode.BinaryPath) == "" {
 			return errors.New("llm.claude_code.binary_path is required")
@@ -427,6 +460,12 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := validateCodexReasoningDefault(c.LLM.Codex.ReasoningDefault); err != nil {
+		return err
+	}
+	if err := validateSecurityManagedExtraArgs("claude_code", c.LLM.ClaudeCode.ExtraArgs); err != nil {
+		return err
+	}
+	if err := validateSecurityManagedExtraArgs("codex", c.LLM.Codex.ExtraArgs); err != nil {
 		return err
 	}
 	if len(c.Channels.Enabled) == 0 {
@@ -542,6 +581,12 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	if _, err := backup.ParseInterval(c.Backup.Interval); err != nil {
+		return err
+	}
+	if c.Backup.RetainCount <= 0 {
+		return errors.New("backup.retain_count must be > 0")
+	}
 	if c.Heartbeat.Enabled && c.Heartbeat.IntervalSeconds <= 0 {
 		return errors.New("heartbeat.interval_seconds must be > 0")
 	}
@@ -622,6 +667,58 @@ func validateCodexReasoningDefault(value string) error {
 	if !containsString(allowedCodexReasoningLevels, level) {
 		return fmt.Errorf("llm.codex.reasoning_default must be one of: %s", strings.Join(allowedCodexReasoningLevels, ", "))
 	}
+	return nil
+}
+
+func validateSecurityMode(value string) error {
+	mode := normalizeSecurityMode(value)
+	if mode == "" {
+		return fmt.Errorf("security.mode must be one of: %s", strings.Join(allowedSecurityModes, ", "))
+	}
+	if !containsString(allowedSecurityModes, mode) {
+		return fmt.Errorf("security.mode must be one of: %s", strings.Join(allowedSecurityModes, ", "))
+	}
+	return nil
+}
+
+func normalizeSecurityMode(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func validateSecurityManagedExtraArgs(provider string, args []string) error {
+	managedFlags := map[string]struct{}{}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "claude_code":
+		managedFlags["--dangerously-skip-permissions"] = struct{}{}
+		managedFlags["--permission-mode"] = struct{}{}
+		managedFlags["--add-dir"] = struct{}{}
+	case "codex":
+		managedFlags["--dangerously-bypass-approvals-and-sandbox"] = struct{}{}
+		managedFlags["--yolo"] = struct{}{}
+		managedFlags["--sandbox"] = struct{}{}
+		managedFlags["--add-dir"] = struct{}{}
+	default:
+		return nil
+	}
+
+	for _, raw := range args {
+		arg := strings.ToLower(strings.TrimSpace(raw))
+		if arg == "" {
+			continue
+		}
+		if _, blocked := managedFlags[arg]; blocked {
+			return fmt.Errorf("llm.%s.extra_args cannot include security-managed flag %q; configure security.mode instead", provider, arg)
+		}
+		switch {
+		case strings.HasPrefix(arg, "--sandbox="):
+			return fmt.Errorf("llm.%s.extra_args cannot include security-managed flag %q; configure security.mode instead", provider, "--sandbox")
+		case strings.HasPrefix(arg, "--permission-mode="):
+			return fmt.Errorf("llm.%s.extra_args cannot include security-managed flag %q; configure security.mode instead", provider, "--permission-mode")
+		case strings.HasPrefix(arg, "--add-dir="):
+			return fmt.Errorf("llm.%s.extra_args cannot include security-managed flag %q; configure security.mode instead", provider, "--add-dir")
+		}
+	}
+
 	return nil
 }
 

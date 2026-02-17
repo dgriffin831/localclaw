@@ -19,6 +19,9 @@ import (
 	"github.com/dgriffin831/localclaw/internal/tui"
 )
 
+var runTUIProgram = tui.Run
+var startBackupLoops = cli.StartBackupLoops
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -94,6 +97,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "tui error: %v\n", err)
 			return 1
 		}
+	case "backup":
+		if err := cli.RunBackupCommand(ctx, cfg, app, modeArgs, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "backup error: %v\n", err)
+			return 1
+		}
 	case "memory":
 		if err := app.Run(ctx); err != nil {
 			fmt.Fprintf(stderr, "runtime error: %v\n", err)
@@ -121,7 +129,8 @@ func runTUI(ctx context.Context, app *runtime.App, cfg config.Config) error {
 	if err := app.Run(ctx); err != nil {
 		return err
 	}
-	return tui.Run(ctx, app, cfg)
+	startBackupLoops(ctx, cfg, app)
+	return runTUIProgram(ctx, app, cfg)
 }
 
 func resolveCommand(args []string) (string, []string) {
@@ -137,7 +146,7 @@ func resolveCommand(args []string) (string, []string) {
 
 func isKnownCommand(mode string) bool {
 	switch mode {
-	case "doctor", "tui", "memory", "channels", "mcp":
+	case "doctor", "tui", "backup", "memory", "channels", "mcp":
 		return true
 	default:
 		return false
@@ -258,6 +267,7 @@ Options:
 Commands:
   doctor           Health checks + startup diagnostics
   tui              Run full-screen terminal UI
+  backup           Create one compressed local backup archive
   memory           Memory search tools (status/index/search/grep)
   channels         Channel worker modes (currently signal inbound serve)
   mcp              MCP stdio server (serve subcommand)
@@ -267,6 +277,7 @@ Examples:
   localclaw
   localclaw doctor
   localclaw tui
+  localclaw backup
   localclaw memory status
   localclaw channels serve
   localclaw mcp serve

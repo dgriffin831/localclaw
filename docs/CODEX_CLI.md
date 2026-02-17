@@ -16,6 +16,10 @@ Implementation location:
   - optional `-p <profile>` from `llm.codex.profile` (non-resume path)
   - optional `-m <model>` from `llm.codex.model` or runtime override
   - optional `-c model_reasoning_effort="<level>"` from runtime/default selector reasoning
+  - security-mode flags derived from runtime request metadata:
+    - `full-access` -> `--dangerously-bypass-approvals-and-sandbox`
+    - `sandbox-write` -> `--sandbox workspace-write --add-dir <resolved-workspace-path>`
+    - `read-only` -> `--sandbox read-only --add-dir <resolved-workspace-path>`
   - optional passthrough args from `llm.codex.extra_args`
     - default config includes `--skip-git-repo-check`
 - request input is composed with `llm.ComposePromptFallback(req)`, then written to stdin (`-` argument) using `exec.CommandContext`.
@@ -68,6 +72,7 @@ Implementation location:
 ## Input validation and cancellation
 
 - Empty/whitespace prompt input fails fast with `input is required`.
+- sandboxed/read-only security modes require a resolved workspace path; request execution fails when missing.
 - Process cancellation relies on `exec.CommandContext`.
 
 ## Error behavior
@@ -76,3 +81,9 @@ Implementation location:
 - stdin write/close failures are surfaced as adapter errors.
 - scanner/read errors are returned with context.
 - non-zero exits include stderr text when available.
+- unsupported/missing security context returns a fast-fail request error.
+
+## Security config interaction
+
+- `security.mode` is authoritative for Codex sandbox/permission posture.
+- `llm.codex.extra_args` cannot include security-managed flags (`--dangerously-bypass-approvals-and-sandbox`, `--yolo`, `--sandbox`, `--add-dir`).

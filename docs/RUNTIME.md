@@ -12,6 +12,7 @@ Supported command modes:
 - `doctor`: runs startup initialization checks and validates resolved workspace/session-store paths with detailed output.
 - `doctor --deep`: runs `doctor` checks plus deep checks (currently an LLM prompt probe).
 - `tui`: runs startup initialization, then starts Bubble Tea UI.
+- `backup`: creates one compressed backup archive under `<app.root>/backups`.
 - `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`, `grep`).
 - `channels`: runs startup initialization, then runs channel workers (`serve` subcommand).
 - `mcp`: runs startup initialization, then serves stdio JSON-RPC MCP requests (`serve` subcommand).
@@ -23,6 +24,7 @@ go run ./cmd/localclaw
 go run ./cmd/localclaw doctor
 go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
+go run ./cmd/localclaw backup
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
@@ -78,10 +80,12 @@ Prompt assembly (`buildPromptRequest`) behavior:
 
 - Resolves `agentID/sessionID` into stable `session_key`.
 - Adds provider metadata (`provider`) and persisted provider-native session ID (`provider_session_id`) when available.
-- Injects workspace bootstrap context on first prompt in a session.
+- Adds resolved workspace path (`workspace_path`) and configured security mode (`security_mode`) into request session metadata.
+- Injects workspace bootstrap context on first prompt in a session when `BOOTSTRAP.md` exists (sentinel for pending setup).
 - Re-injects bootstrap context after compaction count increases.
 - Injects a localclaw-authored skills block from workspace skill snapshots.
 - Carries provider-agnostic prompt options (for example model override) to request-capable adapters.
+- Prompt request construction fails if active workspace resolution fails.
 
 Provider compatibility:
 
@@ -172,6 +176,18 @@ Heartbeat behavior:
 - each successful tick submits a local prompt in `default/main` that references `HEARTBEAT.md`.
 - overlapping heartbeat executions are skipped while a prior tick is still running.
 - heartbeat tick failures are non-fatal; future ticks continue.
+
+Backup behavior:
+
+- `localclaw backup` creates one `tar.gz` snapshot under `<app.root>/backups`.
+- backup auto-save/auto-clean loops are started only in long-running command paths:
+  - `tui`
+  - `channels serve` (excluding `--once`)
+  - `mcp serve`
+- auto-save/auto-clean cadence uses `backup.interval`.
+- auto-clean keeps newest matching archives by `backup.retain_count`.
+- backup and cleanup runs are serialized; overlapping ticks are skipped and logged.
+- background backup errors are logged and do not terminate the active command mode.
 
 Skills snapshot behavior:
 

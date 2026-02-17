@@ -12,8 +12,9 @@
 
 ## Current implementation snapshot
 
-- Command modes: `doctor`, `tui`, `memory`, `channels`, `mcp`.
-- Agent-aware workspace resolution and bootstrap templates.
+- Command modes: `doctor`, `tui`, `backup`, `memory`, `channels`, `mcp`.
+- Agent-aware workspace resolution and bootstrap templates, including `BOOTSTRAP.md` sentinel semantics (`exists` => setup pending; delete after setup to complete bootstrap).
+- Security-mode execution policy via top-level `security.mode` (`full-access`, `sandbox-write`, `read-only`) with provider-specific flag translation.
 - Per-agent session metadata + transcript files under the configured `app.root`.
 - SQLite-backed memory indexing/search/grep with CLI tooling (`memory status/index/search/grep`).
 - Runtime memory tools (`memory_search`, `memory_grep`, `memory_get`) injected when `agents.*.memory` enables them.
@@ -30,6 +31,7 @@ go run ./cmd/localclaw
 go run ./cmd/localclaw doctor
 go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
+go run ./cmd/localclaw backup
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw channels serve --once
 go run ./cmd/localclaw mcp serve
@@ -41,6 +43,7 @@ Run specific command modes:
 go run ./cmd/localclaw doctor
 go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
+go run ./cmd/localclaw backup
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
@@ -54,6 +57,7 @@ Run with an explicit config file:
 ```bash
 go run ./cmd/localclaw -config ./localclaw.json doctor
 go run ./cmd/localclaw -config ./localclaw.json tui
+go run ./cmd/localclaw -config ./localclaw.json backup
 go run ./cmd/localclaw -config ./localclaw.json memory status
 go run ./cmd/localclaw -config ./localclaw.json channels serve
 go run ./cmd/localclaw -config ./localclaw.json mcp serve
@@ -69,6 +73,15 @@ Cron scheduling notes:
 - recurring jobs run only while a runtime mode is active (`tui`, `mcp serve`, or another command that keeps `App.Run` alive).
 - jobs are persisted at `<app.root>/cron/jobs.json` and reloaded on startup.
 - missed windows while `localclaw` is not running are not backfilled.
+
+Backup lifecycle notes:
+
+- manual snapshots: `localclaw backup` creates `tar.gz` archives under `<app.root>/backups`.
+- auto-save and auto-clean loops run only in long-running modes:
+  - `tui`
+  - `channels serve` (not `--once`)
+  - `mcp serve`
+- backup retention is count-based via `backup.retain_count`.
 
 ## TUI controls
 
@@ -148,7 +161,7 @@ Optional TUI startup defaults:
 - `docs/SLACK.md` - Slack setup and outbound delivery implementation details.
 - `docs/SIGNAL.md` - Signal (`signal-cli`) setup and outbound delivery implementation details.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
-- `docs/CODEX.md` - local Codex CLI integration details.
+- `docs/CODEX_CLI.md` - local Codex CLI integration details.
 - `docs/TESTING.md` - package coverage and Red/Green command loops.
 - `docs/SECURITY.md` - local-only security boundary and controls.
 - `docs/specs/` - feature specs and design history.

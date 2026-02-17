@@ -20,6 +20,7 @@ import (
 type Settings struct {
 	BinaryPath           string
 	Profile              string
+	SecurityMode         string
 	ExtraArgs            []string
 	SessionMode          string
 	SessionArg           string
@@ -158,6 +159,14 @@ func (c *LocalClient) PromptStreamRequest(ctx context.Context, req llm.Request) 
 		defer close(events)
 		defer close(errs)
 		errs <- fmt.Errorf("input is required")
+		return events, errs
+	}
+	if err := c.validateSecurityContextForRequest(req); err != nil {
+		events := make(chan llm.StreamEvent)
+		errs := make(chan error, 1)
+		defer close(events)
+		defer close(errs)
+		errs <- fmt.Errorf("resolve security context: %w", err)
 		return events, errs
 	}
 
@@ -357,10 +366,60 @@ func (c *LocalClient) buildCommandArgsForRequest(req llm.Request, mcpConfigPath 
 		args = append(args, "--allowed-tools", strings.Join(allowedTools, ","))
 	}
 	args = append(args, normalizeNonBlankArgs(c.settings.ExtraArgs)...)
+	args = append(args, c.buildSecurityArgsForRequest(req)...)
 	if systemPrompt := buildAppendSystemPrompt(req); systemPrompt != "" {
 		args = append(args, "--append-system-prompt", systemPrompt)
 	}
 	return args
+}
+
+func (c *LocalClient) validateSecurityContextForRequest(req llm.Request) error {
+	mode := c.resolveSecurityModeForRequest(req)
+	if mode == "" {
+		return nil
+	}
+	switch mode {
+	case "full-access":
+		return nil
+	case "sandbox-write", "read-only":
+		if strings.TrimSpace(req.Session.WorkspacePath) == "" {
+			return fmt.Errorf("workspace path is required for security mode %q", mode)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported security mode %q", mode)
+	}
+}
+
+func (c *LocalClient) buildSecurityArgsForRequest(req llm.Request) []string {
+	mode := c.resolveSecurityModeForRequest(req)
+	workspacePath := strings.TrimSpace(req.Session.WorkspacePath)
+
+	switch mode {
+	case "full-access":
+		return []string{"--dangerously-skip-permissions"}
+	case "sandbox-write":
+		args := []string{"--permission-mode", "acceptEdits"}
+		if workspacePath != "" {
+			args = append(args, "--add-dir", workspacePath)
+		}
+		return args
+	case "read-only":
+		args := []string{"--permission-mode", "plan"}
+		if workspacePath != "" {
+			args = append(args, "--add-dir", workspacePath)
+		}
+		return args
+	default:
+		return nil
+	}
+}
+
+func (c *LocalClient) resolveSecurityModeForRequest(req llm.Request) string {
+	if mode := strings.ToLower(strings.TrimSpace(req.Session.SecurityMode)); mode != "" {
+		return mode
+	}
+	return strings.ToLower(strings.TrimSpace(c.settings.SecurityMode))
 }
 
 func (c *LocalClient) buildSessionArgsForRequest(req llm.Request) []string {

@@ -127,6 +127,7 @@ func New(cfg config.Config) (*App, error) {
 	claudeClient := claudecode.NewClient(claudecode.Settings{
 		BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
 		Profile:             cfg.LLM.ClaudeCode.Profile,
+		SecurityMode:        cfg.Security.Mode,
 		ExtraArgs:           cfg.LLM.ClaudeCode.ExtraArgs,
 		SessionMode:         cfg.LLM.ClaudeCode.SessionMode,
 		SessionArg:          cfg.LLM.ClaudeCode.SessionArg,
@@ -142,6 +143,7 @@ func New(cfg config.Config) (*App, error) {
 		Profile:          cfg.LLM.Codex.Profile,
 		Model:            cfg.LLM.Codex.Model,
 		ReasoningDefault: cfg.LLM.Codex.ReasoningDefault,
+		SecurityMode:     cfg.Security.Mode,
 		ExtraArgs:        cfg.LLM.Codex.ExtraArgs,
 		SessionMode:      cfg.LLM.Codex.SessionMode,
 		ResumeArgs:       cfg.LLM.Codex.ResumeArgs,
@@ -416,7 +418,15 @@ func (a *App) PromptStreamForSession(ctx context.Context, agentID, sessionID, in
 // PromptStreamForSessionWithOptions streams output with the resolved agent/session context and prompt options.
 func (a *App) PromptStreamForSessionWithOptions(ctx context.Context, agentID, sessionID, input string, opts llm.PromptOptions) (<-chan llm.StreamEvent, <-chan error) {
 	resolution := ResolveSession(agentID, sessionID)
-	req := a.buildPromptRequest(ctx, resolution, input, opts)
+	req, err := a.buildPromptRequest(ctx, resolution, input, opts)
+	if err != nil {
+		events := make(chan llm.StreamEvent)
+		errs := make(chan error, 1)
+		close(events)
+		errs <- err
+		close(errs)
+		return events, errs
+	}
 	return a.promptStreamWithSessionContinuation(ctx, resolution, req)
 }
 

@@ -16,7 +16,6 @@ var errMissingChannelsSubcommand = errors.New("channels subcommand is required")
 
 // RunChannelsCommand executes localclaw channels command modes.
 func RunChannelsCommand(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdout, stderr io.Writer) error {
-	_ = cfg
 	if stdout == nil {
 		stdout = os.Stdout
 	}
@@ -29,13 +28,13 @@ func RunChannelsCommand(ctx context.Context, cfg config.Config, app *runtime.App
 
 	switch args[0] {
 	case "serve":
-		return runChannelsServe(ctx, app, args[1:], stdout, stderr)
+		return runChannelsServe(ctx, cfg, app, args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown channels subcommand %q (supported: serve)", args[0])
 	}
 }
 
-func runChannelsServe(ctx context.Context, app *runtime.App, args []string, stdout, stderr io.Writer) error {
+func runChannelsServe(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdout, stderr io.Writer) error {
 	if app == nil {
 		return errors.New("runtime app is required")
 	}
@@ -51,6 +50,9 @@ func runChannelsServe(ctx context.Context, app *runtime.App, args []string, stdo
 
 	if err := app.Run(ctx); err != nil {
 		return fmt.Errorf("runtime init: %w", err)
+	}
+	if !*once {
+		startBackgroundBackupLoops(ctx, cfg, app)
 	}
 	fmt.Fprintln(stdout, "channels serve: signal inbound loop started")
 	if *once {

@@ -96,6 +96,8 @@ type SessionMetadata struct {
 	SessionKey        string `json:"session_key,omitempty"`
 	Provider          string `json:"provider,omitempty"`
 	ProviderSessionID string `json:"provider_session_id,omitempty"`
+	WorkspacePath     string `json:"workspace_path,omitempty"`
+	SecurityMode      string `json:"security_mode,omitempty"`
 }
 
 type PromptOptions struct {

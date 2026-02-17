@@ -32,7 +32,7 @@ Keep it current when architecture, tooling, or workflows change.
 ## Project Structure & Module Organization
 
 - Entrypoint:
-  - `cmd/localclaw/main.go` (`doctor`, `tui`, `memory`, `channels`, `mcp` command modes).
+  - `cmd/localclaw/main.go` (`doctor`, `tui`, `backup`, `memory`, `channels`, `mcp` command modes).
 - Core orchestration:
   - `internal/runtime/app.go`
   - `internal/runtime/tools.go`
@@ -43,6 +43,7 @@ Keep it current when architecture, tooling, or workflows change.
 - User interface:
   - `internal/tui/app.go`
 - Capability modules (in-process boundaries):
+  - `internal/backup`
   - `internal/memory`
   - `internal/workspace`
   - `internal/session`
@@ -65,6 +66,7 @@ Keep it current when architecture, tooling, or workflows change.
   - `go test ./internal/workspace`
   - `go test ./internal/session`
   - `go test ./internal/memory`
+  - `go test ./internal/backup`
   - `go test ./internal/cli`
   - `go test ./internal/hooks`
 - Run startup checks:
@@ -73,6 +75,8 @@ Keep it current when architecture, tooling, or workflows change.
   - `go run ./cmd/localclaw doctor --deep`
 - Run TUI:
   - `go run ./cmd/localclaw tui`
+- Run backup command mode:
+  - `go run ./cmd/localclaw backup`
 - Run memory command mode:
   - `go run ./cmd/localclaw memory status`
   - `go run ./cmd/localclaw memory index --force`
@@ -83,6 +87,7 @@ Keep it current when architecture, tooling, or workflows change.
 - Run with explicit config file:
   - `go run ./cmd/localclaw -config ./localclaw.json doctor`
   - `go run ./cmd/localclaw -config ./localclaw.json tui`
+  - `go run ./cmd/localclaw -config ./localclaw.json backup`
   - `go run ./cmd/localclaw -config ./localclaw.json memory status`
   - `go run ./cmd/localclaw -config ./localclaw.json channels serve`
 - Formatting:
@@ -140,7 +145,7 @@ Behavior changes should follow Red -> Green -> Validate -> Deliver.
 
 ### Command-mode behavior
 
-- Supported command modes are `doctor`, `tui`, `memory`, `channels`, and `mcp`.
+- Supported command modes are `doctor`, `tui`, `backup`, `memory`, `channels`, and `mcp`.
 - If adding a new mode:
   - wire it in `cmd/localclaw/main.go`
   - add mode-specific tests

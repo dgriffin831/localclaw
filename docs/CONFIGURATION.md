@@ -16,10 +16,12 @@
 ## Top-level schema
 
 - `app`
+- `security`
 - `llm`
 - `channels`
 - `agents`
 - `session`
+- `backup`
 - `cron`
 - `heartbeat`
 
@@ -35,6 +37,9 @@
       "mouse": false,
       "tools": false
     }
+  },
+  "security": {
+    "mode": "sandbox-write"
   },
   "llm": {
     "provider": "claudecode",
@@ -137,6 +142,12 @@
   "session": {
     "store": "~/.localclaw/agents/{agentId}/sessions/sessions.json"
   },
+  "backup": {
+    "auto_save": true,
+    "auto_clean": true,
+    "interval": "1d",
+    "retain_count": 3
+  },
   "cron": {
     "enabled": true
   },
@@ -159,6 +170,10 @@ General:
   - `tools`: initial tool-card expansion (`false` default)
 - `app.thinking_messages` entries must be non-blank when provided.
 - `llm.provider` must be `claudecode` or `codex`.
+- `security.mode` must be one of:
+  - `full-access`
+  - `sandbox-write`
+  - `read-only`
 - `llm.claude_code.binary_path` is required when `llm.provider` is `claudecode`.
 - `llm.codex.binary_path` is required when `llm.provider` is `codex`.
 - `llm.claude_code.session_mode` and `llm.codex.session_mode` must be `always`, `existing`, or `none`.
@@ -166,6 +181,10 @@ General:
 - `llm.claude_code.session_id_fields[]` and `llm.codex.session_id_fields[]` entries cannot be blank.
 - `llm.codex.resume_output` must be one of `json`, `jsonl`, or `text` when set.
 - `llm.codex.reasoning_default` is required and must be one of `xlow`, `low`, `medium`, `high`, `xhigh`.
+- provider `extra_args` cannot contain security-managed flags.
+  - configure execution mode using `security.mode` instead.
+  - rejected Codex flags in `llm.codex.extra_args`: `--dangerously-bypass-approvals-and-sandbox`, `--yolo`, `--sandbox`, `--add-dir`.
+  - rejected Claude Code flags in `llm.claude_code.extra_args`: `--dangerously-skip-permissions`, `--permission-mode`, `--add-dir`.
 - `channels.enabled` must contain at least one value.
 - `channels.enabled` allowlist: `slack`, `signal`.
 - duplicate channel names are rejected.
@@ -186,6 +205,8 @@ General:
   - `channels.signal.inbound.poll_timeout_seconds` must be `> 0`.
   - `channels.signal.inbound.max_messages_per_poll` must be `> 0`.
 - `agents.defaults.workspace` and `session.store` are required.
+- `backup.interval` must be a valid positive duration (for example `30m`, `12h`, `1d`).
+- `backup.retain_count` must be `> 0`.
 - each `agents.list[].id` is required and unique.
 - `agents.list[].workspace` cannot be blank-whitespace.
 - memory flush numeric fields must be non-negative:
@@ -201,6 +222,22 @@ Local-only boundary:
 - Removed/deprecated config keys are rejected instead of silently accepted.
 - Runtime remains single-process and local-only by architecture.
 
+Security mode behavior:
+
+- `security.mode` is the canonical execution-safety contract.
+- mode translation is deterministic per provider:
+  - `full-access`
+    - Codex: `--dangerously-bypass-approvals-and-sandbox`
+    - Claude Code: `--dangerously-skip-permissions`
+  - `sandbox-write`
+    - Codex: `--sandbox workspace-write --add-dir <resolved-workspace-path>`
+    - Claude Code: `--permission-mode acceptEdits --add-dir <resolved-workspace-path>`
+  - `read-only`
+    - Codex: `--sandbox read-only --add-dir <resolved-workspace-path>`
+    - Claude Code: `--permission-mode plan --add-dir <resolved-workspace-path>`
+- workspace allowlisting uses the resolved runtime workspace path for the active agent/session.
+- if workspace resolution fails, prompt execution fails with wrapped context.
+
 Codex-specific fields:
 
 - `llm.codex.profile` optionally sets Codex profile (`-p`).
@@ -208,6 +245,7 @@ Codex-specific fields:
 - `llm.codex.reasoning_default` sets the default Codex reasoning level used when selector input omits reasoning.
 - `llm.codex.extra_args` appends provider-specific flags directly to `codex exec` arguments.
   - default includes `--skip-git-repo-check` so Codex runs in non-git/trust-unregistered directories.
+  - security-managed flags are rejected here; use `security.mode` for sandbox/permission posture.
 - `llm.codex.session_mode` controls continuation behavior:
   - `existing`: resume when a persisted provider session exists
   - `always`: same as `existing` for resume, otherwise start new
@@ -222,6 +260,7 @@ Claude Code-specific continuation fields:
 
 - `llm.claude_code.extra_args` appends provider-specific flags directly to `claude` arguments.
   - default includes `--allowed-tools` with LocalClaw MCP tools so memory/workspace/session/cron/channel tools work without first-run permission prompts.
+  - security-managed flags are rejected here; use `security.mode` for sandbox/permission posture.
 - `llm.claude_code.session_mode` controls continuation behavior (`always` default).
 - `llm.claude_code.session_arg` controls new-session flag (default `--session-id`).
 - `llm.claude_code.resume_args` controls resume argument templates and supports `{sessionId}` placeholder.
@@ -268,6 +307,20 @@ MCP channel tools:
 - jobs run local agent prompts using `message` + optional `timeout_seconds`.
 - cron `session_target` values are `default` and `isolated` (default is `isolated`).
 - jobs run only while runtime is active; missed windows while offline are not backfilled.
+
+## Backup configuration notes
+
+- `backup.auto_save=true` enables periodic archive creation in long-running command modes.
+- `backup.auto_clean=true` enables periodic retention cleanup in long-running command modes.
+- `backup.interval` sets the cadence for auto-save and auto-clean loops.
+  - supported formats include Go durations (`30m`, `12h`) and day shorthand (`1d`).
+- `backup.retain_count` keeps the newest matching archives in `<app.root>/backups`.
+- archive filenames use `localclaw-backup-YYYYMMDD-HHMMSSZ.tar.gz`.
+- each archive contains normalized paths for:
+  - `localclaw.json`
+  - `cron/`
+  - `workspace/`
+  - `workspace-<agentId>/` for configured agents
 
 ## Heartbeat configuration notes
 

@@ -19,7 +19,6 @@ var errMissingMCPSubcommand = errors.New("mcp subcommand is required")
 
 // RunMCPCommand executes localclaw mcp command modes.
 func RunMCPCommand(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	_ = cfg
 	if stdin == nil {
 		stdin = os.Stdin
 	}
@@ -44,6 +43,7 @@ func RunMCPCommand(ctx context.Context, cfg config.Config, app *runtime.App, arg
 		if err := app.Run(ctx); err != nil {
 			return fmt.Errorf("runtime init: %w", err)
 		}
+		startBackgroundBackupLoops(ctx, cfg, app)
 		server, err := newMCPServer(app)
 		if err != nil {
 			return err

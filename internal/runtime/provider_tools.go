@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -23,14 +24,20 @@ func (a *App) DiscoverProviderMetadata(ctx context.Context, agentID string, opts
 	resolvedAgentID := ResolveAgentID(agentID)
 	configuredProvider := a.resolveProvider(opts.ProviderOverride)
 	resolution := ResolveSession(resolvedAgentID, ProviderToolsProbeSessionID)
+	workspacePath, securityMode, err := a.resolveSecurityRequestContext(resolution.AgentID)
+	if err != nil {
+		return llm.ProviderMetadata{}, fmt.Errorf("resolve workspace: %w", err)
+	}
 
 	req := llm.Request{
 		Input: providerToolsProbeInput,
 		Session: llm.SessionMetadata{
-			AgentID:    resolution.AgentID,
-			SessionID:  resolution.SessionID,
-			SessionKey: resolution.SessionKey,
-			Provider:   configuredProvider,
+			AgentID:       resolution.AgentID,
+			SessionID:     resolution.SessionID,
+			SessionKey:    resolution.SessionKey,
+			Provider:      configuredProvider,
+			WorkspacePath: workspacePath,
+			SecurityMode:  securityMode,
 		},
 		Options: llm.PromptOptions{
 			ProviderOverride:  configuredProvider,
@@ -96,13 +103,19 @@ func (a *App) discoverCodexToolsViaJSONProbe(ctx context.Context, agentID string
 		probeProvider = "codex"
 	}
 	resolution := ResolveSession(agentID, ProviderToolsProbeSessionID)
+	workspacePath, securityMode, err := a.resolveSecurityRequestContext(resolution.AgentID)
+	if err != nil {
+		return nil
+	}
 	req := llm.Request{
 		Input: providerToolsJSONProbeInput,
 		Session: llm.SessionMetadata{
-			AgentID:    resolution.AgentID,
-			SessionID:  resolution.SessionID,
-			SessionKey: resolution.SessionKey,
-			Provider:   probeProvider,
+			AgentID:       resolution.AgentID,
+			SessionID:     resolution.SessionID,
+			SessionKey:    resolution.SessionKey,
+			Provider:      probeProvider,
+			WorkspacePath: workspacePath,
+			SecurityMode:  securityMode,
 		},
 		Options: llm.PromptOptions{
 			ProviderOverride:  probeProvider,

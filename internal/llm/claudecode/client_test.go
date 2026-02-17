@@ -107,6 +107,64 @@ func TestBuildCommandArgsForRequestIncludesConfiguredExtraArgs(t *testing.T) {
 	}
 }
 
+func TestBuildCommandArgsForRequestUsesSecurityModeSandboxWrite(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath: "claude",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			WorkspacePath: "/resolved/workspace",
+			SecurityMode:  "sandbox-write",
+		},
+	}, "/tmp/mcp.json")
+	if !containsArgSequence(args, []string{"--permission-mode", "acceptEdits"}) {
+		t.Fatalf("expected acceptEdits permission mode, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--add-dir", "/resolved/workspace"}) {
+		t.Fatalf("expected add-dir workspace allowlist, got %v", args)
+	}
+}
+
+func TestBuildCommandArgsForRequestUsesSecurityModeReadOnly(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath: "claude",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			WorkspacePath: "/resolved/workspace",
+			SecurityMode:  "read-only",
+		},
+	}, "/tmp/mcp.json")
+	if !containsArgSequence(args, []string{"--permission-mode", "plan"}) {
+		t.Fatalf("expected plan permission mode, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--add-dir", "/resolved/workspace"}) {
+		t.Fatalf("expected add-dir workspace allowlist, got %v", args)
+	}
+}
+
+func TestBuildCommandArgsForRequestUsesSecurityModeFullAccess(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath: "claude",
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			SecurityMode: "full-access",
+		},
+	}, "/tmp/mcp.json")
+	if !containsArgSequence(args, []string{"--dangerously-skip-permissions"}) {
+		t.Fatalf("expected dangerous permissions flag, got %v", args)
+	}
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--add-dir" {
+			t.Fatalf("did not expect add-dir in full-access mode: %v", args)
+		}
+	}
+}
+
 func TestBuildCommandArgsForRequestAddsStartSessionArgWhenNoPersistedSession(t *testing.T) {
 	client := NewClient(Settings{
 		BinaryPath:   "claude",

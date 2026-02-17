@@ -54,6 +54,33 @@ func TestRunMCPCommandServeRequiresRuntimeApp(t *testing.T) {
 	}
 }
 
+func TestRunMCPCommandServeStartsBackupLoops(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("set HOME: %v", err)
+	}
+	cfg := config.Default()
+	cfg.App.Root = filepath.Join(t.TempDir(), "state")
+	app, err := runtime.New(cfg)
+	if err != nil {
+		t.Fatalf("runtime.New error: %v", err)
+	}
+
+	originalStarter := startBackgroundBackupLoops
+	defer func() { startBackgroundBackupLoops = originalStarter }()
+	startCalls := 0
+	startBackgroundBackupLoops = func(ctx context.Context, cfg config.Config, app *runtime.App) {
+		startCalls++
+	}
+
+	if err := RunMCPCommand(context.Background(), cfg, app, []string{"serve"}, bytes.NewBuffer(nil), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("RunMCPCommand serve error: %v", err)
+	}
+	if startCalls != 1 {
+		t.Fatalf("expected backup loops to start once for mcp serve, got %d", startCalls)
+	}
+}
+
 func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 	home := t.TempDir()
 	if err := os.Setenv("HOME", home); err != nil {

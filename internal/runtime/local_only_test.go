@@ -247,27 +247,8 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
-
-	requestClient, ok := app.llm.(llm.RequestClient)
-	if !ok {
-		t.Fatalf("expected request-capable llm client")
-	}
-	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
-	for events != nil || errs != nil {
-		select {
-		case _, ok := <-events:
-			if !ok {
-				events = nil
-			}
-		case err, ok := <-errs:
-			if !ok {
-				errs = nil
-				continue
-			}
-			if err != nil {
-				t.Fatalf("prompt stream request error: %v", err)
-			}
-		}
+	if _, err := app.PromptForSession(context.Background(), "default", "main", "hello"); err != nil {
+		t.Fatalf("prompt for session: %v", err)
 	}
 
 	argsFile, err := os.Open(argsPath)
@@ -301,7 +282,7 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	}
 }
 
-func TestNewPassesClaudeExtraArgs(t *testing.T) {
+func TestPromptForSessionAppliesClaudeSecurityModeAndExtraArgs(t *testing.T) {
 	stateRoot := t.TempDir()
 	argsPath := filepath.Join(t.TempDir(), "claude-args.txt")
 	claudeScriptPath := filepath.Join(t.TempDir(), "claude")
@@ -317,8 +298,8 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	cfg := config.Default()
 	cfg.App.Root = stateRoot
 	cfg.LLM.ClaudeCode.BinaryPath = claudeScriptPath
+	cfg.Security.Mode = "read-only"
 	cfg.LLM.ClaudeCode.ExtraArgs = []string{
-		"--dangerously-skip-permissions",
 		"--allowed-tools",
 		"mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get",
 	}
@@ -328,26 +309,8 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 		t.Fatalf("new app: %v", err)
 	}
 
-	requestClient, ok := app.llm.(llm.RequestClient)
-	if !ok {
-		t.Fatalf("expected request-capable llm client")
-	}
-	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
-	for events != nil || errs != nil {
-		select {
-		case _, ok := <-events:
-			if !ok {
-				events = nil
-			}
-		case err, ok := <-errs:
-			if !ok {
-				errs = nil
-				continue
-			}
-			if err != nil {
-				t.Fatalf("prompt stream request error: %v", err)
-			}
-		}
+	if _, err := app.PromptForSession(context.Background(), "default", "main", "hello"); err != nil {
+		t.Fatalf("prompt for session: %v", err)
 	}
 
 	argsFile, err := os.Open(argsPath)
@@ -365,22 +328,102 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 		t.Fatalf("scan captured args: %v", err)
 	}
 
-	hasDangerousSkip := false
+	workspacePath, err := app.ResolveWorkspacePath("default")
+	if err != nil {
+		t.Fatalf("resolve workspace path: %v", err)
+	}
+
+	hasPermissionMode := false
+	hasAddDir := false
 	hasAllowedTools := false
 	for i, arg := range args {
-		if arg == "--dangerously-skip-permissions" {
-			hasDangerousSkip = true
+		if arg == "--permission-mode" && i+1 < len(args) && args[i+1] == "plan" {
+			hasPermissionMode = true
+		}
+		if arg == "--add-dir" && i+1 < len(args) && args[i+1] == workspacePath {
+			hasAddDir = true
 		}
 		if arg == "--allowed-tools" && i+1 < len(args) &&
 			args[i+1] == "mcp__localclaw__localclaw_memory_search,mcp__localclaw__localclaw_memory_get" {
 			hasAllowedTools = true
 		}
 	}
-	if !hasDangerousSkip {
-		t.Fatalf("expected --dangerously-skip-permissions in args: %v", args)
+	if !hasPermissionMode {
+		t.Fatalf("expected --permission-mode plan in args: %v", args)
+	}
+	if !hasAddDir {
+		t.Fatalf("expected --add-dir <workspace> in args: %v", args)
 	}
 	if !hasAllowedTools {
 		t.Fatalf("expected configured --allowed-tools in args: %v", args)
+	}
+}
+
+func TestPromptForSessionAppliesCodexSecurityModeAndWorkspaceAllowlist(t *testing.T) {
+	stateRoot := t.TempDir()
+	tmpDir := t.TempDir()
+	argsPath := filepath.Join(tmpDir, "codex-args.txt")
+	codexScriptPath := filepath.Join(tmpDir, "codex")
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf "%%s\n" "$@" > %q
+cat >/dev/null
+printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'
+`, argsPath)
+	if err := os.WriteFile(codexScriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex script: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.App.Root = stateRoot
+	cfg.LLM.Provider = "codex"
+	cfg.LLM.Codex.BinaryPath = codexScriptPath
+	cfg.Security.Mode = "sandbox-write"
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	if _, err := app.PromptForSession(context.Background(), "default", "main", "hello"); err != nil {
+		t.Fatalf("prompt for session: %v", err)
+	}
+
+	argsFile, err := os.Open(argsPath)
+	if err != nil {
+		t.Fatalf("open captured args: %v", err)
+	}
+	defer argsFile.Close()
+
+	var args []string
+	scanner := bufio.NewScanner(argsFile)
+	for scanner.Scan() {
+		args = append(args, strings.TrimSpace(scanner.Text()))
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan captured args: %v", err)
+	}
+
+	workspacePath, err := app.ResolveWorkspacePath("default")
+	if err != nil {
+		t.Fatalf("resolve workspace path: %v", err)
+	}
+
+	hasSandbox := false
+	hasAddDir := false
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--sandbox" && i+1 < len(args) && args[i+1] == "workspace-write" {
+			hasSandbox = true
+		}
+		if args[i] == "--add-dir" && i+1 < len(args) && args[i+1] == workspacePath {
+			hasAddDir = true
+		}
+	}
+	if !hasSandbox {
+		t.Fatalf("expected --sandbox workspace-write in args: %v", args)
+	}
+	if !hasAddDir {
+		t.Fatalf("expected --add-dir <workspace> in args: %v", args)
 	}
 }
 
@@ -412,27 +455,8 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
-
-	requestClient, ok := app.llm.(llm.RequestClient)
-	if !ok {
-		t.Fatalf("expected request-capable llm client")
-	}
-	events, errs := requestClient.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
-	for events != nil || errs != nil {
-		select {
-		case _, ok := <-events:
-			if !ok {
-				events = nil
-			}
-		case err, ok := <-errs:
-			if !ok {
-				errs = nil
-				continue
-			}
-			if err != nil {
-				t.Fatalf("prompt stream request error: %v", err)
-			}
-		}
+	if _, err := app.PromptForSession(context.Background(), "default", "main", "hello"); err != nil {
+		t.Fatalf("prompt for session: %v", err)
 	}
 
 	envPayload, err := os.ReadFile(envPath)

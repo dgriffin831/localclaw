@@ -18,11 +18,12 @@ This document describes test coverage, commands, and Red/Green workflow for `loc
 | LLM contract/adapter compatibility | `internal/runtime/tools_test.go` | request-stream-only runtime path and provider tool-event pass-through behavior |
 | Skills loader/snapshot prompts | `internal/skills/registry_test.go`, `internal/runtime/tools_test.go` | workspace skill discovery, eligibility filtering, prompt-block injection/cache refresh |
 | TUI behavior | `internal/tui/app_test.go` | slash commands, autocomplete, waiting/status UX, welcome rendering, history/keybindings |
-| Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, bootstrap loading/filtering, subagent allowlist |
+| Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, `BOOTSTRAP.md` sentinel lifecycle, bootstrap loading/filtering, subagent allowlist |
 | Session store/transcripts | `internal/session/store_test.go` | path resolution, lock behavior, metadata preservation, write safety |
 | Cron scheduler | `internal/cron/scheduler_test.go` | schedule validation, recurring execution, persistence/reload, manual run/remove/error paths |
 | Cron runtime executor | `internal/runtime/cron_runtime_test.go` | cron entry execution mapping (`default` vs `isolated`) and skipped invalid targets |
 | Heartbeat monitor | `internal/heartbeat/monitor_test.go` | enabled/disabled start, interval ticks, cancellation lifecycle, overlap guard, non-fatal errors |
+| Backup lifecycle | `internal/backup/manager_test.go`, `internal/cli/backup_test.go` | archive creation, retention cleanup, overlap guards, manual `backup` command behavior |
 | Channel adapters | `internal/channels/slack/adapter_test.go`, `internal/channels/signal/adapter_test.go` | outbound delivery behavior, timeout/cancellation, and failure-path error mapping |
 | Signal inbound receive/runtime | `internal/channels/signal/receive_test.go`, `internal/runtime/channels_inbound_test.go` | `signal-cli receive` parsing, allowlist enforcement, group-message denial, sender-to-agent routing |
 | Memory CLI | `internal/cli/memory_test.go` | `memory status/index/search/grep` JSON/text output and argument handling |
@@ -52,6 +53,7 @@ go test ./internal/workspace
 go test ./internal/session
 go test ./internal/cron
 go test ./internal/heartbeat
+go test ./internal/backup
 go test ./internal/cli
 go test ./internal/hooks
 go test ./internal/memory
@@ -72,9 +74,13 @@ go test ./internal/runtime -run TestRunCronEntryDefaultUsesDefaultSessionPrompt 
 go test ./internal/skills -run TestSnapshotContainsEligibleSkillsOnly -v
 go test ./internal/tui -run TestParseSlash -v
 go test ./internal/workspace -run TestEnsureWorkspaceCreatesWorkspaceAndBootstrapFiles -v
+go test ./internal/workspace -run TestEnsureWorkspaceCreatesBootstrapWhenWorkspaceExistsButCoreFilesMissing -v
+go test ./internal/workspace -run TestEnsureWorkspaceDoesNotRecreateBootstrapAfterDeletion -v
 go test ./internal/cron -run TestInProcessSchedulerRecurringExecutionFiresForDueJobs -v
 go test ./internal/heartbeat -run TestLocalMonitorStartSkipsOverlappingTicks -v
+go test ./internal/backup -run TestCreateBackupWritesTarGzWithNormalizedEntries -v
 go test ./internal/cli -run TestRunChannelsCommandRequiresSubcommand -v
+go test ./internal/cli -run TestRunBackupCommandCreatesArchive -v
 go test ./internal/memory -run TestSQLiteIndexManagerSyncForceBuildsIndexAndStatus -v
 ```
 
@@ -85,6 +91,7 @@ go run ./cmd/localclaw
 go run ./cmd/localclaw doctor
 go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
+go run ./cmd/localclaw backup
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw channels serve --once
 go run ./cmd/localclaw mcp serve
