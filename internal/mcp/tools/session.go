@@ -66,41 +66,41 @@ type SessionStatusResult struct {
 	Session session.SessionEntry `json:"session"`
 }
 
-type OrchestrationBackend interface {
+type SessionsBackend interface {
 	SessionsList(ctx context.Context, req SessionsListRequest) (SessionsListResult, error)
 	SessionsHistory(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error)
 	SessionsDelete(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error)
 	SessionStatus(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error)
 }
 
-type SessionsListTool struct{ backend OrchestrationBackend }
-type SessionsHistoryTool struct{ backend OrchestrationBackend }
-type SessionsDeleteTool struct{ backend OrchestrationBackend }
-type SessionStatusTool struct{ backend OrchestrationBackend }
+type SessionsListTool struct{ backend SessionsBackend }
+type SessionsHistoryTool struct{ backend SessionsBackend }
+type SessionsDeleteTool struct{ backend SessionsBackend }
+type SessionStatusTool struct{ backend SessionsBackend }
 
-func NewSessionsListTool(backend OrchestrationBackend) SessionsListTool {
+func NewSessionsListTool(backend SessionsBackend) SessionsListTool {
 	return SessionsListTool{backend: backend}
 }
-func NewSessionsHistoryTool(backend OrchestrationBackend) SessionsHistoryTool {
+func NewSessionsHistoryTool(backend SessionsBackend) SessionsHistoryTool {
 	return SessionsHistoryTool{backend: backend}
 }
-func NewSessionsDeleteTool(backend OrchestrationBackend) SessionsDeleteTool {
+func NewSessionsDeleteTool(backend SessionsBackend) SessionsDeleteTool {
 	return SessionsDeleteTool{backend: backend}
 }
-func NewSessionStatusTool(backend OrchestrationBackend) SessionStatusTool {
+func NewSessionStatusTool(backend SessionsBackend) SessionStatusTool {
 	return SessionStatusTool{backend: backend}
 }
 
 func SessionsListDefinition() protocol.Tool {
 	return protocol.Tool{
 		Name:        ToolLocalclawSessionsList,
-		Description: "List sessions for an agent with pagination",
+		Description: "List sessions for an agent with pagination. Use when picking a session before history/status/delete actions.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"agent_id": map[string]interface{}{"type": "string"},
-				"limit":    map[string]interface{}{"type": "integer"},
-				"offset":   map[string]interface{}{"type": "integer"},
+				"agent_id": schemaStringField("Optional agent ID to scope session lookup; omit to use current/default agent.", "default"),
+				"limit":    schemaIntegerField("Page size; defaults to 20 and caps at 100.", 20),
+				"offset":   schemaIntegerField("Zero-based start offset; values < 0 are treated as 0.", 0),
 			},
 		},
 	}
@@ -109,14 +109,14 @@ func SessionsListDefinition() protocol.Tool {
 func SessionsHistoryDefinition() protocol.Tool {
 	return protocol.Tool{
 		Name:        ToolLocalclawSessionsHistory,
-		Description: "Read transcript history for a session",
+		Description: "Read transcript history for one session. Use when restoring prior conversational context.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"agent_id":   map[string]interface{}{"type": "string"},
-				"session_id": map[string]interface{}{"type": "string"},
-				"limit":      map[string]interface{}{"type": "integer"},
-				"offset":     map[string]interface{}{"type": "integer"},
+				"agent_id":   schemaStringField("Optional agent ID that owns the session; omit to use current/default agent.", "default"),
+				"session_id": schemaStringField("Session ID to read history from.", "incident-review"),
+				"limit":      schemaIntegerField("Page size; defaults to 50 and caps at 200.", 50),
+				"offset":     schemaIntegerField("Zero-based start offset; values < 0 are treated as 0.", 0),
 			},
 			"required": []string{"session_id"},
 		},
@@ -126,12 +126,12 @@ func SessionsHistoryDefinition() protocol.Tool {
 func SessionStatusDefinition() protocol.Tool {
 	return protocol.Tool{
 		Name:        ToolLocalclawSessionStatus,
-		Description: "Get metadata for an existing session",
+		Description: "Get metadata for one session. Use when validating a session before history or delete operations.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"agent_id":   map[string]interface{}{"type": "string"},
-				"session_id": map[string]interface{}{"type": "string"},
+				"agent_id":   schemaStringField("Optional agent ID that owns the session; omit to use current/default agent.", "default"),
+				"session_id": schemaStringField("Session ID to inspect.", "incident-review"),
 			},
 			"required": []string{"session_id"},
 		},
@@ -141,12 +141,12 @@ func SessionStatusDefinition() protocol.Tool {
 func SessionsDeleteDefinition() protocol.Tool {
 	return protocol.Tool{
 		Name:        ToolLocalclawSessionsDelete,
-		Description: "Delete an existing session and transcript",
+		Description: "Delete a session and transcript. Use when the user requests clearing saved conversation state.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"agent_id":   map[string]interface{}{"type": "string"},
-				"session_id": map[string]interface{}{"type": "string"},
+				"agent_id":   schemaStringField("Optional agent ID that owns the session; omit to use current/default agent.", "default"),
+				"session_id": schemaStringField("Session ID to delete.", "incident-review"),
 			},
 			"required": []string{"session_id"},
 		},
@@ -246,11 +246,11 @@ func (t SessionStatusTool) Call(ctx context.Context, args map[string]interface{}
 	return protocol.CallToolResult{StructuredContent: map[string]interface{}{"ok": true, "session": result.Session}}
 }
 
-type RuntimeOrchestrationBackend struct {
+type RuntimeSessionsBackend struct {
 	App *runtime.App
 }
 
-func (b RuntimeOrchestrationBackend) SessionsList(ctx context.Context, req SessionsListRequest) (SessionsListResult, error) {
+func (b RuntimeSessionsBackend) SessionsList(ctx context.Context, req SessionsListRequest) (SessionsListResult, error) {
 	out, err := b.App.MCPSessionsList(ctx, req.AgentID, req.Limit, req.Offset)
 	if err != nil {
 		return SessionsListResult{}, err
@@ -258,7 +258,7 @@ func (b RuntimeOrchestrationBackend) SessionsList(ctx context.Context, req Sessi
 	return SessionsListResult{Sessions: out.Sessions, Total: out.Total}, nil
 }
 
-func (b RuntimeOrchestrationBackend) SessionsHistory(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
+func (b RuntimeSessionsBackend) SessionsHistory(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
 	out, err := b.App.MCPSessionsHistory(ctx, req.AgentID, req.SessionID, req.Limit, req.Offset)
 	if err != nil {
 		if errors.Is(err, runtime.ErrMCPNotFound) {
@@ -273,7 +273,7 @@ func (b RuntimeOrchestrationBackend) SessionsHistory(ctx context.Context, req Se
 	return SessionsHistoryResult{Items: items, Total: out.Total}, nil
 }
 
-func (b RuntimeOrchestrationBackend) SessionsDelete(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
+func (b RuntimeSessionsBackend) SessionsDelete(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
 	removed, err := b.App.MCPSessionDelete(ctx, req.AgentID, req.SessionID)
 	if err != nil {
 		return SessionsDeleteResult{}, err
@@ -284,7 +284,7 @@ func (b RuntimeOrchestrationBackend) SessionsDelete(ctx context.Context, req Ses
 	return SessionsDeleteResult{Deleted: true}, nil
 }
 
-func (b RuntimeOrchestrationBackend) SessionStatus(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error) {
+func (b RuntimeSessionsBackend) SessionStatus(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error) {
 	entry, err := b.App.MCPSessionStatus(ctx, req.AgentID, req.SessionID)
 	if err != nil {
 		if errors.Is(err, runtime.ErrMCPNotFound) {

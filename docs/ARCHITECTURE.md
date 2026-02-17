@@ -31,7 +31,7 @@ localclaw binary (single process)
   |- runtime wiring
   |   |- workspace manager (resolve + bootstrap templates)
   |   |- session store + transcript writer
-  |   |- runtime tool registry (memory_search/memory_grep/memory_get)
+  |   |- runtime tool registry (memory tools + workspace/session/cron/channel MCP tools)
   |   |- skills registry
   |   |- cron scheduler
   |   |- heartbeat monitor
@@ -43,6 +43,7 @@ localclaw binary (single process)
       |- doctor
       |- tui
       |- memory {status,index,search,grep}
+      |- channels {serve}
       `- mcp {serve}
 ```
 
@@ -54,11 +55,11 @@ No server, gateway, or listener process exists.
 
 1. `workspace.Init`
 2. bootstrap `~/.localclaw/localclaw.json` if missing
-3. `memory.Init` (legacy store interface, no-op implementation)
-4. `sessions.Init`
-5. `skills.Load`
-6. `cron.Start`
-7. `heartbeat.Ping("localclaw startup heartbeat")`
+3. `sessions.Init`
+4. `skills.Load`
+5. `cron.Start` (load persisted cron jobs + start in-process scheduling loop)
+6. `heartbeat.Ping("localclaw startup heartbeat")`
+7. `heartbeat.Start` (background ticker loop; overlapping ticks are skipped)
 
 Any failure aborts startup.
 
@@ -80,9 +81,9 @@ Session lifecycle:
 
 Memory/runtime tool behavior:
 
-- Memory retrieval is keyword/FTS + grep based (`memory_search` and `memory_grep`).
+- Memory retrieval is keyword/FTS + grep/file-read based (`memory_search`, `memory_grep`, `memory_get`).
 - Runtime and memory CLI construct managers on demand using resolved workspace + `app.root`-based paths.
-- Legacy `memory.Store` on `App` remains a minimal no-op compatibility surface.
+- Cron scheduler stores jobs under `app.root` and executes local prompt messages while runtime modes are active.
 
 ## 5. Storage model
 
@@ -92,6 +93,7 @@ Default state root: `~/.localclaw`
 ~/.localclaw/
   localclaw.json                        # scaffolded config file if missing
   memory/<agentId>.sqlite              # SQLite memory index store
+  cron/jobs.json                       # persisted cron jobs + latest run metadata
   agents/<agentId>/sessions/sessions.json
   agents/<agentId>/sessions/<sessionId>.jsonl
   workspace/                            # when workspace config is "." for default agent

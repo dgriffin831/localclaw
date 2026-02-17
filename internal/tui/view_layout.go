@@ -16,7 +16,7 @@ func (m *model) headerView() string {
 	session := valueOrDefault(strings.TrimSpace(m.sessionID), "n/a")
 	tokenCount := max(0, m.sessionTokens)
 	innerWidth := panelInnerWidth(m.width)
-	left := "# localclaw"
+	left := valueOrDefault(strings.TrimSpace(m.cfg.App.Name), "localclaw")
 	right := fmt.Sprintf(
 		"session:%s  tokens:%d  workspace:%s",
 		session,

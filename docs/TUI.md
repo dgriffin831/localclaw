@@ -1,6 +1,6 @@
 # TUI Implementation Guide
 
-This document describes current terminal UI behavior in `internal/tui/app.go`.
+This document describes current terminal UI behavior in `internal/tui`.
 
 ## Runtime model
 
@@ -12,13 +12,13 @@ This document describes current terminal UI behavior in `internal/tui/app.go`.
 - bordered multiline composer with slash-command menu
 - footer line with left-aligned keyboard shortcuts and right-aligned runtime settings
 
-Streaming output comes from `app.PromptStreamForSession`.
+Streaming output comes from `app.PromptStreamForSessionWithOptions`.
 
 ## Header and status
 
 Header currently shows:
 
-- app label (`# localclaw`)
+- app label from config (`app.name`, default `localclaw`)
 - session/token tuple (`session:<session_id>  tokens:<total_tokens>`)
 - resolved workspace path
 
@@ -94,7 +94,7 @@ Implemented command set:
 Command behavior details:
 
 - `/shortcuts` prints all available keyboard shortcuts and their behavior.
-- `/status` prints one system line containing status, provider, configured model/profile, effective model, effective selector, selector override state, agent, session, workspace, verbose, and mouse-capture flags.
+- `/status` prints one system line containing status, provider, configured model, effective model, effective selector, selector override state, agent, session, workspace, verbose, and mouse-capture flags.
 - `/tools` prints provider plus provider-reported `tools` only (no runtime fallback list).
 - when provider tools are not yet discovered, `/tools` starts a background probe and refreshes the summary when metadata arrives.
 - for providers that do not emit a tool list in metadata events (for example Codex), localclaw uses a provider-side JSON self-report probe as fallback.

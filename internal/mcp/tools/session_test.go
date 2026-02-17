@@ -8,31 +8,31 @@ import (
 	"github.com/dgriffin831/localclaw/internal/session"
 )
 
-type stubOrchestrationBackend struct {
+type stubSessionsBackend struct {
 	listFn    func(ctx context.Context, req SessionsListRequest) (SessionsListResult, error)
 	historyFn func(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error)
 	deleteFn  func(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error)
 	statusFn  func(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error)
 }
 
-func (s stubOrchestrationBackend) SessionsList(ctx context.Context, req SessionsListRequest) (SessionsListResult, error) {
+func (s stubSessionsBackend) SessionsList(ctx context.Context, req SessionsListRequest) (SessionsListResult, error) {
 	return s.listFn(ctx, req)
 }
 
-func (s stubOrchestrationBackend) SessionsHistory(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
+func (s stubSessionsBackend) SessionsHistory(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
 	return s.historyFn(ctx, req)
 }
 
-func (s stubOrchestrationBackend) SessionsDelete(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
+func (s stubSessionsBackend) SessionsDelete(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
 	return s.deleteFn(ctx, req)
 }
 
-func (s stubOrchestrationBackend) SessionStatus(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error) {
+func (s stubSessionsBackend) SessionStatus(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error) {
 	return s.statusFn(ctx, req)
 }
 
 func TestSessionsListToolAppliesPaginationDefaults(t *testing.T) {
-	h := NewSessionsListTool(stubOrchestrationBackend{listFn: func(ctx context.Context, req SessionsListRequest) (SessionsListResult, error) {
+	h := NewSessionsListTool(stubSessionsBackend{listFn: func(ctx context.Context, req SessionsListRequest) (SessionsListResult, error) {
 		if req.Limit != 20 || req.Offset != 0 {
 			t.Fatalf("unexpected defaults: %+v", req)
 		}
@@ -46,7 +46,7 @@ func TestSessionsListToolAppliesPaginationDefaults(t *testing.T) {
 }
 
 func TestSessionStatusToolRequiresSessionID(t *testing.T) {
-	h := NewSessionStatusTool(stubOrchestrationBackend{statusFn: func(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error) {
+	h := NewSessionStatusTool(stubSessionsBackend{statusFn: func(ctx context.Context, req SessionStatusRequest) (SessionStatusResult, error) {
 		return SessionStatusResult{}, nil
 	}})
 
@@ -57,7 +57,7 @@ func TestSessionStatusToolRequiresSessionID(t *testing.T) {
 }
 
 func TestSessionsHistoryToolMapsBackendErrors(t *testing.T) {
-	h := NewSessionsHistoryTool(stubOrchestrationBackend{historyFn: func(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
+	h := NewSessionsHistoryTool(stubSessionsBackend{historyFn: func(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
 		return SessionsHistoryResult{}, errors.New("boom")
 	}})
 
@@ -68,7 +68,7 @@ func TestSessionsHistoryToolMapsBackendErrors(t *testing.T) {
 }
 
 func TestSessionsHistoryToolCapsLimitAndOffset(t *testing.T) {
-	h := NewSessionsHistoryTool(stubOrchestrationBackend{historyFn: func(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
+	h := NewSessionsHistoryTool(stubSessionsBackend{historyFn: func(ctx context.Context, req SessionsHistoryRequest) (SessionsHistoryResult, error) {
 		if req.Limit != 200 {
 			t.Fatalf("expected capped limit=200, got %d", req.Limit)
 		}
@@ -85,7 +85,7 @@ func TestSessionsHistoryToolCapsLimitAndOffset(t *testing.T) {
 }
 
 func TestSessionsDeleteToolRequiresSessionID(t *testing.T) {
-	h := NewSessionsDeleteTool(stubOrchestrationBackend{deleteFn: func(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
+	h := NewSessionsDeleteTool(stubSessionsBackend{deleteFn: func(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
 		return SessionsDeleteResult{Deleted: true}, nil
 	}})
 
@@ -96,7 +96,7 @@ func TestSessionsDeleteToolRequiresSessionID(t *testing.T) {
 }
 
 func TestSessionsDeleteToolMapsNotFound(t *testing.T) {
-	h := NewSessionsDeleteTool(stubOrchestrationBackend{deleteFn: func(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
+	h := NewSessionsDeleteTool(stubSessionsBackend{deleteFn: func(ctx context.Context, req SessionsDeleteRequest) (SessionsDeleteResult, error) {
 		return SessionsDeleteResult{}, ErrSessionNotFound
 	}})
 

@@ -23,7 +23,6 @@ type Settings struct {
 	ReasoningDefault string
 	ExtraArgs        []string
 	SessionMode      string
-	SessionArg       string
 	ResumeArgs       []string
 	SessionIDFields  []string
 	ResumeOutput     string

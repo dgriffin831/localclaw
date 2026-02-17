@@ -13,6 +13,7 @@ Supported command modes:
 - `doctor --deep`: runs `doctor` checks plus deep checks (currently an LLM prompt probe).
 - `tui`: runs startup initialization, then starts Bubble Tea UI.
 - `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`, `grep`).
+- `channels`: runs startup initialization, then runs channel workers (`serve` subcommand).
 - `mcp`: runs startup initialization, then serves stdio JSON-RPC MCP requests (`serve` subcommand).
 
 Examples:
@@ -26,6 +27,7 @@ go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
 go run ./cmd/localclaw memory grep "incident-1234"
+go run ./cmd/localclaw channels serve
 go run ./cmd/localclaw mcp serve
 ```
 
@@ -40,10 +42,9 @@ go run ./cmd/localclaw mcp serve
 
 - workspace manager (`internal/workspace`)
 - session store + transcript writer (`internal/session`)
-- legacy memory store interface (`internal/memory/store.go` no-op implementation)
 - runtime tool registry (`internal/skills` + `internal/runtime/tools.go`)
-- cron scheduler and heartbeat monitor
-- channel adapters (`slack`, `signal`)
+- cron scheduler (persistent recurring jobs) and heartbeat monitor
+- channel adapters (`slack`, `signal`) wired only when present in `channels.enabled`
 - provider-agnostic LLM client contract (`internal/llm`) with local CLI adapters:
   - Claude Code (`internal/llm/claudecode`)
   - Codex (`internal/llm/codex`)
@@ -54,11 +55,13 @@ go run ./cmd/localclaw mcp serve
 
 1. `workspace.Init`
 2. bootstrap default config file at `~/.localclaw/localclaw.json` when missing
-3. `memory.Init`
-4. `sessions.Init`
-5. `skills.Load`
-6. `cron.Start`
-7. `heartbeat.Ping("localclaw startup heartbeat")`
+3. `sessions.Init`
+4. `skills.Load`
+5. `cron.Start` (loads `<app.root>/cron/jobs.json` and starts background scheduling loop)
+6. `heartbeat.Ping("localclaw startup heartbeat")`
+7. start heartbeat background loop (when enabled) using `heartbeat.interval_seconds`
+   - each tick submits a local prompt that references workspace `HEARTBEAT.md`
+   - heartbeat tick errors are logged and do not fail runtime startup
 
 Any step failure aborts startup with wrapped context.
 
@@ -96,11 +99,28 @@ MCP-first hard cutover:
 
 ## Runtime tools
 
-Supported tools:
+Runtime-defined tool registry entries:
 
 - `memory_search`
 - `memory_grep`
 - `memory_get`
+
+MCP server tools (`localclaw mcp serve`):
+
+- `localclaw_memory_search`
+- `localclaw_memory_grep`
+- `localclaw_memory_get`
+- `localclaw_workspace_status`
+- `localclaw_cron_list`
+- `localclaw_cron_add`
+- `localclaw_cron_remove`
+- `localclaw_cron_run`
+- `localclaw_sessions_list`
+- `localclaw_sessions_history`
+- `localclaw_sessions_delete`
+- `localclaw_session_status`
+- `localclaw_slack_send`
+- `localclaw_signal_send`
 
 Retrieval model details and migration notes are documented in `docs/MEMORY.md`.
 
@@ -109,6 +129,49 @@ Tool enablement:
 - Controlled by resolved `memory.enabled` and `memory.tools.{search,get,grep}` for the agent.
 - Disabled tools return graceful error payloads instead of panics.
 - `ToolDefinitions(agentID)` only reports locally available memory tools for UI/status surfaces.
+
+Channel dispatch behavior:
+
+- Runtime sends Slack and Signal through MCP runtime methods:
+  - `MCPSlackSend`
+  - `MCPSignalSend`
+- Calls are gated by `channels.enabled`.
+- Disabled channel sends return `channel \"<name>\" is disabled`.
+- When `agent_id`/`session_id` are provided, runtime persists channel delivery metadata into session entries.
+
+Signal inbound behavior:
+
+- `channels serve` currently runs Signal inbound processing only.
+- Runtime polls `signal-cli receive` using JSON output (`-o json`) and local subprocess execution.
+- Allowed inbound senders are enforced by `channels.signal.inbound.allow_from`.
+- Group messages are always dropped (never routed/executed).
+- Accepted direct messages are routed to agent sessions using:
+  - `channels.signal.inbound.agent_by_sender`
+  - fallback `channels.signal.inbound.default_agent`
+- Optional read receipts are sent for accepted direct messages when `channels.signal.inbound.send_read_receipts=true`.
+- Optional typing indicators are sent/refreshed while reply generation runs when `channels.signal.inbound.send_typing=true`.
+- Session ids are derived per sender (`signal-<digits>`) to keep per-sender thread continuity.
+
+Cron behavior:
+
+- `cron.enabled=false` disables scheduler startup and all MCP cron methods (`cron scheduler is disabled`).
+- schedules support 5-field cron expressions plus macros: `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@hourly`, `@reboot`.
+- job metadata persists latest run outcome fields (`lastRunAt`, `lastRunStatus`, `lastRunError`, `lastRunDurationMs`).
+- jobs execute runtime prompts using `agent_id`, `message`, `timeout_seconds`, and `session_target`.
+- `wake_mode` is normalized/persisted (`next-heartbeat` or `now`) and currently does not change execution path.
+- `session_target` values are `default` and `isolated` (defaulting to `isolated` when omitted).
+- `localclaw_cron_run` uses the same prompt execution/status path as scheduled runs.
+- `@reboot` jobs run once per scheduler start.
+- missed schedules while runtime is offline are not backfilled.
+
+Heartbeat behavior:
+
+- `heartbeat.enabled=false` disables recurring heartbeat ticks.
+- `heartbeat.interval_seconds` controls recurring heartbeat cadence.
+- each tick resolves default workspace `HEARTBEAT.md` and skips/logs when file read fails.
+- each successful tick submits a local prompt in `default/main` that references `HEARTBEAT.md`.
+- overlapping heartbeat executions are skipped while a prior tick is still running.
+- heartbeat tick failures are non-fatal; future ticks continue.
 
 Skills snapshot behavior:
 

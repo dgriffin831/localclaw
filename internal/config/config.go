@@ -25,6 +25,8 @@ var defaultClaudeAllowedMCPTools = []string{
 	"mcp__localclaw__localclaw_sessions_history",
 	"mcp__localclaw__localclaw_sessions_delete",
 	"mcp__localclaw__localclaw_session_status",
+	"mcp__localclaw__localclaw_slack_send",
+	"mcp__localclaw__localclaw_signal_send",
 }
 
 var allowedCodexReasoningLevels = []string{
@@ -82,7 +84,6 @@ type CodexConfig struct {
 	ReasoningDefault string         `json:"reasoning_default"`
 	ExtraArgs        []string       `json:"extra_args"`
 	SessionMode      string         `json:"session_mode"`
-	SessionArg       string         `json:"session_arg"`
 	ResumeArgs       []string       `json:"resume_args"`
 	SessionIDFields  []string       `json:"session_id_fields"`
 	ResumeOutput     string         `json:"resume_output"`
@@ -95,7 +96,36 @@ type CodexMCPConfig struct {
 }
 
 type ChannelsConfig struct {
-	Enabled []string `json:"enabled"`
+	Enabled []string             `json:"enabled"`
+	Slack   SlackChannelsConfig  `json:"slack"`
+	Signal  SignalChannelsConfig `json:"signal"`
+}
+
+type SlackChannelsConfig struct {
+	BotTokenEnv    string `json:"bot_token_env"`
+	DefaultChannel string `json:"default_channel"`
+	APIBaseURL     string `json:"api_base_url"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
+type SignalChannelsConfig struct {
+	CLIPath          string              `json:"cli_path"`
+	Account          string              `json:"account"`
+	DefaultRecipient string              `json:"default_recipient"`
+	TimeoutSeconds   int                 `json:"timeout_seconds"`
+	Inbound          SignalInboundConfig `json:"inbound"`
+}
+
+type SignalInboundConfig struct {
+	Enabled               bool              `json:"enabled"`
+	AllowFrom             []string          `json:"allow_from"`
+	AgentBySender         map[string]string `json:"agent_by_sender"`
+	DefaultAgent          string            `json:"default_agent"`
+	SendTyping            bool              `json:"send_typing"`
+	TypingIntervalSeconds int               `json:"typing_interval_seconds"`
+	SendReadReceipts      bool              `json:"send_read_receipts"`
+	PollTimeoutSeconds    int               `json:"poll_timeout_seconds"`
+	MaxMessagesPerPoll    int               `json:"max_messages_per_poll"`
 }
 
 type AgentsConfig struct {
@@ -176,8 +206,7 @@ type ChunkingConfig struct {
 }
 
 type QueryConfig struct {
-	MaxResults int     `json:"maxResults"`
-	MinScore   float64 `json:"minScore"`
+	MaxResults int `json:"maxResults"`
 }
 
 type SyncConfig struct {
@@ -245,7 +274,32 @@ func Default() Config {
 				},
 			},
 		},
-		Channels: ChannelsConfig{Enabled: []string{"slack", "signal"}},
+		Channels: ChannelsConfig{
+			Enabled: []string{"slack", "signal"},
+			Slack: SlackChannelsConfig{
+				BotTokenEnv:    "SLACK_BOT_TOKEN",
+				DefaultChannel: "",
+				APIBaseURL:     "https://slack.com/api",
+				TimeoutSeconds: 10,
+			},
+			Signal: SignalChannelsConfig{
+				CLIPath:          "signal-cli",
+				Account:          "+10000000000",
+				DefaultRecipient: "",
+				TimeoutSeconds:   10,
+				Inbound: SignalInboundConfig{
+					Enabled:               false,
+					AllowFrom:             []string{},
+					AgentBySender:         map[string]string{},
+					DefaultAgent:          "default",
+					SendTyping:            true,
+					TypingIntervalSeconds: 5,
+					SendReadReceipts:      true,
+					PollTimeoutSeconds:    5,
+					MaxMessagesPerPoll:    10,
+				},
+			},
+		},
 		Agents: AgentsConfig{
 			Defaults: AgentDefaultsConfig{
 				Workspace: ".",
@@ -267,7 +321,6 @@ func Default() Config {
 					},
 					Query: QueryConfig{
 						MaxResults: 8,
-						MinScore:   0,
 					},
 					Sync: SyncConfig{
 						OnSearch: false,
@@ -376,7 +429,6 @@ func (c Config) Validate() error {
 	if err := validateCodexReasoningDefault(c.LLM.Codex.ReasoningDefault); err != nil {
 		return err
 	}
-	// TODO: Keep this validation aligned with runtime wiring: channels.enabled is validated here, but runtime must also gate actual adapter wiring/usage by this allowlist.
 	if len(c.Channels.Enabled) == 0 {
 		return errors.New("channels.enabled must include at least one channel")
 	}
@@ -396,7 +448,32 @@ func (c Config) Validate() error {
 		}
 		seen[channel] = struct{}{}
 	}
+	if _, enabled := seen["slack"]; enabled {
+		if strings.TrimSpace(c.Channels.Slack.BotTokenEnv) == "" {
+			return errors.New("channels.slack.bot_token_env is required when slack is enabled")
+		}
+		if strings.TrimSpace(c.Channels.Slack.APIBaseURL) == "" {
+			return errors.New("channels.slack.api_base_url is required when slack is enabled")
+		}
+		if c.Channels.Slack.TimeoutSeconds <= 0 {
+			return errors.New("channels.slack.timeout_seconds must be > 0 when slack is enabled")
+		}
+	}
+	signalEnabled := false
+	if _, enabled := seen["signal"]; enabled {
+		signalEnabled = true
+		if strings.TrimSpace(c.Channels.Signal.CLIPath) == "" {
+			return errors.New("channels.signal.cli_path is required when signal is enabled")
+		}
+		if strings.TrimSpace(c.Channels.Signal.Account) == "" {
+			return errors.New("channels.signal.account is required when signal is enabled")
+		}
+		if c.Channels.Signal.TimeoutSeconds <= 0 {
+			return errors.New("channels.signal.timeout_seconds must be > 0 when signal is enabled")
+		}
+	}
 	seenAgentIDs := map[string]struct{}{}
+	knownAgentIDs := map[string]struct{}{"default": {}}
 	for _, agent := range c.Agents.List {
 		agentID := strings.TrimSpace(agent.ID)
 		if agentID == "" {
@@ -409,12 +486,61 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate agent id %q", agentID)
 		}
 		seenAgentIDs[agentID] = struct{}{}
+		knownAgentIDs[agentID] = struct{}{}
 		if err := validateMemoryFlushConfig(agent.Compaction.MemoryFlush, "agents.list[].compaction.memoryFlush"); err != nil {
 			return err
 		}
 	}
 	if err := validateMemoryFlushConfig(c.Agents.Defaults.Compaction.MemoryFlush, "agents.defaults.compaction.memoryFlush"); err != nil {
 		return err
+	}
+	if signalEnabled && c.Channels.Signal.Inbound.Enabled {
+		if len(c.Channels.Signal.Inbound.AllowFrom) == 0 {
+			return errors.New("channels.signal.inbound.allow_from must include at least one sender when inbound is enabled")
+		}
+		normalizedAllowFrom := make(map[string]struct{}, len(c.Channels.Signal.Inbound.AllowFrom))
+		for i, sender := range c.Channels.Signal.Inbound.AllowFrom {
+			normalized := normalizeSignalSender(sender)
+			if normalized == "" {
+				return fmt.Errorf("channels.signal.inbound.allow_from[%d] must be an E.164 number", i)
+			}
+			if _, exists := normalizedAllowFrom[normalized]; exists {
+				return fmt.Errorf("duplicate channels.signal.inbound.allow_from sender %q", normalized)
+			}
+			normalizedAllowFrom[normalized] = struct{}{}
+		}
+		if c.Channels.Signal.Inbound.PollTimeoutSeconds <= 0 {
+			return errors.New("channels.signal.inbound.poll_timeout_seconds must be > 0")
+		}
+		if c.Channels.Signal.Inbound.MaxMessagesPerPoll <= 0 {
+			return errors.New("channels.signal.inbound.max_messages_per_poll must be > 0")
+		}
+		if c.Channels.Signal.Inbound.TypingIntervalSeconds <= 0 {
+			return errors.New("channels.signal.inbound.typing_interval_seconds must be > 0")
+		}
+		defaultAgent := strings.TrimSpace(c.Channels.Signal.Inbound.DefaultAgent)
+		if defaultAgent == "" {
+			defaultAgent = "default"
+		}
+		if _, ok := knownAgentIDs[defaultAgent]; !ok {
+			return fmt.Errorf("channels.signal.inbound.default_agent %q is not defined in agents.list", defaultAgent)
+		}
+		for rawSender, rawAgent := range c.Channels.Signal.Inbound.AgentBySender {
+			sender := normalizeSignalSender(rawSender)
+			if sender == "" {
+				return fmt.Errorf("channels.signal.inbound.agent_by_sender has invalid sender %q", rawSender)
+			}
+			if _, ok := normalizedAllowFrom[sender]; !ok {
+				return fmt.Errorf("channels.signal.inbound.agent_by_sender sender %q must also appear in channels.signal.inbound.allow_from", sender)
+			}
+			agent := strings.TrimSpace(rawAgent)
+			if agent == "" {
+				return fmt.Errorf("channels.signal.inbound.agent_by_sender[%q] must be a non-empty agent id", sender)
+			}
+			if _, ok := knownAgentIDs[agent]; !ok {
+				return fmt.Errorf("channels.signal.inbound.agent_by_sender[%q] references unknown agent %q", sender, agent)
+			}
+		}
 	}
 	if c.Heartbeat.Enabled && c.Heartbeat.IntervalSeconds <= 0 {
 		return errors.New("heartbeat.interval_seconds must be > 0")
@@ -497,4 +623,27 @@ func validateCodexReasoningDefault(value string) error {
 		return fmt.Errorf("llm.codex.reasoning_default must be one of: %s", strings.Join(allowedCodexReasoningLevels, ", "))
 	}
 	return nil
+}
+
+func normalizeSignalSender(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.ReplaceAll(trimmed, " ", "")
+	trimmed = strings.ReplaceAll(trimmed, "-", "")
+	trimmed = strings.ReplaceAll(trimmed, "(", "")
+	trimmed = strings.ReplaceAll(trimmed, ")", "")
+	if !strings.HasPrefix(trimmed, "+") {
+		return ""
+	}
+	if len(trimmed) < 4 {
+		return ""
+	}
+	for _, ch := range trimmed[1:] {
+		if ch < '0' || ch > '9' {
+			return ""
+		}
+	}
+	return trimmed
 }

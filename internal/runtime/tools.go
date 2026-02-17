@@ -312,7 +312,6 @@ func hasMemoryOverride(cfg config.MemoryOverrideConfig) bool {
 		cfg.Chunking.Tokens > 0 ||
 		cfg.Chunking.Overlap > 0 ||
 		cfg.Query.MaxResults > 0 ||
-		cfg.Query.MinScore > 0 ||
 		cfg.Sync.OnSearch ||
 		cfg.Sync.Sessions.DeltaBytes > 0 ||
 		cfg.Sync.Sessions.DeltaMessages > 0
@@ -349,9 +348,6 @@ func mergeMemoryConfig(base config.MemoryConfig, override config.MemoryOverrideC
 	}
 	if override.Query.MaxResults > 0 {
 		merged.Query.MaxResults = override.Query.MaxResults
-	}
-	if override.Query.MinScore > 0 {
-		merged.Query.MinScore = override.Query.MinScore
 	}
 	if override.Sync.OnSearch {
 		merged.Sync.OnSearch = true

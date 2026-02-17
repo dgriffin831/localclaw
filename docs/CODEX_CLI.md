@@ -9,13 +9,16 @@ Implementation location:
 ## Execution model
 
 - `PromptStreamRequest` executes:
-  - `codex exec --json -C <workspace> ... -`
-  - optional `-p <profile>` from `llm.codex.profile`
+  - non-resume baseline: `codex exec --json -C <workspace> ... -`
+  - resume path: `codex exec <resume_args...> ... -` with `--json` controlled by `llm.codex.resume_output`
+    - `json` / `jsonl`: keep `--json`
+    - `text`: omit `--json`
+  - optional `-p <profile>` from `llm.codex.profile` (non-resume path)
   - optional `-m <model>` from `llm.codex.model` or runtime override
   - optional `-c model_reasoning_effort="<level>"` from runtime/default selector reasoning
   - optional passthrough args from `llm.codex.extra_args`
     - default config includes `--skip-git-repo-check`
-- prompt text is written to stdin (`-` argument) using `exec.CommandContext`.
+- request input is composed with `llm.ComposePromptFallback(req)`, then written to stdin (`-` argument) using `exec.CommandContext`.
 - stdout JSONL events are parsed into provider-agnostic stream events:
   - `item.completed` with `agent_message` -> `StreamEventDelta`
   - `item.started` with `command_execution` -> `StreamEventToolCall` (`provider_native`)

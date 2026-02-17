@@ -12,11 +12,14 @@
 
 ## Current implementation snapshot
 
-- Command modes: `doctor`, `tui`, `memory`, `mcp`.
+- Command modes: `doctor`, `tui`, `memory`, `channels`, `mcp`.
 - Agent-aware workspace resolution and bootstrap templates.
 - Per-agent session metadata + transcript files under the configured `app.root`.
 - SQLite-backed memory indexing/search/grep with CLI tooling (`memory status/index/search/grep`).
 - Runtime memory tools (`memory_search`, `memory_grep`, `memory_get`) injected when `agents.*.memory` enables them.
+- Runtime cron tools (`localclaw_cron_list`, `localclaw_cron_add`, `localclaw_cron_remove`, `localclaw_cron_run`) with recurring local prompt execution while runtime is active.
+- Outbound channel delivery tools for Slack (`localclaw_slack_send`) and Signal (`localclaw_signal_send`).
+- Inbound Signal worker mode with sender allowlist policy and sender-to-agent routing (`channels serve`).
 - Session lifecycle hooks for `/reset` and `/new` snapshot behavior.
 
 ## Quick start
@@ -28,6 +31,7 @@ go run ./cmd/localclaw doctor
 go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
 go run ./cmd/localclaw memory status
+go run ./cmd/localclaw channels serve --once
 go run ./cmd/localclaw mcp serve
 ```
 
@@ -41,6 +45,7 @@ go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
 go run ./cmd/localclaw memory search "incident summary"
 go run ./cmd/localclaw memory grep "incident-1234"
+go run ./cmd/localclaw channels serve
 go run ./cmd/localclaw mcp serve
 ```
 
@@ -50,13 +55,20 @@ Run with an explicit config file:
 go run ./cmd/localclaw -config ./localclaw.json doctor
 go run ./cmd/localclaw -config ./localclaw.json tui
 go run ./cmd/localclaw -config ./localclaw.json memory status
+go run ./cmd/localclaw -config ./localclaw.json channels serve
 go run ./cmd/localclaw -config ./localclaw.json mcp serve
 ```
 
 Running `localclaw` with no command prints the detailed CLI help page.
 
-On startup commands (`doctor`, `tui`, `memory`), `localclaw` creates `~/.localclaw/localclaw.json` if it does not exist.
-This scaffold file is not auto-loaded unless you pass `-config`.
+On startup commands (`doctor`, `tui`, `memory`, `channels serve`, `mcp serve`), `localclaw` creates `~/.localclaw/localclaw.json` if it does not exist.
+When `-config` is omitted, `localclaw` auto-loads `~/.localclaw/localclaw.json` when present.
+
+Cron scheduling notes:
+
+- recurring jobs run only while a runtime mode is active (`tui`, `mcp serve`, or another command that keeps `App.Run` alive).
+- jobs are persisted at `<app.root>/cron/jobs.json` and reloaded on startup.
+- missed windows while `localclaw` is not running are not backfilled.
 
 ## TUI controls
 
@@ -129,8 +141,12 @@ Optional TUI startup defaults:
 - `docs/ARCHITECTURE.md` - implementation-detail architecture map.
 - `docs/RUNTIME.md` - startup flow and command mode behavior.
 - `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
+- `docs/CRON.md` - recurring cron scheduling behavior, implementation, and usage.
+- `docs/HEARTBEATS.md` - heartbeat scheduling behavior and `HEARTBEAT.md` authoring guide.
 - `docs/MEMORY.md` - memory retrieval v2 model (`memory_search` + `memory_grep`) and implementation notes.
 - `docs/TUI.md` - terminal UX behavior and controls.
+- `docs/SLACK.md` - Slack setup and outbound delivery implementation details.
+- `docs/SIGNAL.md` - Signal (`signal-cli`) setup and outbound delivery implementation details.
 - `docs/CLAUDE_CODE.md` - local Claude Code CLI integration details.
 - `docs/CODEX.md` - local Codex CLI integration details.
 - `docs/TESTING.md` - package coverage and Red/Green command loops.

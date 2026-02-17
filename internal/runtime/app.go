@@ -29,19 +29,21 @@ import (
 
 // App composes all localclaw capabilities in a single process.
 type App struct {
-	cfg        config.Config
-	tools      *skills.ToolRegistry
-	sessions   *session.Store
-	workspace  workspace.Manager
-	skills     skills.Registry
-	cron       cron.Scheduler
-	heartbeat  heartbeat.Monitor
-	slack      slack.Client  // TODO: Wire outbound Slack dispatch once channel execution is implemented.
-	signal     signal.Client // TODO: Wire outbound Signal dispatch once channel execution is implemented.
-	llm        llm.Client
-	llmClients map[string]llm.Client
-	transcript *session.TranscriptWriter
-	now        func() time.Time
+	cfg             config.Config
+	enabledChannels map[string]struct{}
+	tools           *skills.ToolRegistry
+	sessions        *session.Store
+	workspace       workspace.Manager
+	skills          skills.Registry
+	cron            cron.Scheduler
+	heartbeat       heartbeat.Monitor
+	slack           slack.Client
+	signal          signal.Client
+	signalReceive   func(ctx context.Context, settings signal.ReceiveSettings) ([]signal.ReceiveMessage, error)
+	llm             llm.Client
+	llmClients      map[string]llm.Client
+	transcript      *session.TranscriptWriter
+	now             func() time.Time
 
 	snapshotMu          sync.Mutex
 	skillPromptSnapshot map[string]skillsSessionSnapshot
@@ -58,6 +60,8 @@ type skillsSessionSnapshot struct {
 const (
 	DefaultAgentID   = "default"
 	DefaultSessionID = "main"
+	// Keep this prompt aligned with OpenClaw heartbeat defaults so behavior is consistent.
+	defaultHeartbeatPrompt = "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
 )
 
 type SessionResolution struct {
@@ -140,7 +144,6 @@ func New(cfg config.Config) (*App, error) {
 		ReasoningDefault: cfg.LLM.Codex.ReasoningDefault,
 		ExtraArgs:        cfg.LLM.Codex.ExtraArgs,
 		SessionMode:      cfg.LLM.Codex.SessionMode,
-		SessionArg:       cfg.LLM.Codex.SessionArg,
 		ResumeArgs:       cfg.LLM.Codex.ResumeArgs,
 		SessionIDFields:  cfg.LLM.Codex.SessionIDFields,
 		ResumeOutput:     cfg.LLM.Codex.ResumeOutput,
@@ -174,9 +177,39 @@ func New(cfg config.Config) (*App, error) {
 		}
 	}
 
-	return &App{
-		cfg:   cfg,
-		tools: skills.DefaultToolRegistry(),
+	enabledChannels := make(map[string]struct{}, len(cfg.Channels.Enabled))
+	for _, channel := range cfg.Channels.Enabled {
+		name := strings.ToLower(strings.TrimSpace(channel))
+		if name == "" {
+			continue
+		}
+		enabledChannels[name] = struct{}{}
+	}
+
+	var slackAdapter slack.Client
+	if _, ok := enabledChannels["slack"]; ok {
+		slackAdapter = slack.NewLocalAdapter(slack.Settings{
+			TokenEnv:       cfg.Channels.Slack.BotTokenEnv,
+			DefaultChannel: cfg.Channels.Slack.DefaultChannel,
+			APIBaseURL:     cfg.Channels.Slack.APIBaseURL,
+			Timeout:        time.Duration(cfg.Channels.Slack.TimeoutSeconds) * time.Second,
+		})
+	}
+
+	var signalAdapter signal.Client
+	if _, ok := enabledChannels["signal"]; ok {
+		signalAdapter = signal.NewLocalAdapter(signal.Settings{
+			CLIPath:          cfg.Channels.Signal.CLIPath,
+			Account:          cfg.Channels.Signal.Account,
+			DefaultRecipient: cfg.Channels.Signal.DefaultRecipient,
+			Timeout:          time.Duration(cfg.Channels.Signal.TimeoutSeconds) * time.Second,
+		})
+	}
+
+	app := &App{
+		cfg:             cfg,
+		enabledChannels: enabledChannels,
+		tools:           skills.DefaultToolRegistry(),
 		sessions: session.NewStore(session.Settings{
 			StateRoot:     cfg.App.Root,
 			StorePath:     cfg.Session.Store,
@@ -189,19 +222,24 @@ func New(cfg config.Config) (*App, error) {
 				return workspaceManager.ResolveWorkspace(agentID)
 			},
 		}),
-		cron:      cron.NewInProcessScheduler(cfg.Cron.Enabled),
-		heartbeat: heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
-		// TODO: Honor channels.enabled by gating adapter wiring and channel usage per configured allowlist instead of unconditionally wiring both adapters.
-		slack:      slack.NewLocalAdapter(),
-		signal:     signal.NewLocalAdapter(),
-		llm:        llmClient,
-		llmClients: llmClients,
+		heartbeat:     heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
+		slack:         slackAdapter,
+		signal:        signalAdapter,
+		signalReceive: signal.ReceiveBatch,
+		llm:           llmClient,
+		llmClients:    llmClients,
 		// TODO: Wire transcript appends into memory autosync (StartAutoSync/HandleTranscriptUpdate) via a runtime event bus so session delta indexing is active at startup.
 		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
 		now:                 time.Now,
 		skillPromptSnapshot: map[string]skillsSessionSnapshot{},
 		providerModelsCache: map[string]llm.ProviderModelCatalog{},
-	}, nil
+	}
+	app.cron = cron.NewInProcessSchedulerWithSettings(cron.Settings{
+		Enabled:   cfg.Cron.Enabled,
+		StateRoot: resolvedStateRoot,
+		Executor:  app.runCronEntry,
+	})
+	return app, nil
 }
 
 func resolveAbsolutePath(path string) (string, error) {
@@ -258,7 +296,34 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.heartbeat.Ping(ctx, "localclaw startup heartbeat"); err != nil {
 		return fmt.Errorf("heartbeat ping: %w", err)
 	}
+	a.heartbeat.Start(ctx, func(runCtx context.Context) error {
+		return a.runHeartbeatTick(runCtx)
+	})
 	return nil
+}
+
+func (a *App) runHeartbeatTick(ctx context.Context) error {
+	workspacePath, err := a.ResolveWorkspacePath(DefaultAgentID)
+	if err != nil {
+		return fmt.Errorf("resolve heartbeat workspace: %w", err)
+	}
+	heartbeatPath := filepath.Join(workspacePath, "HEARTBEAT.md")
+	if _, err := os.ReadFile(heartbeatPath); err != nil {
+		log.Printf("heartbeat: skipped tick; unable to read %s: %v", heartbeatPath, err)
+		return nil
+	}
+	if _, err := a.PromptForSession(ctx, DefaultAgentID, DefaultSessionID, buildHeartbeatPrompt(heartbeatPath)); err != nil {
+		return fmt.Errorf("prompt heartbeat: %w", err)
+	}
+	return nil
+}
+
+func buildHeartbeatPrompt(heartbeatPath string) string {
+	trimmed := strings.TrimSpace(heartbeatPath)
+	if trimmed == "" {
+		return defaultHeartbeatPrompt
+	}
+	return fmt.Sprintf("%s\nUse workspace heartbeat file: %s", defaultHeartbeatPrompt, trimmed)
 }
 
 func (a *App) bootstrapDefaultConfigFile() error {

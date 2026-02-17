@@ -103,6 +103,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "memory error: %v\n", err)
 			return 1
 		}
+	case "channels":
+		if err := cli.RunChannelsCommand(ctx, cfg, app, modeArgs, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "channels error: %v\n", err)
+			return 1
+		}
 	case "mcp":
 		if err := cli.RunMCPCommand(ctx, cfg, app, modeArgs, os.Stdin, stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "mcp error: %v\n", err)
@@ -132,7 +137,7 @@ func resolveCommand(args []string) (string, []string) {
 
 func isKnownCommand(mode string) bool {
 	switch mode {
-	case "doctor", "tui", "memory", "mcp":
+	case "doctor", "tui", "memory", "channels", "mcp":
 		return true
 	default:
 		return false
@@ -254,6 +259,7 @@ Commands:
   doctor           Health checks + startup diagnostics
   tui              Run full-screen terminal UI
   memory           Memory search tools (status/index/search/grep)
+  channels         Channel worker modes (currently signal inbound serve)
   mcp              MCP stdio server (serve subcommand)
   help             Display help for command
 
@@ -262,6 +268,7 @@ Examples:
   localclaw doctor
   localclaw tui
   localclaw memory status
+  localclaw channels serve
   localclaw mcp serve
 
 Docs: README.md, docs/RUNTIME.md

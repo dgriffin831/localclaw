@@ -111,6 +111,21 @@ type GrepResult struct {
 	Matches []GrepMatch `json:"matches"`
 }
 
+// WriteOptions controls memory_write path and append/overwrite behavior.
+type WriteOptions struct {
+	Path      string
+	Overwrite bool
+}
+
+// WriteResult captures one memory_write operation result.
+type WriteResult struct {
+	Path         string `json:"path"`
+	BytesWritten int    `json:"bytes_written"`
+	Appended     bool   `json:"appended"`
+	Indexed      bool   `json:"indexed"`
+	SyncError    string `json:"sync_error,omitempty"`
+}
+
 // IndexManager defines the SQLite-backed memory indexing behavior.
 type IndexManager interface {
 	Open(ctx context.Context) error
@@ -123,4 +138,5 @@ type IndexManager interface {
 	Search(ctx context.Context, query string, opts SearchOptions) ([]SearchResult, error)
 	Get(ctx context.Context, path string, opts GetOptions) (GetResult, error)
 	Grep(ctx context.Context, query string, opts GrepOptions) (GrepResult, error)
+	Write(ctx context.Context, content string, opts WriteOptions) (WriteResult, error)
 }

@@ -10,6 +10,9 @@ Keep it current when architecture, tooling, or workflows change.
 - `docs/ARCHITECTURE.md` is the implementation-detail architecture reference.
 - `docs/RUNTIME.md` documents startup wiring and runtime lifecycle.
 - `docs/CONFIGURATION.md` documents config schema, defaults, and validation guardrails.
+- `docs/HEARTBEATS.md` documents heartbeat scheduling behavior and `HEARTBEAT.md` usage.
+- `docs/SLACK.md` documents Slack channel setup and outbound delivery behavior.
+- `docs/SIGNAL.md` documents Signal channel setup and `signal-cli` runtime behavior.
 - `docs/TUI.md` documents full-screen TUI behavior and controls.
 - `docs/CLAUDE_CODE.md` documents local Claude Code CLI integration details.
 - `docs/TESTING.md` is the comprehensive testing guide.
@@ -28,7 +31,7 @@ Keep it current when architecture, tooling, or workflows change.
 ## Project Structure & Module Organization
 
 - Entrypoint:
-  - `cmd/localclaw/main.go` (`doctor`, `tui`, `memory`, `mcp` command modes).
+  - `cmd/localclaw/main.go` (`doctor`, `tui`, `memory`, `channels`, `mcp` command modes).
 - Core orchestration:
   - `internal/runtime/app.go`
   - `internal/runtime/tools.go`
@@ -48,7 +51,7 @@ Keep it current when architecture, tooling, or workflows change.
   - `internal/heartbeat`
   - `internal/channels/slack`
   - `internal/channels/signal`
-  - `internal/cli` (memory command mode helpers)
+  - `internal/cli` (command mode helpers)
 
 ## Build, Test, and Development Commands
 
@@ -73,10 +76,14 @@ Keep it current when architecture, tooling, or workflows change.
   - `go run ./cmd/localclaw memory status`
   - `go run ./cmd/localclaw memory index --force`
   - `go run ./cmd/localclaw memory search "incident summary"`
+- Run channels command mode:
+  - `go run ./cmd/localclaw channels serve`
+  - `go run ./cmd/localclaw channels serve --once`
 - Run with explicit config file:
   - `go run ./cmd/localclaw -config ./localclaw.json doctor`
   - `go run ./cmd/localclaw -config ./localclaw.json tui`
   - `go run ./cmd/localclaw -config ./localclaw.json memory status`
+  - `go run ./cmd/localclaw -config ./localclaw.json channels serve`
 - Formatting:
   - `go fmt ./...`
 
@@ -132,7 +139,7 @@ Behavior changes should follow Red -> Green -> Validate -> Deliver.
 
 ### Command-mode behavior
 
-- Supported command modes are `doctor`, `tui`, `memory`, and `mcp`.
+- Supported command modes are `doctor`, `tui`, `memory`, `channels`, and `mcp`.
 - If adding a new mode:
   - wire it in `cmd/localclaw/main.go`
   - add mode-specific tests

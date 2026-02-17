@@ -103,6 +103,8 @@ func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 		"localclaw_sessions_delete",
 		"localclaw_sessions_history",
 		"localclaw_sessions_list",
+		"localclaw_signal_send",
+		"localclaw_slack_send",
 		"localclaw_workspace_status",
 	}
 	if len(names) != len(want) {
@@ -139,6 +141,7 @@ func TestMCPServerDispatchesPhase4ToolsByName(t *testing.T) {
 		{name: "localclaw_workspace_status", args: "{}"},
 		{name: "localclaw_cron_list", args: "{}"},
 		{name: "localclaw_sessions_list", args: "{}"},
+		{name: "localclaw_memory_search", args: "{\"query\":\"mcp smoke\"}"},
 	}
 	for _, tc := range cases {
 		input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"" + tc.name + "\",\"arguments\":" + tc.args + "}}\n")
