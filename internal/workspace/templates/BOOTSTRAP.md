@@ -3,50 +3,61 @@ title: BOOTSTRAP
 ---
 # BOOTSTRAP.md - First-Run Setup
 
-This workspace was just created. Run this one-time setup and then delete this file.
+This workspace was just created.
+Run this one-time checklist, then delete this file.
 
-## 1. Set Identity
+## 1. Set Assistant Identity
 
-Open `IDENTITY.md` and fill in:
+Open `IDENTITY.md` and fill in core fields:
 
 - Name
 - Role
-- Communication style
-- Core strengths
+- Operating style
+- Strengths
+- Boundaries to enforce
 
-## 2. Set User Profile
+## 2. Set User Profile and Preferences
 
-Open `USER.md` and record:
+Open `USER.md` and record durable preferences:
 
 - Preferred name/address
 - Communication preferences
 - Time zone
 - Ongoing priorities
 
-## 3. Tune Behavior
+## 3. Confirm Operating Principles
 
-Open `SOUL.md` and confirm:
+Review `SOUL.md` and confirm:
 
-- Default tone
-- Decision principles
-- Boundaries for risky or external actions
+- Decision rules
+- Communication style
+- Trust boundaries
 
-## 4. Add Environment Notes
+## 4. Record Tooling Context
 
-Open `TOOLS.md` and add local details:
+Update `TOOLS.md` with environment specifics:
 
-- Common commands
-- Tooling paths
-- Channel/account conventions
-- Any recurring operational shortcuts
+- Key tools/providers in use
+- Verification method used (command/path)
+- Notable capabilities and limitations
+- Local runbooks, aliases, or naming conventions
 
-## 5. Initialize Memory
+## 5. Confirm Security Baseline
 
-If missing, create:
+Review `SECURITY.md` and align rules with expected safety posture.
+Tighten rules if needed for this workspace.
 
-- `MEMORY.md` for durable long-term notes
-- `memory/YYYY-MM-DD.md` for daily session notes
+## 6. Initialize Memory
 
-## 6. Complete Bootstrap
+Create memory files if missing:
 
-After setup is done, delete `BOOTSTRAP.md`.
+- `MEMORY.md` for durable long-term context
+- `memory/YYYY-MM-DD.md` for daily notes
+
+## 7. Configure Heartbeat Tasks (Optional)
+
+If periodic checks are used, add a short actionable checklist to `HEARTBEAT.md`.
+
+## 8. Complete Bootstrap
+
+After setup is complete, delete `BOOTSTRAP.md`.

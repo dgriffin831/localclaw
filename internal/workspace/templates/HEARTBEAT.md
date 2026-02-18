@@ -3,17 +3,23 @@ title: HEARTBEAT
 ---
 # HEARTBEAT.md
 
-Optional periodic checklist for maintenance runs.
-Keep this file short and actionable.
+Optional checklist for periodic maintenance turns.
+Keep this file short, safe, and actionable.
+
+## Default Heartbeat Rule
+
+If there is nothing actionable, return `HEARTBEAT_OK`.
 
 ## Suggested Checks
 
-- [ ] Review urgent TODO/FIXME notes in active repos.
-- [ ] Check for failing tests in recently touched packages.
-- [ ] Verify session memory files are being written as expected.
-- [ ] Note any follow-up tasks in `memory/YYYY-MM-DD.md`.
+- [ ] Review urgent TODO/FIXME items in active projects.
+- [ ] Check recent test or lint failures that can be fixed safely.
+- [ ] Refresh short-term notes in `memory/YYYY-MM-DD.md`.
+- [ ] Promote high-value context to `MEMORY.md` when appropriate.
+- [ ] Flag time-sensitive issues for proactive user follow-up.
 
-## Notes
+## Guardrails
 
-- Remove items that no longer matter.
-- Add only tasks that are safe to run without extra context.
+- Do only actions that are safe without extra confirmation.
+- Avoid destructive or externally visible actions during heartbeat runs.
+- Remove stale checklist items that no longer matter.

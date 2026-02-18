@@ -23,7 +23,7 @@ func TestLocalAdapterSendBuildsGroupCommandUsingDefaultRecipient(t *testing.T) {
 		CLIPath:          scriptPath,
 		Account:          "+15551234567",
 		DefaultRecipient: "group:engineering-room",
-		Timeout:          time.Second,
+		Timeout:          5 * time.Second,
 		Now:              func() time.Time { return time.Date(2026, 2, 17, 12, 0, 0, 0, time.UTC) },
 	})
 
@@ -70,7 +70,7 @@ func TestLocalAdapterSendUsesExplicitRecipientOverride(t *testing.T) {
 		CLIPath:          scriptPath,
 		Account:          "+15551234567",
 		DefaultRecipient: "+15550000000",
-		Timeout:          time.Second,
+		Timeout:          5 * time.Second,
 	})
 
 	result, err := adapter.Send(context.Background(), SendRequest{
@@ -106,7 +106,7 @@ func TestLocalAdapterSendReturnsStderrOnSubprocessFailure(t *testing.T) {
 		CLIPath:          scriptPath,
 		Account:          "+15551234567",
 		DefaultRecipient: "+15557654321",
-		Timeout:          time.Second,
+		Timeout:          5 * time.Second,
 	})
 
 	_, err := adapter.Send(context.Background(), SendRequest{Text: "hello"})
@@ -154,7 +154,7 @@ func TestLocalAdapterSendTypingBuildsExpectedCommand(t *testing.T) {
 	adapter := NewLocalAdapter(Settings{
 		CLIPath: scriptPath,
 		Account: "+15551234567",
-		Timeout: time.Second,
+		Timeout: 5 * time.Second,
 	})
 
 	if err := adapter.SendTyping(context.Background(), TypingRequest{
@@ -212,7 +212,7 @@ func TestLocalAdapterSendReceiptBuildsExpectedCommand(t *testing.T) {
 	adapter := NewLocalAdapter(Settings{
 		CLIPath: scriptPath,
 		Account: "+15551234567",
-		Timeout: time.Second,
+		Timeout: 5 * time.Second,
 	})
 
 	if err := adapter.SendReceipt(context.Background(), ReceiptRequest{

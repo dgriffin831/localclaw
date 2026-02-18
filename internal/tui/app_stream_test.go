@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm"
@@ -435,7 +435,7 @@ func TestToolCardsExpandWithCtrlO(t *testing.T) {
 		t.Fatalf("expected collapsed tool card to omit result data, got %q", collapsed)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	updated, _ = m.Update(keyCtrl('o'))
 	next := updated.(model)
 	if !next.toolsExpanded {
 		t.Fatalf("expected ctrl+o to expand tool cards")
@@ -704,30 +704,20 @@ func TestAbortRunClearsToolCardCallIDIndex(t *testing.T) {
 	}
 }
 
-func TestNewProgramSkipsMouseCellMotionByDefault(t *testing.T) {
-	got := startupOptionBits(t, newProgram(newModel(context.Background(), nil, config.Default())))
-
-	expectedProgram := tea.NewProgram(nil)
-	tea.WithAltScreen()(expectedProgram)
-	expected := startupOptionBits(t, expectedProgram)
-
-	if got != expected {
-		t.Fatalf("unexpected startup options: got=%d want=%d", got, expected)
+func TestViewUsesAltScreenByDefault(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	view := m.View()
+	if !view.AltScreen {
+		t.Fatalf("expected view to request alt screen")
 	}
 }
 
-func TestNewProgramEnablesMouseCellMotionWhenConfiguredOn(t *testing.T) {
+func TestViewUsesMouseCellMotionWhenConfiguredOn(t *testing.T) {
 	cfg := config.Default()
 	cfg.App.Default.Mouse = true
 
-	got := startupOptionBits(t, newProgram(newModel(context.Background(), nil, cfg)))
-
-	expectedProgram := tea.NewProgram(nil)
-	tea.WithAltScreen()(expectedProgram)
-	tea.WithMouseCellMotion()(expectedProgram)
-	expected := startupOptionBits(t, expectedProgram)
-
-	if got != expected {
-		t.Fatalf("unexpected startup options: got=%d want=%d", got, expected)
+	m := newModel(context.Background(), nil, cfg)
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("expected view to request cell-motion mouse mode, got %v", got)
 	}
 }

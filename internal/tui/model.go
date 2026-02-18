@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm"
@@ -19,20 +19,22 @@ import (
 )
 
 const (
-	statusIdle        = "idle"
-	statusSending     = "sending"
-	statusWaiting     = "waiting"
-	statusStreaming   = "streaming"
-	statusAborted     = "aborted"
-	statusError       = "error"
-	slashMenuLimit    = 6
-	composerMinLines  = 4
-	composerMaxLines  = 12
-	composerPrompt    = "> "
-	composerIndent    = "  "
-	welcomeFileName   = "WELCOME.md"
-	bootstrapFileName = "BOOTSTRAP.md"
-	bootstrapSeedText = "Wake up, my friend!"
+	statusIdle              = "idle"
+	statusSending           = "sending"
+	statusWaiting           = "waiting"
+	statusStreaming         = "streaming"
+	statusAborted           = "aborted"
+	statusError             = "error"
+	slashMenuLimit          = 6
+	composerMinLines        = 4
+	composerMaxLines        = 12
+	composerPlaceholderText = "Ask localclaw..."
+	composerPlaceholderFill = '\u200b'
+	composerPrompt          = "> "
+	composerIndent          = "  "
+	welcomeFileName         = "WELCOME.md"
+	bootstrapFileName       = "BOOTSTRAP.md"
+	bootstrapSeedText       = "Wake up, my friend!"
 )
 
 type messageRole string
@@ -239,36 +241,37 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	}
 
 	input := textarea.New()
-	input.Placeholder = "Ask localclaw..."
+	input.Placeholder = composerPlaceholder()
 	input.Focus()
 	input.ShowLineNumbers = false
-	// bubbles/textarea v0.13.0 treats CharLimit <= 0 as effectively no input.
-	// Use a high practical ceiling instead of 0.
+	// Keep a practical ceiling to avoid unbounded composer growth.
 	input.CharLimit = 100000
 	// Render a single top-row prompt in view_layout to avoid per-line prompts.
 	input.Prompt = ""
 	input.SetHeight(composerMinLines)
-	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
+	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
 
-	focused, blurred := textarea.DefaultStyles()
-	focused.Base = focused.Base.Background(colorBackgroundPane).Foreground(colorText)
-	focused.Text = lipgloss.NewStyle().Foreground(colorText).Background(colorBackgroundPane)
-	focused.Prompt = lipgloss.NewStyle().Foreground(colorPrimary)
-	focused.Placeholder = lipgloss.NewStyle().Foreground(colorTextMuted).Background(colorBackgroundPane)
-	focused.CursorLine = lipgloss.NewStyle().Foreground(colorText).Background(colorBackgroundPane)
-	focused.CursorLineNumber = lipgloss.NewStyle().Foreground(colorTextMuted)
-	focused.LineNumber = lipgloss.NewStyle().Foreground(colorTextMuted)
-	focused.EndOfBuffer = lipgloss.NewStyle().Foreground(colorBorderSubtle)
-	blurred = focused
-	blurred.Prompt = lipgloss.NewStyle().Foreground(colorTextMuted)
-	input.FocusedStyle = focused
-	input.BlurredStyle = blurred
+	styles := textarea.DefaultStyles(true)
+	styles.Focused.Base = styles.Focused.Base.Background(colorBackgroundPane).Foreground(colorText)
+	styles.Focused.Text = lipgloss.NewStyle().Foreground(colorText).Background(colorBackgroundPane)
+	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(colorPrimary)
+	styles.Focused.Placeholder = lipgloss.NewStyle().Foreground(colorTextMuted).Background(colorBackgroundPane)
+	styles.Focused.CursorLine = lipgloss.NewStyle().Foreground(colorText).Background(colorBackgroundPane)
+	styles.Focused.CursorLineNumber = lipgloss.NewStyle().Foreground(colorTextMuted)
+	styles.Focused.LineNumber = lipgloss.NewStyle().Foreground(colorTextMuted)
+	styles.Focused.EndOfBuffer = lipgloss.NewStyle().Foreground(colorBorderSubtle)
+	styles.Blurred = styles.Focused
+	styles.Blurred.Prompt = lipgloss.NewStyle().Foreground(colorTextMuted)
+	// Use a visible accent cursor while keeping terminal-default reverse-video
+	// escapes out of placeholder mode.
+	styles.Cursor.Color = colorPrimary
+	input.SetStyles(styles)
 
 	sp := spinner.New()
 	sp.Spinner = statusIconSpinner(statusIdle)
 	sp.Style = lipgloss.NewStyle().Foreground(colorText)
 
-	vp := viewport.New(0, 0)
+	vp := viewport.New()
 	vp.MouseWheelEnabled = true
 
 	m := model{
@@ -300,6 +303,18 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 		m.addSystemMarkdown(welcome)
 	}
 	return m
+}
+
+func composerPlaceholder() string {
+	if composerMaxLines <= 1 {
+		return composerPlaceholderText
+	}
+	// The textarea placeholder path leaves trailing cells unstyled on rows
+	// beyond placeholder text. Invisible filler lines keep full-row pane
+	// background rendering consistent until the first typed character.
+	fillerLine := string(composerPlaceholderFill)
+	filler := strings.TrimSuffix(strings.Repeat(fillerLine+"\n", composerMaxLines-1), "\n")
+	return composerPlaceholderText + "\n" + filler
 }
 
 func (m *model) syncSessionMetadata() {

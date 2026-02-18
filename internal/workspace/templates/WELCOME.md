@@ -2,24 +2,30 @@
 title: WELCOME
 ---
 
+# WELCOME.md - Workspace Overview
 
+This workspace gives the assistant durable context across sessions.
+Use the files below to make behavior predictable and reliable.
 
-# LocalClaw - Actually Do Things Securely
+## Core Workspace Files
 
-LocalClaw is a powerful tool designed to streamline your workflow by orchestrating local agents. 
+- `AGENTS.md`: operating workflow and startup checklist
+- `SOUL.md`: reasoning style and communication standards
+- `USER.md`: user-specific preferences and priorities
+- `IDENTITY.md`: assistant identity and stance
+- `TOOLS.md`: local environment notes and runbooks
+- `SECURITY.md`: safety guardrails and approval boundaries
+- `HEARTBEAT.md`: optional periodic maintenance checklist
+- `MEMORY.md`: curated long-term memory
+- `memory/YYYY-MM-DD.md`: daily notes and session logs
 
-Whether you're a developer, designer, or researcher, LocalClaw can help you manage and automate tasks efficiently.
+## First-Run Reminder
 
-# LocalClaw gives your existing coding agents superpowers:
-1. Channels - Integrate with communication platforms like Slack or Signal.
-2. Workspace - Define a SOUL.md, USER.md, TOOLS.md, AGENTS.md, and more to instruct your agents.
-3. Memory - Automatically store and retrieve past information from your workspace and sessions.
-4. Cron - Schedule tasks to run at specific intervals or times for automation.
-5. Heartbeat - Monitor tasks and allow agents to adapt to changing conditions.
+If `BOOTSTRAP.md` exists, complete it first and delete it when done.
 
-# LocalClaw is designed for security and privacy:
-- No network services and no data collection.
-- Secure defaults restrict write-access to a sandboxed workspace.
-- Inherits existing Claude Code/OpenAI Codex CLI settings and model providers.
-- Channels do not allow group messaging and require whitelisted senders.
-- Integrates via local MCP stdio server and local file system.
+## Reliability Defaults
+
+- Prefer local, reversible actions first.
+- Validate behavior changes with tests/checks before finishing.
+- Write important context to memory files instead of relying on session recall.
+- Ask before destructive, external, or high-risk actions.

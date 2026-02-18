@@ -4,7 +4,7 @@ This document describes current terminal UI behavior in `internal/tui`.
 
 ## Runtime model
 
-`localclaw tui` runs a Bubble Tea full-screen program with `tea.WithAltScreen` always enabled, and `tea.WithMouseCellMotion` enabled when `app.default.mouse` is on:
+`localclaw tui` renders Bubble Tea `tea.View` state with `AltScreen=true` always enabled and `MouseMode=CellMotion` when `app.default.mouse` is on:
 
 - header line (shown only when mouse capture is on)
 - transcript viewport
@@ -49,7 +49,7 @@ Behavior notes:
 Composer behavior:
 
 - `Enter`: submit input (slash commands execute immediately; non-slash prompts queue FIFO while a run is active)
-- `Ctrl+J`: insert newline
+- `Shift+Enter`: insert newline
 - `Tab`: autocomplete selected slash command when typing `/...`
 - `Shift+Tab`: move slash menu selection backward
 - `Up/Down`: slash-menu navigation when visible; with menu closed they continue prompt history traversal only after a non-empty draft (or active history selection), otherwise they pass through for transcript scrolling
@@ -215,7 +215,7 @@ Current tests in `internal/tui/app_test.go` cover:
 - history navigation keybindings
 - header workspace path resolution
 - layout overflow safeguards
-- Bubble Tea program startup options
+- Bubble Tea view mode behavior (`AltScreen` and mouse mode)
 
 When changing keybindings, slash commands, or status behavior:
 

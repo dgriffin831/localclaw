@@ -22,7 +22,7 @@ Keep it current when architecture, tooling, or workflows change.
 
 ## Current Stack (Canonical)
 
-- Language/runtime: Go `1.17`.
+- Language/runtime: Go `1.24.2`.
 - Process model: single-process CLI only (`cmd/localclaw`).
 - TUI stack: Bubble Tea + Bubbles + Lip Gloss + Glamour.
 - LLM adapter: local Claude Code CLI invocation (`internal/llm/claudecode`).

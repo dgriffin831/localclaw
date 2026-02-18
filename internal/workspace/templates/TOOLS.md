@@ -3,38 +3,37 @@ title: TOOLS
 ---
 # TOOLS.md - Local Tooling Notes
 
-This file is for environment-specific notes.
-It does not define tool availability; it records how tools are used in this workspace.
+This file stores environment-specific details that skills and generic docs do not cover.
+Keep entries concrete and operational.
 
-## Common Commands
+## Verification Snapshot
 
-```bash
-go test ./...
-go test ./internal/config
-go test ./internal/runtime
-go test ./internal/tui
-go run ./cmd/localclaw check
-go run ./cmd/localclaw tui
-go fmt ./...
-```
+Record key providers/tools and how they were verified.
+Update whenever tooling changes.
 
-## Local Conventions
+| Tool or Provider | How verified | Notable capabilities | Last verified |
+| --- | --- | --- | --- |
+| _Example: Primary coding agent CLI_ | _Command/path_ | _Skills, MCP support, constraints_ | YYYY-MM-DD |
+| _Example: Secondary assistant CLI_ | _Command/path_ | _Strengths, limits_ | YYYY-MM-DD |
 
-- Prefer `rg` for file/content search.
-- Stage changes intentionally; avoid blind `git add .`.
-- Keep commits focused and use conventional commit prefixes.
+## Environment Notes
 
-## Workspace-Specific Notes
+Add practical details that improve reliability, for example:
 
-Add practical details here, for example:
+- Shell aliases and non-default binary paths
+- Repository runbooks and common command sequences
+- Channel/account naming conventions
+- Hostnames, device nicknames, or local service labels
+- Platform formatting constraints (for example markdown limitations)
 
-- Preferred shell aliases
-- Non-default tool paths
-- Channel account naming conventions (Slack/Signal)
-- Repo-specific runbooks and shortcuts
+## Safe-Action Checklist
+
+- Verify command scope before execution.
+- Prefer reversible operations when possible.
+- Confirm before destructive actions.
+- Confirm before actions that publish, send, or sync externally.
 
 ## Safety Reminders
 
-- Verify command impact before execution.
-- Confirm before destructive operations.
-- Avoid persisting secrets in workspace markdown files.
+- Do not store secrets in workspace markdown unless explicitly requested.
+- Redact or omit credentials, tokens, and private keys.

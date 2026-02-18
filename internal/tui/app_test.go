@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/llm"
@@ -50,13 +50,34 @@ func latestToolCard(messages []chatMessage) *toolCardMessage {
 	return nil
 }
 
-func startupOptionBits(t *testing.T, p *tea.Program) uint64 {
-	t.Helper()
-	field := reflect.ValueOf(p).Elem().FieldByName("startupOptions")
-	if !field.IsValid() {
-		t.Fatalf("bubbletea program missing startupOptions field")
+func keyText(text string) tea.KeyPressMsg {
+	key := tea.KeyPressMsg{Text: text}
+	runes := []rune(text)
+	switch len(runes) {
+	case 0:
+		return key
+	case 1:
+		key.Code = runes[0]
+	default:
+		key.Code = tea.KeyExtended
 	}
-	return field.Uint()
+	return key
+}
+
+func keyCode(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code}
+}
+
+func keyCtrl(char rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: char, Mod: tea.ModCtrl}
+}
+
+func keyShift(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code, Mod: tea.ModShift}
+}
+
+func viewText(v tea.View) string {
+	return fmt.Sprint(v.Content)
 }
 
 func cmdEmitsBootstrapSeedTrigger(cmd tea.Cmd) bool {
@@ -284,7 +305,7 @@ func TestComposerFooterShowsShortcutsAndRuntimeSettings(t *testing.T) {
 	m.mouseEnabled = false
 
 	got := ansiEscapePattern.ReplaceAllString(m.composerFooterView(), "")
-	if !strings.Contains(got, "Ctrl+J newline") || !strings.Contains(got, "/shortcuts") {
+	if !strings.Contains(got, "Shift+Enter newline") || !strings.Contains(got, "/shortcuts") {
 		t.Fatalf("expected composer footer left side to include shortcuts hint, got %q", got)
 	}
 	if !strings.Contains(got, "provider:") || !strings.Contains(got, "model:") || !strings.Contains(got, "reasoning:") || !strings.Contains(got, "mouse:off") {
@@ -309,14 +330,14 @@ func TestLayoutReservesGapBetweenTranscriptAndComposer(t *testing.T) {
 	if expected < 1 {
 		expected = 1
 	}
-	if m.viewport.Height != expected {
-		t.Fatalf("expected viewport height %d with one-row transcript/composer gap, got %d", expected, m.viewport.Height)
+	if m.viewport.Height() != expected {
+		t.Fatalf("expected viewport height %d with one-row transcript/composer gap, got %d", expected, m.viewport.Height())
 	}
 }
 
 func TestInputAcceptsTyping(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	updated, _ := m.Update(keyText("h"))
 	next := updated.(model)
 
 	if got := next.input.Value(); got != "h" {
@@ -343,43 +364,126 @@ func TestInputViewShowsSinglePromptMarker(t *testing.T) {
 func TestInputUsesUniformBackgroundAcrossComposerLines(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 
-	if got := fmt.Sprint(m.input.FocusedStyle.Text.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
-		t.Fatalf("expected textarea text background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.Text.GetBackground())
+	styles := m.input.Styles()
+	if got := fmt.Sprint(styles.Focused.Text.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected textarea text background %v, got %v", colorBackgroundPane, styles.Focused.Text.GetBackground())
 	}
-	if got := fmt.Sprint(m.input.FocusedStyle.CursorLine.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
-		t.Fatalf("expected cursor-line background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.CursorLine.GetBackground())
+	if got := fmt.Sprint(styles.Focused.CursorLine.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected cursor-line background %v, got %v", colorBackgroundPane, styles.Focused.CursorLine.GetBackground())
 	}
-	if got := fmt.Sprint(m.input.FocusedStyle.Placeholder.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
-		t.Fatalf("expected placeholder background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.Placeholder.GetBackground())
+	if got := fmt.Sprint(styles.Focused.Placeholder.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected placeholder background %v, got %v", colorBackgroundPane, styles.Focused.Placeholder.GetBackground())
 	}
 }
 
-func TestInputInsertNewlineUsesCtrlJ(t *testing.T) {
+func TestInputPlaceholderCursorAvoidsTerminalDefaultReverseColor(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	rendered := m.input.View()
+	if strings.Contains(rendered, "\x1b[7;37m") || strings.Contains(rendered, "\x1b[7;97m") {
+		t.Fatalf("expected placeholder cursor to avoid terminal default reverse color escape sequence, got %q", rendered)
+	}
+}
+
+func TestInputPlaceholderAvoidsUnstyledTrailingPadding(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	rendered := m.input.View()
+	if matched, err := regexp.MatchString(`\x1b\[m {20,}\x1b\[m`, rendered); err != nil {
+		t.Fatalf("unexpected regex error: %v", err)
+	} else if matched {
+		t.Fatalf("expected placeholder rows to avoid wide unstyled trailing regions, got %q", rendered)
+	}
+}
+
+func TestInputCursorUsesVisibleAccentColor(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	styles := m.input.Styles()
+	if got := fmt.Sprint(styles.Cursor.Color); got != fmt.Sprint(colorPrimary) {
+		t.Fatalf("expected cursor color %v, got %v", colorPrimary, styles.Cursor.Color)
+	}
+}
+
+func TestInputInsertNewlineBindingUsesShiftEnter(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 
 	got := m.input.KeyMap.InsertNewline.Keys()
-	if !reflect.DeepEqual(got, []string{"ctrl+j"}) {
-		t.Fatalf("expected insert newline binding [ctrl+j], got %v", got)
+	if !reflect.DeepEqual(got, []string{"shift+enter"}) {
+		t.Fatalf("expected insert newline binding [shift+enter], got %v", got)
 	}
 }
 
-func TestCtrlJInsertsNewlineInsteadOfSubmitting(t *testing.T) {
+func TestCtrlJDoesNotInsertNewline(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	updated, _ := m.Update(keyText("h"))
 	next := updated.(model)
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	updated, _ = next.Update(keyCtrl('j'))
+	next = updated.(model)
+
+	if got := next.input.Value(); got != "h" {
+		t.Fatalf("expected ctrl+j to leave input unchanged, got %q", got)
+	}
+}
+
+func TestShiftEnterInsertsNewlineInsteadOfSubmitting(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	updated, _ := m.Update(keyText("h"))
+	next := updated.(model)
+	updated, _ = next.Update(keyShift(tea.KeyEnter))
 	next = updated.(model)
 
 	if got := next.input.Value(); got != "h\n" {
-		t.Fatalf("expected ctrl+j to insert newline, got %q", got)
+		t.Fatalf("expected shift+enter to insert newline, got %q", got)
+	}
+}
+
+func TestAltEnterSubmitsInput(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.messages = nil
+
+	updated, _ := m.Update(keyText("h"))
+	next := updated.(model)
+	updated, _ = next.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
+	next = updated.(model)
+
+	if got := next.input.Value(); got != "" {
+		t.Fatalf("expected alt+enter submit to clear input, got %q", got)
+	}
+	if len(next.messages) < 2 || next.messages[0].Role != roleUser || next.messages[0].Raw != "h" {
+		t.Fatalf("expected alt+enter to submit user input, got messages=%v", next.messages)
+	}
+}
+
+func TestEnterSubmitsInput(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.messages = nil
+
+	updated, _ := m.Update(keyText("h"))
+	next := updated.(model)
+	updated, _ = next.Update(keyCode(tea.KeyEnter))
+	next = updated.(model)
+
+	if got := next.input.Value(); got != "" {
+		t.Fatalf("expected enter submit to clear input, got %q", got)
+	}
+	if len(next.messages) < 2 {
+		t.Fatalf("expected submit to append user and runtime status messages, got %d", len(next.messages))
+	}
+	if next.messages[0].Role != roleUser || next.messages[0].Raw != "h" {
+		t.Fatalf("expected first message to be submitted user prompt, got role=%q raw=%q", next.messages[0].Role, next.messages[0].Raw)
+	}
+	if next.messages[1].Role != roleSystem || next.messages[1].Raw != "runtime unavailable" {
+		t.Fatalf("expected runtime unavailable system message after submit, got role=%q raw=%q", next.messages[1].Role, next.messages[1].Raw)
 	}
 }
 
 func TestMultilinePasteNormalizesCarriageReturns(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line 1\rline 2\r\nline 3")})
+	updated, _ := m.Update(keyText("line 1\rline 2\r\nline 3"))
 	next := updated.(model)
 
 	if got := next.input.Value(); got != "line 1\nline 2\nline 3" {
@@ -387,13 +491,16 @@ func TestMultilinePasteNormalizesCarriageReturns(t *testing.T) {
 	}
 }
 
-func TestInputHintMentionsCtrlJ(t *testing.T) {
+func TestInputHintMentionsShiftEnter(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.width = 220
 
 	hint := m.composerFooterView()
-	if !strings.Contains(hint, "Ctrl+J newline") {
-		t.Fatalf("expected input hint to mention Ctrl+J newline, got %q", hint)
+	if !strings.Contains(hint, "Shift+Enter newline") {
+		t.Fatalf("expected input hint to mention Shift+Enter newline, got %q", hint)
+	}
+	if strings.Contains(hint, "Ctrl+J") {
+		t.Fatalf("expected input hint to omit Ctrl+J newline shortcut, got %q", hint)
 	}
 	if !strings.Contains(hint, "Ctrl+Y mouse") {
 		t.Fatalf("expected input hint to mention Ctrl+Y mouse toggle, got %q", hint)
@@ -509,7 +616,7 @@ func TestQueuedInputAutoRuns(t *testing.T) {
 		m.activeRunID = 61
 		m.queuedInputs = []string{"queued after abort"}
 
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		updated, _ := m.Update(keyCode(tea.KeyEsc))
 		next := updated.(model)
 
 		if len(next.queuedInputs) != 0 {
@@ -635,7 +742,7 @@ func TestViewDoesNotOverflowHeight(t *testing.T) {
 	next := updated.(model)
 
 	view := next.View()
-	lines := strings.Count(view, "\n") + 1
+	lines := strings.Count(viewText(view), "\n") + 1
 	if lines > 24 {
 		t.Fatalf("expected view lines to fit terminal height, got %d lines for height 24", lines)
 	}
@@ -929,7 +1036,7 @@ func TestWelcomeMessageRendersMarkdownInTranscript(t *testing.T) {
 	}
 
 	m := newModel(context.Background(), nil, cfg)
-	m.viewport.Width = 80
+	m.viewport.SetWidth(80)
 	rendered := m.renderTranscript()
 
 	if !strings.Contains(rendered, "Heading") {
@@ -954,7 +1061,7 @@ func TestWelcomeMessageRendersOrderedListMarkersWithSpacing(t *testing.T) {
 	}
 
 	m := newModel(context.Background(), nil, cfg)
-	m.viewport.Width = 80
+	m.viewport.SetWidth(80)
 	rendered := ansiEscapePattern.ReplaceAllString(m.renderTranscript(), "")
 
 	if !strings.Contains(rendered, "1. Run check") {
@@ -967,7 +1074,7 @@ func TestWelcomeMessageRendersOrderedListMarkersWithSpacing(t *testing.T) {
 
 func TestUserMessageRenderingPreservesLineBreaks(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
-	m.viewport.Width = 90
+	m.viewport.SetWidth(90)
 	m.messages = nil
 	m.addUser("line 1\nline 2\nline 3")
 
@@ -989,11 +1096,11 @@ func TestUserMessageRenderingPreservesLineBreaks(t *testing.T) {
 func TestSlashAutocompleteTabCompletesCommand(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	updated, _ := m.Update(keyText("/"))
 	next := updated.(model)
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	updated, _ = next.Update(keyText("h"))
 	next = updated.(model)
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = next.Update(keyCode(tea.KeyTab))
 	next = updated.(model)
 
 	if got := next.input.Value(); got != "/help " {
@@ -1005,14 +1112,14 @@ func TestSlashAutocompleteDownThenTabCompletesNextCommand(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.rememberHistory("prior prompt")
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	updated, _ := m.Update(keyText("/"))
 	next := updated.(model)
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = next.Update(keyCode(tea.KeyDown))
 	next = updated.(model)
 	if got := next.input.Value(); got != "/" {
 		t.Fatalf("expected down arrow to keep slash input when menu is visible, got %q", got)
 	}
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, _ = next.Update(keyCode(tea.KeyTab))
 	next = updated.(model)
 
 	if got := next.input.Value(); got != "/status " {
@@ -1026,25 +1133,25 @@ func TestHistoryNavigationUsesCtrlPAndCtrlN(t *testing.T) {
 	m.rememberHistory("second")
 	m.input.SetValue("draft")
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	updated, _ := m.Update(keyCtrl('p'))
 	next := updated.(model)
 	if got := next.input.Value(); got != "second" {
 		t.Fatalf("expected ctrl+p to load latest history, got %q", got)
 	}
 
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	updated, _ = next.Update(keyCtrl('p'))
 	next = updated.(model)
 	if got := next.input.Value(); got != "first" {
 		t.Fatalf("expected second ctrl+p to load older history, got %q", got)
 	}
 
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	updated, _ = next.Update(keyCtrl('n'))
 	next = updated.(model)
 	if got := next.input.Value(); got != "second" {
 		t.Fatalf("expected ctrl+n to move forward in history, got %q", got)
 	}
 
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	updated, _ = next.Update(keyCtrl('n'))
 	next = updated.(model)
 	if got := next.input.Value(); got != "draft" {
 		t.Fatalf("expected ctrl+n to restore draft after history end, got %q", got)
@@ -1057,25 +1164,25 @@ func TestArrowKeysNavigateHistoryWhenSlashMenuClosed(t *testing.T) {
 	m.rememberHistory("second")
 	m.input.SetValue("draft")
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ := m.Update(keyCode(tea.KeyUp))
 	next := updated.(model)
 	if got := next.input.Value(); got != "second" {
 		t.Fatalf("expected up arrow to load latest history, got %q", got)
 	}
 
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ = next.Update(keyCode(tea.KeyUp))
 	next = updated.(model)
 	if got := next.input.Value(); got != "first" {
 		t.Fatalf("expected second up arrow to load older history, got %q", got)
 	}
 
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = next.Update(keyCode(tea.KeyDown))
 	next = updated.(model)
 	if got := next.input.Value(); got != "second" {
 		t.Fatalf("expected down arrow to move forward in history, got %q", got)
 	}
 
-	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = next.Update(keyCode(tea.KeyDown))
 	next = updated.(model)
 	if got := next.input.Value(); got != "draft" {
 		t.Fatalf("expected down arrow to restore draft after history end, got %q", got)
@@ -1086,7 +1193,7 @@ func TestArrowKeysDoNotStartHistoryFromEmptyDraft(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.rememberHistory("first")
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ := m.Update(keyCode(tea.KeyUp))
 	next := updated.(model)
 	if got := next.input.Value(); got != "" {
 		t.Fatalf("expected empty draft to remain unchanged, got %q", got)
@@ -1117,28 +1224,28 @@ func TestCtrlYTogglesMouseCapture(t *testing.T) {
 		t.Fatalf("expected mouse capture to start disabled")
 	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	updated, cmd := m.Update(keyCtrl('y'))
 	next := updated.(model)
 	if !next.mouseEnabled {
 		t.Fatalf("expected ctrl+y to enable mouse capture")
 	}
-	if cmd == nil {
-		t.Fatalf("expected ctrl+y to emit enable-mouse command")
+	if cmd != nil {
+		t.Fatalf("expected ctrl+y not to emit imperative mouse command")
 	}
-	if got := reflect.TypeOf(cmd()).String(); got != "tea.enableMouseCellMotionMsg" {
-		t.Fatalf("expected enable mouse command type, got %s", got)
+	if got := next.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("expected view mouse mode cell-motion when enabled, got %v", got)
 	}
 
-	updated, cmd = next.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
+	updated, cmd = next.Update(keyCtrl('y'))
 	next = updated.(model)
 	if next.mouseEnabled {
 		t.Fatalf("expected second ctrl+y to disable mouse capture")
 	}
-	if cmd == nil {
-		t.Fatalf("expected second ctrl+y to emit disable-mouse command")
+	if cmd != nil {
+		t.Fatalf("expected second ctrl+y not to emit imperative mouse command")
 	}
-	if got := reflect.TypeOf(cmd()).String(); got != "tea.disableMouseMsg" {
-		t.Fatalf("expected disable mouse command type, got %s", got)
+	if got := next.View().MouseMode; got != tea.MouseModeNone {
+		t.Fatalf("expected view mouse mode none when disabled, got %v", got)
 	}
 }
 
@@ -1169,8 +1276,11 @@ func TestHandleSlashShortcutsShowsKeyboardShortcuts(t *testing.T) {
 	if !strings.Contains(got, "keyboard shortcuts:") {
 		t.Fatalf("expected /shortcuts output heading, got %q", got)
 	}
-	if !strings.Contains(got, "Ctrl+J") || !strings.Contains(got, "insert newline") {
-		t.Fatalf("expected /shortcuts output to include Ctrl+J newline shortcut, got %q", got)
+	if !strings.Contains(got, "Shift+Enter") || !strings.Contains(got, "insert newline") {
+		t.Fatalf("expected /shortcuts output to include Shift+Enter newline shortcut, got %q", got)
+	}
+	if strings.Contains(got, "Alt+Enter") || strings.Contains(got, "Ctrl+J") {
+		t.Fatalf("expected /shortcuts output to omit Alt+Enter/Ctrl+J newline shortcuts, got %q", got)
 	}
 	if !strings.Contains(got, "Ctrl+Y") || !strings.Contains(got, "toggle mouse capture") {
 		t.Fatalf("expected /shortcuts output to include Ctrl+Y mouse shortcut, got %q", got)
@@ -1209,22 +1319,22 @@ func TestHandleSlashMouseTogglesMouseCapture(t *testing.T) {
 	if m.mouseEnabled {
 		t.Fatalf("expected /mouse off to disable mouse capture")
 	}
-	if cmd == nil {
-		t.Fatalf("expected /mouse off to return a disable command")
+	if cmd != nil {
+		t.Fatalf("expected /mouse off not to return an imperative mouse command")
 	}
-	if got := reflect.TypeOf(cmd()).String(); got != "tea.disableMouseMsg" {
-		t.Fatalf("expected disable mouse command type, got %s", got)
+	if got := m.View().MouseMode; got != tea.MouseModeNone {
+		t.Fatalf("expected /mouse off view mode none, got %v", got)
 	}
 
 	cmd = m.handleSlash("/mouse on")
 	if !m.mouseEnabled {
 		t.Fatalf("expected /mouse on to enable mouse capture")
 	}
-	if cmd == nil {
-		t.Fatalf("expected /mouse on to return an enable command")
+	if cmd != nil {
+		t.Fatalf("expected /mouse on not to return an imperative mouse command")
 	}
-	if got := reflect.TypeOf(cmd()).String(); got != "tea.enableMouseCellMotionMsg" {
-		t.Fatalf("expected enable mouse command type, got %s", got)
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("expected /mouse on view mode cell-motion, got %v", got)
 	}
 }
 

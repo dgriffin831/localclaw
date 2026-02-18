@@ -86,7 +86,7 @@ Backup lifecycle notes:
 ## TUI controls
 
 - `Enter` send message (`/` commands run immediately; non-slash prompts queue FIFO while a run is active)
-- `Ctrl+J` insert newline
+- `Shift+Enter` insert newline
 - `Tab` autocomplete selected slash command while typing `/...`
 - `Shift+Tab` move slash-command selection backward
 - `Up/Down` navigate slash-command suggestions when slash menu is open; otherwise they continue prompt history traversal only after a non-empty draft (or active history selection), and default to transcript scrolling from an empty draft

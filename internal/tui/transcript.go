@@ -129,7 +129,7 @@ func (m *model) findOpenToolCardIndex(toolName string) int {
 }
 
 func (m *model) refreshViewport(forceBottom bool) {
-	if m.viewport.Width <= 0 {
+	if m.viewport.Width() <= 0 {
 		return
 	}
 
@@ -146,7 +146,7 @@ func (m *model) renderTranscript() string {
 		return ""
 	}
 
-	contentWidth := m.viewport.Width - 6
+	contentWidth := m.viewport.Width() - 6
 	if contentWidth < 20 {
 		contentWidth = 20
 	}

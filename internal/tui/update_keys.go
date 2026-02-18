@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 )
 
-func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
+func (m *model) handleKeyMsg(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))) {
 		if strings.TrimSpace(m.input.Value()) != "" {
 			m.input.Reset()
@@ -57,19 +57,16 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.mouseEnabled = !m.mouseEnabled
 		m.addSystem(fmt.Sprintf("mouse capture: %s", onOff(m.mouseEnabled)))
 		m.refreshViewport(true)
-		if m.mouseEnabled {
-			return true, tea.EnableMouseCellMotion
-		}
-		return true, tea.DisableMouse
+		return true, nil
 	}
 
-	if msg.Type == tea.KeyShiftTab {
+	if key.Matches(msg, key.NewBinding(key.WithKeys("shift+tab"))) {
 		if m.moveSlashSelection(-1) {
 			return true, nil
 		}
 	}
 
-	if msg.Type == tea.KeyTab {
+	if msg.Code == tea.KeyTab {
 		if m.applySlashCompletion() {
 			m.adjustInputHeight()
 			m.layout()
@@ -84,7 +81,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 
-	if msg.Type == tea.KeyEnter && !msg.Alt && !key.Matches(msg, m.input.KeyMap.InsertNewline) {
+	if msg.Code == tea.KeyEnter && !key.Matches(msg, m.input.KeyMap.InsertNewline) {
 		cmd := m.submitInput()
 		return true, cmd
 	}
@@ -105,7 +102,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 	}
 
-	if msg.Type == tea.KeyUp {
+	if msg.Code == tea.KeyUp {
 		if m.moveSlashSelection(-1) {
 			return true, nil
 		}
@@ -116,7 +113,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 	}
 
-	if msg.Type == tea.KeyDown {
+	if msg.Code == tea.KeyDown {
 		if m.moveSlashSelection(1) {
 			return true, nil
 		}
@@ -192,11 +189,11 @@ func (m *model) canUseArrowHistory() bool {
 	return m.input.Value() != ""
 }
 
-func (m *model) handleMultilinePaste(msg tea.KeyMsg) bool {
-	if msg.Type != tea.KeyRunes || len(msg.Runes) == 0 {
+func (m *model) handleMultilinePaste(msg tea.KeyPressMsg) bool {
+	raw := msg.Text
+	if raw == "" {
 		return false
 	}
-	raw := string(msg.Runes)
 	if !strings.ContainsAny(raw, "\r\n") {
 		return false
 	}

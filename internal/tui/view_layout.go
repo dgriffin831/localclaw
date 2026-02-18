@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 func (m *model) headerView() string {
@@ -138,15 +138,15 @@ func (m *model) composerFooterView() string {
 }
 
 func (m *model) inputHintText(innerWidth int) string {
-	hintText := "Ctrl+J newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
+	hintText := "Shift+Enter newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
 	if innerWidth < 90 {
-		hintText = "Ctrl+J newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
+		hintText = "Shift+Enter newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
 	}
 	if innerWidth < 70 {
-		hintText = "Ctrl+J newline • Ctrl+Y mouse • /shortcuts"
+		hintText = "Shift+Enter newline • Ctrl+Y mouse • /shortcuts"
 	}
 	if innerWidth < 42 {
-		hintText = "Ctrl+J • /shortcuts"
+		hintText = "Shift+Enter • /shortcuts"
 	}
 	return truncateText(hintText, innerWidth)
 }
@@ -176,8 +176,8 @@ func (m *model) layout() {
 		viewportHeight = 1
 	}
 
-	m.viewport.Width = max(20, m.width)
-	m.viewport.Height = viewportHeight
+	m.viewport.SetWidth(max(20, m.width))
+	m.viewport.SetHeight(viewportHeight)
 }
 
 func optionalRowHeight(row string) int {

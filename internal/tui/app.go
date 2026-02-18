@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/dgriffin831/localclaw/internal/config"
 	"github.com/dgriffin831/localclaw/internal/runtime"
@@ -22,15 +22,12 @@ func Run(ctx context.Context, app *runtime.App, cfg config.Config) error {
 		p.Send(ctxDoneMsg{})
 	}()
 
-	return p.Start()
+	_, err := p.Run()
+	return err
 }
 
 func newProgram(m model) *tea.Program {
-	options := []tea.ProgramOption{tea.WithAltScreen()}
-	if m.mouseEnabled {
-		options = append(options, tea.WithMouseCellMotion())
-	}
-	return tea.NewProgram(m, options...)
+	return tea.NewProgram(m)
 }
 
 func (m model) Init() tea.Cmd {
@@ -61,7 +58,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport(true)
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		handled, cmd := m.handleKeyMsg(msg)
 		if handled {
 			return m, cmd
@@ -172,9 +169,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
-		return "loading..."
+		v := tea.NewView("loading...")
+		v.AltScreen = true
+		if m.mouseEnabled {
+			v.MouseMode = tea.MouseModeCellMotion
+		}
+		return v
 	}
 
 	header := m.headerView()
@@ -193,8 +195,13 @@ func (m model) View() string {
 	}
 	parts = append(parts, input, footer)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return lipgloss.NewStyle().
+	v := tea.NewView(lipgloss.NewStyle().
 		Background(colorBackground).
 		Foreground(colorText).
-		Render(content)
+		Render(content))
+	v.AltScreen = true
+	if m.mouseEnabled {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
 }

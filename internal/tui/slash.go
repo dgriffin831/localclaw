@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/dgriffin831/localclaw/internal/llm"
 	"github.com/dgriffin831/localclaw/internal/runtime"
@@ -106,12 +106,10 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 			m.mouseEnabled = true
 			m.addSystem("mouse capture: on")
 			m.refreshViewport(true)
-			return tea.EnableMouseCellMotion
 		} else if arg == "off" {
 			m.mouseEnabled = false
 			m.addSystem("mouse capture: off")
 			m.refreshViewport(true)
-			return tea.DisableMouse
 		} else {
 			m.addSystem("usage: /mouse <on|off>")
 		}
@@ -875,7 +873,7 @@ func keyboardShortcutsText() string {
 	lines := []string{
 		"keyboard shortcuts:",
 		"Enter                  submit input",
-		"Ctrl+J                 insert newline",
+		"Shift+Enter            insert newline",
 		"Tab                    autocomplete selected slash command",
 		"Shift+Tab              move slash-command selection backward",
 		"Up/Down                navigate slash menu; when hidden, use history after non-empty draft",
