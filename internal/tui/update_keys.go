@@ -106,7 +106,7 @@ func (m *model) handleKeyMsg(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if m.moveSlashSelection(-1) {
 			return true, nil
 		}
-		if m.canUseArrowHistory() && m.useHistory(-1) {
+		if m.useHistory(-1) {
 			m.updateSlashAutocomplete()
 			m.adjustInputHeight()
 			return true, nil
@@ -117,7 +117,7 @@ func (m *model) handleKeyMsg(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if m.moveSlashSelection(1) {
 			return true, nil
 		}
-		if m.canUseArrowHistory() && m.useHistory(1) {
+		if m.useHistory(1) {
 			m.updateSlashAutocomplete()
 			m.adjustInputHeight()
 			return true, nil
@@ -180,13 +180,6 @@ func (m *model) useHistory(direction int) bool {
 	m.input.SetValue(m.historyDraft)
 	m.input.CursorEnd()
 	return true
-}
-
-func (m *model) canUseArrowHistory() bool {
-	if m.historyIdx != -1 {
-		return true
-	}
-	return m.input.Value() != ""
 }
 
 func (m *model) handleMultilinePaste(msg tea.KeyPressMsg) bool {

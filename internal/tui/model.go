@@ -272,6 +272,7 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	sp.Style = lipgloss.NewStyle().Foreground(colorText)
 
 	vp := viewport.New()
+	vp.KeyMap = transcriptViewportKeyMap()
 	vp.MouseWheelEnabled = true
 
 	m := model{
@@ -303,6 +304,15 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 		m.addSystemMarkdown(welcome)
 	}
 	return m
+}
+
+func transcriptViewportKeyMap() viewport.KeyMap {
+	return viewport.KeyMap{
+		PageDown: key.NewBinding(key.WithKeys("pgdown")),
+		PageUp:   key.NewBinding(key.WithKeys("pgup")),
+		Up:       key.NewBinding(key.WithKeys("ctrl+up")),
+		Down:     key.NewBinding(key.WithKeys("ctrl+down")),
+	}
 }
 
 func composerPlaceholder() string {

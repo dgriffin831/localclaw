@@ -89,8 +89,10 @@ Backup lifecycle notes:
 - `Shift+Enter` insert newline
 - `Tab` autocomplete selected slash command while typing `/...`
 - `Shift+Tab` move slash-command selection backward
-- `Up/Down` navigate slash-command suggestions when slash menu is open; otherwise they continue prompt history traversal only after a non-empty draft (or active history selection), and default to transcript scrolling from an empty draft
+- `Up/Down` navigate slash-command suggestions when slash menu is open; otherwise navigate prompt history
 - `Ctrl+P` / `Ctrl+N` (also `Alt+Up` / `Alt+Down`) navigate prompt history
+- `PgUp` / `PgDn` scroll transcript viewport by page
+- `Ctrl+Up` / `Ctrl+Down` scroll transcript viewport by line
 - `Mouse wheel` scroll transcript viewport
 - `Esc` abort active run
 - `Ctrl+O` expand/collapse tool-card details in the transcript

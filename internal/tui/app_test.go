@@ -72,6 +72,10 @@ func keyCtrl(char rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: char, Mod: tea.ModCtrl}
 }
 
+func keyCtrlCode(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code, Mod: tea.ModCtrl}
+}
+
 func keyShift(code rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: code, Mod: tea.ModShift}
 }
@@ -1189,14 +1193,102 @@ func TestArrowKeysNavigateHistoryWhenSlashMenuClosed(t *testing.T) {
 	}
 }
 
-func TestArrowKeysDoNotStartHistoryFromEmptyDraft(t *testing.T) {
+func TestArrowKeysStartHistoryFromEmptyDraft(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.rememberHistory("first")
+	m.rememberHistory("second")
 
 	updated, _ := m.Update(keyCode(tea.KeyUp))
 	next := updated.(model)
+	if got := next.input.Value(); got != "second" {
+		t.Fatalf("expected up arrow to load latest history from empty draft, got %q", got)
+	}
+
+	updated, _ = next.Update(keyCode(tea.KeyUp))
+	next = updated.(model)
+	if got := next.input.Value(); got != "first" {
+		t.Fatalf("expected second up arrow to load older history, got %q", got)
+	}
+
+	updated, _ = next.Update(keyCode(tea.KeyDown))
+	next = updated.(model)
+	if got := next.input.Value(); got != "second" {
+		t.Fatalf("expected down arrow to move forward in history, got %q", got)
+	}
+
+	updated, _ = next.Update(keyCode(tea.KeyDown))
+	next = updated.(model)
 	if got := next.input.Value(); got != "" {
-		t.Fatalf("expected empty draft to remain unchanged, got %q", got)
+		t.Fatalf("expected down arrow at end of history to restore empty draft, got %q", got)
+	}
+}
+
+func TestJKTypeIntoComposerWithoutScrollingViewport(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.width = 100
+	m.height = 22
+	m.layout()
+	for i := 0; i < 100; i++ {
+		m.addSystem(fmt.Sprintf("line %03d", i))
+	}
+	m.refreshViewport(true)
+	m.viewport.GotoTop()
+
+	startOffset := m.viewport.YOffset()
+	updated, _ := m.Update(keyText("j"))
+	next := updated.(model)
+	if got := next.viewport.YOffset(); got != startOffset {
+		t.Fatalf("expected j key not to scroll transcript viewport, got offset %d", got)
+	}
+	if got := next.input.Value(); got != "j" {
+		t.Fatalf("expected j key to be inserted into composer, got %q", got)
+	}
+
+	updated, _ = next.Update(keyText("k"))
+	next = updated.(model)
+	if got := next.viewport.YOffset(); got != startOffset {
+		t.Fatalf("expected k key not to scroll transcript viewport, got offset %d", got)
+	}
+	if got := next.input.Value(); got != "jk" {
+		t.Fatalf("expected k key to be inserted into composer, got %q", got)
+	}
+}
+
+func TestViewportKeyboardScrollUsesPageKeysAndCtrlArrows(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.width = 100
+	m.height = 22
+	m.layout()
+	for i := 0; i < 160; i++ {
+		m.addSystem(fmt.Sprintf("line %03d", i))
+	}
+	m.refreshViewport(true)
+	m.viewport.GotoTop()
+
+	updated, _ := m.Update(keyCode(tea.KeyPgDown))
+	next := updated.(model)
+	afterPgDown := next.viewport.YOffset()
+	if afterPgDown <= 0 {
+		t.Fatalf("expected pgdown to scroll transcript down, got offset %d", afterPgDown)
+	}
+
+	updated, _ = next.Update(keyCode(tea.KeyPgUp))
+	next = updated.(model)
+	if got := next.viewport.YOffset(); got >= afterPgDown {
+		t.Fatalf("expected pgup to scroll transcript up from %d, got %d", afterPgDown, got)
+	}
+
+	updated, _ = next.Update(keyCtrlCode(tea.KeyDown))
+	next = updated.(model)
+	afterCtrlDown := next.viewport.YOffset()
+	if afterCtrlDown <= 0 {
+		t.Fatalf("expected ctrl+down to scroll transcript down, got offset %d", afterCtrlDown)
+	}
+
+	updated, _ = next.Update(keyCtrlCode(tea.KeyUp))
+	next = updated.(model)
+	if got := next.viewport.YOffset(); got >= afterCtrlDown {
+		t.Fatalf("expected ctrl+up to scroll transcript up from %d, got %d", afterCtrlDown, got)
 	}
 }
 
@@ -1287,6 +1379,12 @@ func TestHandleSlashShortcutsShowsKeyboardShortcuts(t *testing.T) {
 	}
 	if !strings.Contains(got, "Ctrl+O") || !strings.Contains(got, "toggle tool-card expansion") {
 		t.Fatalf("expected /shortcuts output to include Ctrl+O tools shortcut, got %q", got)
+	}
+	if !strings.Contains(got, "PgUp / PgDn") || !strings.Contains(got, "scroll transcript viewport by page") {
+		t.Fatalf("expected /shortcuts output to include PgUp/PgDn transcript scroll shortcut, got %q", got)
+	}
+	if !strings.Contains(got, "Ctrl+Up / Ctrl+Down") || !strings.Contains(got, "scroll transcript viewport by line") {
+		t.Fatalf("expected /shortcuts output to include Ctrl+Up/Ctrl+Down transcript scroll shortcut, got %q", got)
 	}
 	if strings.Contains(got, "Ctrl+T") || strings.Contains(got, "toggle thinking visibility") {
 		t.Fatalf("expected /shortcuts output to omit removed thinking shortcut, got %q", got)

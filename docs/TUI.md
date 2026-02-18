@@ -52,9 +52,11 @@ Composer behavior:
 - `Shift+Enter`: insert newline
 - `Tab`: autocomplete selected slash command when typing `/...`
 - `Shift+Tab`: move slash menu selection backward
-- `Up/Down`: slash-menu navigation when visible; with menu closed they continue prompt history traversal only after a non-empty draft (or active history selection), otherwise they pass through for transcript scrolling
+- `Up/Down`: slash-menu navigation when visible; with menu closed they navigate prompt history
 - `Ctrl+P` / `Ctrl+N`: prompt history navigation
 - `Alt+Up` / `Alt+Down`: history navigation aliases
+- `PgUp` / `PgDn`: transcript scroll by page
+- `Ctrl+Up` / `Ctrl+Down`: transcript scroll by line
 - `Mouse wheel`: transcript scroll
 - Footer row: left side shows keyboard shortcuts hint, right side shows `provider/model/reasoning/verbose/tools/mouse` runtime settings.
 - Queued prompt previews render above the composer input as single-line truncated entries in FIFO execution order.
