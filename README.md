@@ -140,6 +140,7 @@ Optional waiting-text customization:
 - Set `app.thinking_messages` in config to rotate custom waiting text.
 - Messages rotate once per submitted prompt while status is waiting and no stream delta has arrived.
 - If unset, default waiting text is `thinking`.
+- The status row icon is animated and uses the same `thinking` icon for all statuses.
 
 Optional TUI startup defaults:
 

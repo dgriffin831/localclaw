@@ -35,7 +35,8 @@ Status state machine values:
 
 Behavior notes:
 
-- Busy statuses show spinner + elapsed time.
+- Status icons are animated and use the same spinner icon for every status.
+- Busy statuses (`sending`, `waiting`, `streaming`, `tool*`) show elapsed time.
 - While waiting and no stream delta has arrived, status text always shows the active thinking message.
 - Thinking messages come from `app.thinking_messages`; fallback is `thinking`.
 - Status row shows lifecycle text only (`idle`, `waiting`, etc.); runtime settings are rendered in the footer row under the composer.
@@ -56,6 +57,9 @@ Composer behavior:
 - `Alt+Up` / `Alt+Down`: history navigation aliases
 - `Mouse wheel`: transcript scroll
 - Footer row: left side shows keyboard shortcuts hint, right side shows `provider/model/reasoning/verbose/tools/mouse` runtime settings.
+- Multiline paste is normalized so pasted `CR`/`CRLF` line endings are preserved as newline breaks in the composer.
+- Composer prompt uses a single top-row marker (`>`); continuation lines are indented without repeated prompt markers and share the same pane background.
+- Submitted multiline content preserves line breaks in the transcript view (single newlines are no longer collapsed).
 
 Global controls:
 
@@ -166,10 +170,11 @@ Completion behavior:
 
 - Delta chunks append to active assistant message.
 - Final payload replaces assistant text when non-empty.
+- Final assistant response is rendered after tool-card activity so transcript rows remain execution-ordered.
 - If final and delta are both empty, assistant message becomes `(no output)`.
 - Assistant final text is appended to transcript file and token accounting.
 - Tool call/result activity renders as transcript tool cards from provider stream events.
-- Collapsed cards show summary (`tool`, tool name, terminal status).
+- Collapsed cards show summary (`tool`, tool name, key input args when available, terminal status).
 - Expanded cards include call ID, arguments, status, error (if any), and canonical result data fields.
 - Structured argument/result values (maps, slices, JSON strings) render as multiline fenced blocks for readability.
 - Expanded cards omit duplicated result metadata when equivalent context is already shown in call/header fields.

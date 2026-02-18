@@ -34,7 +34,7 @@ func newProgram(m model) *tea.Program {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{textarea.Blink, tickStatus()}
+	cmds := []tea.Cmd{textarea.Blink, tickStatus(), m.spinner.Tick}
 	if m.bootstrapSeedPendingForSession() {
 		cmds = append(cmds, emitBootstrapSeedTrigger())
 	}

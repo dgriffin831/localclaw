@@ -77,7 +77,7 @@ func (m *model) runBootstrapSeedPrompt() tea.Cmd {
 }
 
 func (m *model) activeRunCommands() tea.Cmd {
-	cmds := []tea.Cmd{m.spinner.Tick, tickStatus()}
+	cmds := []tea.Cmd{tickStatus()}
 	if m.streamEvents != nil {
 		cmds = append(cmds, waitStreamEvent(m.activeRunID, m.streamEvents))
 	}
@@ -185,6 +185,8 @@ func (m *model) applyFinal(final string) {
 	if m.activeAssistantIdx < 0 || m.activeAssistantIdx >= len(m.messages) {
 		m.addAssistant("", false)
 	}
+	// Final response should always appear after any tool-card activity.
+	m.ensureActiveAssistantAtEnd()
 	msg := &m.messages[m.activeAssistantIdx]
 	trimmed := strings.TrimSpace(final)
 	if trimmed != "" {
@@ -207,6 +209,22 @@ func (m *model) applyFinal(final string) {
 	}
 	msg.Streaming = false
 	msg.ThinkingPlaceholder = false
+}
+
+func (m *model) ensureActiveAssistantAtEnd() {
+	if m.activeAssistantIdx < 0 || m.activeAssistantIdx >= len(m.messages) {
+		return
+	}
+	if m.activeAssistantIdx == len(m.messages)-1 {
+		return
+	}
+	if m.messages[m.activeAssistantIdx].Role != roleAssistant {
+		return
+	}
+	assistant := m.messages[m.activeAssistantIdx]
+	m.messages = append(m.messages[:m.activeAssistantIdx], m.messages[m.activeAssistantIdx+1:]...)
+	m.messages = append(m.messages, assistant)
+	m.activeAssistantIdx = len(m.messages) - 1
 }
 
 func (m *model) runSessionReset(startNew bool, source string) {

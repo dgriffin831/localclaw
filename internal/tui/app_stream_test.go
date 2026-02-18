@@ -342,6 +342,49 @@ func TestToolResultEventWithoutCallIDStillRendersCard(t *testing.T) {
 	}
 }
 
+func TestFinalResponseRendersAfterToolCards(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.running = true
+	m.activeRunID = 7
+	m.status = statusWaiting
+
+	updated, _ := m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{Type: llm.StreamEventDelta, Text: "draft"},
+	})
+	m = updated.(model)
+	updated, _ = m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{
+			Type: llm.StreamEventToolCall,
+			ToolCall: &llm.ToolCall{
+				ID:   "call-1",
+				Name: "memory_search",
+			},
+		},
+	})
+	m = updated.(model)
+	updated, _ = m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{Type: llm.StreamEventFinal, Text: "final response"},
+	})
+	m = updated.(model)
+
+	if len(m.messages) < 2 {
+		t.Fatalf("expected assistant message and tool card messages, got %d", len(m.messages))
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.Role != roleAssistant {
+		t.Fatalf("expected final assistant response to be last transcript row, got role=%q", last.Role)
+	}
+	if last.Raw != "final response" {
+		t.Fatalf("expected final assistant text to be preserved, got %q", last.Raw)
+	}
+}
+
 func TestToolCardsExpandWithCtrlO(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.running = true
@@ -382,8 +425,11 @@ func TestToolCardsExpandWithCtrlO(t *testing.T) {
 	m = updated.(model)
 
 	collapsed := ansiEscapePattern.ReplaceAllString(m.renderTranscript(), "")
+	if !strings.Contains(collapsed, "tool memory_search • args: query=incident summary • completed") {
+		t.Fatalf("expected collapsed tool card summary to include key args, got %q", collapsed)
+	}
 	if strings.Contains(collapsed, "arg.query: incident summary") {
-		t.Fatalf("expected collapsed tool card to omit args, got %q", collapsed)
+		t.Fatalf("expected collapsed tool card to omit expanded arg rows, got %q", collapsed)
 	}
 	if strings.Contains(collapsed, "data.count: 2") {
 		t.Fatalf("expected collapsed tool card to omit result data, got %q", collapsed)
@@ -400,6 +446,61 @@ func TestToolCardsExpandWithCtrlO(t *testing.T) {
 	}
 	if !strings.Contains(expanded, "data.count: 2") {
 		t.Fatalf("expected expanded tool card to show result data, got %q", expanded)
+	}
+}
+
+func TestToolResultBackfillsEmptyArgValuesFromResultData(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.running = true
+	m.activeRunID = 7
+	m.status = statusWaiting
+	m.toolsExpanded = true
+
+	updated, _ := m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{
+			Type: llm.StreamEventToolCall,
+			ToolCall: &llm.ToolCall{
+				ID:   "ws-1",
+				Name: "web_search",
+				Args: map[string]interface{}{
+					"query":  "",
+					"action": map[string]interface{}{"type": "other"},
+				},
+			},
+		},
+	})
+	m = updated.(model)
+
+	updated, _ = m.Update(streamEventMsg{
+		RunID: 7,
+		OK:    true,
+		Event: llm.StreamEvent{
+			Type: llm.StreamEventToolResult,
+			ToolResult: &llm.ToolResult{
+				CallID: "ws-1",
+				Tool:   "web_search",
+				OK:     true,
+				Status: "completed",
+				Data: map[string]interface{}{
+					"query": "site:github.blog February 2026 GitHub blog announcements",
+					"action": map[string]interface{}{
+						"type":  "search",
+						"query": "site:github.blog February 2026 GitHub blog announcements",
+					},
+				},
+			},
+		},
+	})
+	next := updated.(model)
+
+	rendered := ansiEscapePattern.ReplaceAllString(next.renderTranscript(), "")
+	if strings.Contains(rendered, "arg.query: (empty)") {
+		t.Fatalf("expected empty arg.query to be reconciled from result data, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "arg.query: site:github.blog February 2026 GitHub blog announcements") {
+		t.Fatalf("expected reconciled arg.query in expanded card, got %q", rendered)
 	}
 }
 

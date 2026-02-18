@@ -12,12 +12,9 @@ import (
 )
 
 func (m *model) handleSpinnerTick(msg spinner.TickMsg) tea.Cmd {
-	if m.isBusy() {
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return cmd
-	}
-	return nil
+	var cmd tea.Cmd
+	m.spinner, cmd = m.spinner.Update(msg)
+	return cmd
 }
 
 func (m *model) handleStreamEvent(event llm.StreamEvent) {
@@ -154,7 +151,7 @@ func (m *model) currentThinkingMessage() string {
 }
 
 func (m *model) isBusy() bool {
-	return m.status == statusSending || m.status == statusWaiting || m.status == statusStreaming
+	return m.status == statusSending || m.status == statusWaiting || m.status == statusStreaming || isToolStatus(m.status)
 }
 
 func (m *model) setStatus(next string) {
@@ -163,6 +160,7 @@ func (m *model) setStatus(next string) {
 	}
 	if next != m.status {
 		m.status = next
+		m.syncStatusIconSpinner(next)
 	}
 	if m.isBusy() {
 		if m.statusStartedAt.IsZero() {

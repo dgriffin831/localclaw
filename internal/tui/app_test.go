@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -148,6 +149,54 @@ func TestSpinnerUsesWhiteForeground(t *testing.T) {
 	}
 }
 
+func TestStatusIconSpinnerUsesExpectedAnimationByStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+	}{
+		{name: "idle", status: statusIdle},
+		{name: "sending", status: statusSending},
+		{name: "waiting", status: statusWaiting},
+		{name: "streaming", status: statusStreaming},
+		{name: "tool", status: "tool memory_search"},
+		{name: "aborted", status: statusAborted},
+		{name: "error", status: statusError},
+		{name: "fallback", status: "press ctrl+c again to exit"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := statusIconSpinner(tc.status)
+			if !reflect.DeepEqual(got, spinner.Dot) {
+				t.Fatalf("expected dot spinner for status %q", tc.status)
+			}
+		})
+	}
+}
+
+func TestNewModelStartsWithIdleStatusAnimation(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	if !reflect.DeepEqual(m.spinner.Spinner, statusIconSpinner(statusIdle)) {
+		t.Fatalf("expected new model spinner animation to match idle status")
+	}
+}
+
+func TestSetStatusSwitchesStatusAnimation(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	m.setStatus("tool memory_search")
+	if !reflect.DeepEqual(m.spinner.Spinner, statusIconSpinner("tool memory_search")) {
+		t.Fatalf("expected tool status to set tool animation")
+	}
+
+	m.setStatus(statusError)
+	if !reflect.DeepEqual(m.spinner.Spinner, statusIconSpinner(statusError)) {
+		t.Fatalf("expected error status to set error animation")
+	}
+}
+
 func TestHeaderViewHiddenWhenMouseOff(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.width = 160
@@ -275,6 +324,36 @@ func TestInputAcceptsTyping(t *testing.T) {
 	}
 }
 
+func TestInputViewShowsSinglePromptMarker(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.width = 120
+	m.height = 30
+	m.input.SetValue("line 1\nline 2")
+
+	m.layout()
+	got := ansiEscapePattern.ReplaceAllString(m.inputView(), "")
+	if count := strings.Count(got, composerPrompt); count != 1 {
+		t.Fatalf("expected a single top-row composer prompt marker, got %d in %q", count, got)
+	}
+	if strings.Contains(got, "> line 2") {
+		t.Fatalf("expected continuation line to omit prompt marker, got %q", got)
+	}
+}
+
+func TestInputUsesUniformBackgroundAcrossComposerLines(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	if got := fmt.Sprint(m.input.FocusedStyle.Text.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected textarea text background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.Text.GetBackground())
+	}
+	if got := fmt.Sprint(m.input.FocusedStyle.CursorLine.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected cursor-line background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.CursorLine.GetBackground())
+	}
+	if got := fmt.Sprint(m.input.FocusedStyle.Placeholder.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected placeholder background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.Placeholder.GetBackground())
+	}
+}
+
 func TestInputInsertNewlineUsesCtrlJ(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 
@@ -294,6 +373,17 @@ func TestCtrlJInsertsNewlineInsteadOfSubmitting(t *testing.T) {
 
 	if got := next.input.Value(); got != "h\n" {
 		t.Fatalf("expected ctrl+j to insert newline, got %q", got)
+	}
+}
+
+func TestMultilinePasteNormalizesCarriageReturns(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line 1\rline 2\r\nline 3")})
+	next := updated.(model)
+
+	if got := next.input.Value(); got != "line 1\nline 2\nline 3" {
+		t.Fatalf("expected multiline paste newlines to be preserved, got %q", got)
 	}
 }
 
@@ -661,6 +751,27 @@ func TestWelcomeMessageRendersOrderedListMarkersWithSpacing(t *testing.T) {
 	}
 	if strings.Contains(rendered, "1Run check") {
 		t.Fatalf("expected ordered list marker not to run into text, got %q", rendered)
+	}
+}
+
+func TestUserMessageRenderingPreservesLineBreaks(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.viewport.Width = 90
+	m.messages = nil
+	m.addUser("line 1\nline 2\nline 3")
+
+	rendered := ansiEscapePattern.ReplaceAllString(m.renderTranscript(), "")
+	if strings.Contains(rendered, "line 1 line 2 line 3") {
+		t.Fatalf("expected user message line breaks to be preserved, got %q", rendered)
+	}
+	idx1 := strings.Index(rendered, "line 1")
+	idx2 := strings.Index(rendered, "line 2")
+	idx3 := strings.Index(rendered, "line 3")
+	if idx1 == -1 || idx2 == -1 || idx3 == -1 {
+		t.Fatalf("expected rendered transcript to include all lines, got %q", rendered)
+	}
+	if !(idx1 < idx2 && idx2 < idx3) {
+		t.Fatalf("expected rendered line order line1->line2->line3, got %q", rendered)
 	}
 }
 

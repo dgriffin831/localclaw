@@ -74,6 +74,13 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		}
 	}
 
+	if m.handleMultilinePaste(msg) {
+		m.updateSlashAutocomplete()
+		m.adjustInputHeight()
+		m.layout()
+		return true, nil
+	}
+
 	if msg.Type == tea.KeyEnter && !msg.Alt && !key.Matches(msg, m.input.KeyMap.InsertNewline) {
 		cmd := m.submitInput()
 		return true, cmd
@@ -180,4 +187,21 @@ func (m *model) canUseArrowHistory() bool {
 		return true
 	}
 	return m.input.Value() != ""
+}
+
+func (m *model) handleMultilinePaste(msg tea.KeyMsg) bool {
+	if msg.Type != tea.KeyRunes || len(msg.Runes) == 0 {
+		return false
+	}
+	raw := string(msg.Runes)
+	if !strings.ContainsAny(raw, "\r\n") {
+		return false
+	}
+	m.input.InsertString(normalizeInputNewlines(raw))
+	return true
+}
+
+func normalizeInputNewlines(value string) string {
+	normalized := strings.ReplaceAll(value, "\r\n", "\n")
+	return strings.ReplaceAll(normalized, "\r", "\n")
 }
