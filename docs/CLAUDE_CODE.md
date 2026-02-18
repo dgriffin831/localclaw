@@ -14,7 +14,7 @@ Implementation location:
   - security-mode flags derived from runtime request metadata:
     - `full-access` -> `--dangerously-skip-permissions`
     - `sandbox-write` -> `--permission-mode acceptEdits --add-dir <resolved-workspace-path>`
-    - `read-only` -> `--permission-mode plan --add-dir <resolved-workspace-path>`
+    - `read-only` -> `--permission-mode dontAsk --add-dir <resolved-workspace-path>`
   - with `--strict-mcp-config` when enabled
   - with session continuation args based on config and persisted provider session state:
     - start mode default: `--session-id <generated-id>`

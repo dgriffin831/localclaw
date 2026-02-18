@@ -160,6 +160,12 @@ Persistence characteristics:
 - `timeout_seconds` overrides per-job timeout when set.
 - one job failing does not stop scheduler progress for other jobs.
 
+## Observability
+
+- Cron run logs are written to `<app.root>/logs/crons.log` (default: `~/.localclaw/logs/crons.log`).
+- Logs are file-only and are not printed to stdout, so TUI rendering is not interrupted.
+- Each completed run records job id, status, duration, and error text when present.
+
 ## Error Contract
 
 Common validation and runtime errors:

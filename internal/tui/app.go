@@ -14,7 +14,12 @@ import (
 )
 
 func Run(ctx context.Context, app *runtime.App, cfg config.Config) error {
+	return RunWithInitialPrompt(ctx, app, cfg, "")
+}
+
+func RunWithInitialPrompt(ctx context.Context, app *runtime.App, cfg config.Config, initialPrompt string) error {
 	m := newModel(ctx, app, cfg)
+	m.initialPrompt = strings.TrimSpace(initialPrompt)
 	p := newProgram(m)
 
 	go func() {
@@ -32,7 +37,9 @@ func newProgram(m model) *tea.Program {
 
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{textarea.Blink, tickStatus(), m.spinner.Tick}
-	if m.bootstrapSeedPendingForSession() {
+	if m.initialPromptPending() {
+		cmds = append(cmds, emitInitialPromptTrigger())
+	} else if m.bootstrapSeedPendingForSession() {
 		cmds = append(cmds, emitBootstrapSeedTrigger())
 	}
 	return tea.Batch(cmds...)
@@ -48,6 +55,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case bootstrapSeedTriggerMsg:
 		if cmd := m.runBootstrapSeedPrompt(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case initialPromptTriggerMsg:
+		if cmd := m.runInitialPrompt(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 

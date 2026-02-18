@@ -405,7 +405,7 @@ func (c *LocalClient) buildSecurityArgsForRequest(req llm.Request) []string {
 		}
 		return args
 	case "read-only":
-		args := []string{"--permission-mode", "plan"}
+		args := []string{"--permission-mode", "dontAsk"}
 		if workspacePath != "" {
 			args = append(args, "--add-dir", workspacePath)
 		}

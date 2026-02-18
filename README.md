@@ -31,6 +31,7 @@ go run ./cmd/localclaw
 go run ./cmd/localclaw doctor
 go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
+go run ./cmd/localclaw tui "run BOOTSTRAP.md"
 go run ./cmd/localclaw backup
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw channels serve --once
@@ -43,6 +44,7 @@ Run specific command modes:
 go run ./cmd/localclaw doctor
 go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
+go run ./cmd/localclaw tui "run BOOTSTRAP.md"
 go run ./cmd/localclaw backup
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
@@ -138,6 +140,7 @@ For providers that omit explicit tool metadata in stream events (for example Cod
 
 On TUI startup and on `/new`, `localclaw` renders workspace `WELCOME.md` (if present) as a system message.
 When workspace `BOOTSTRAP.md` exists and the active session has no transcript yet, TUI auto-submits a first onboarding seed prompt: `Wake up, my friend!`.
+`localclaw tui [initial-prompt]` accepts an optional startup prompt argument; when provided, it auto-submits that prompt and suppresses the default bootstrap seed run for that startup.
 
 Optional waiting-text customization:
 

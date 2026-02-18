@@ -19,7 +19,7 @@ import (
 	"github.com/dgriffin831/localclaw/internal/tui"
 )
 
-var runTUIProgram = tui.Run
+var runTUIProgram = tui.RunWithInitialPrompt
 var startBackupLoops = cli.StartBackupLoops
 
 func main() {
@@ -35,6 +35,10 @@ type doctorRuntime interface {
 
 type doctorOptions struct {
 	Deep bool
+}
+
+type tuiOptions struct {
+	InitialPrompt string
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -70,6 +74,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		doctorOpts = opts
 	}
+	tuiOpts := tuiOptions{}
+	if mode == "tui" {
+		opts, showTUIHelp, err := parseTUIArgs(modeArgs)
+		if err != nil {
+			fmt.Fprintf(stderr, "tui error: %v\n\n%s", err, tuiHelpText())
+			return 1
+		}
+		if showTUIHelp {
+			fmt.Fprint(stdout, tuiHelpText())
+			return 0
+		}
+		tuiOpts = opts
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -93,7 +110,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	case "tui":
-		if err := runTUI(ctx, app, cfg); err != nil {
+		if err := runTUI(ctx, app, cfg, tuiOpts); err != nil {
 			fmt.Fprintf(stderr, "tui error: %v\n", err)
 			return 1
 		}
@@ -125,12 +142,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runTUI(ctx context.Context, app *runtime.App, cfg config.Config) error {
+func runTUI(ctx context.Context, app *runtime.App, cfg config.Config, opts tuiOptions) error {
 	if err := app.Run(ctx); err != nil {
 		return err
 	}
 	startBackupLoops(ctx, cfg, app)
-	return runTUIProgram(ctx, app, cfg)
+	return runTUIProgram(ctx, app, cfg, opts.InitialPrompt)
 }
 
 func resolveCommand(args []string) (string, []string) {
@@ -167,6 +184,25 @@ func parseDoctorArgs(args []string) (doctorOptions, bool, error) {
 		return doctorOptions{}, false, fmt.Errorf("unexpected arguments %q", strings.Join(doctorFS.Args(), " "))
 	}
 	return doctorOptions{Deep: *deep}, *help, nil
+}
+
+func parseTUIArgs(args []string) (tuiOptions, bool, error) {
+	tuiFS := flag.NewFlagSet("tui", flag.ContinueOnError)
+	tuiFS.SetOutput(io.Discard)
+	help := tuiFS.Bool("help", false, "display help for command")
+	tuiFS.BoolVar(help, "h", false, "display help for command")
+
+	if err := tuiFS.Parse(args); err != nil {
+		return tuiOptions{}, false, err
+	}
+	if len(tuiFS.Args()) > 1 {
+		return tuiOptions{}, false, fmt.Errorf("expected at most one initial prompt argument")
+	}
+	opts := tuiOptions{}
+	if len(tuiFS.Args()) == 1 {
+		opts.InitialPrompt = strings.TrimSpace(tuiFS.Args()[0])
+	}
+	return opts, *help, nil
 }
 
 func runDoctor(ctx context.Context, app doctorRuntime, stdout io.Writer, opts doctorOptions) error {
@@ -266,7 +302,7 @@ Options:
 
 Commands:
   doctor           Health checks + startup diagnostics
-  tui              Run full-screen terminal UI
+  tui              Run full-screen terminal UI (optional initial prompt)
   backup           Create one compressed local backup archive
   memory           Memory search tools (status/index/search/grep)
   channels         Channel worker modes (currently signal inbound serve)
@@ -277,6 +313,7 @@ Examples:
   localclaw
   localclaw doctor
   localclaw tui
+  localclaw tui "run BOOTSTRAP.md"
   localclaw backup
   localclaw memory status
   localclaw channels serve
@@ -294,6 +331,17 @@ Use --deep to run provider-level LLM probe checks.
 
 Options:
   --deep           run deep checks (includes LLM prompt probe)
+  -h, --help       display help for command
+`
+}
+
+func tuiHelpText() string {
+	return `Usage: localclaw tui [initial-prompt]
+
+Run the full-screen terminal UI.
+When initial-prompt is provided, localclaw sends it automatically after startup.
+
+Options:
   -h, --help       display help for command
 `
 }

@@ -35,11 +35,12 @@
   - Claude Code: `--permission-mode acceptEdits` + `--add-dir <resolved-workspace-path>`
 - `read-only`
   - Codex: `--sandbox read-only` + `--add-dir <resolved-workspace-path>`
-  - Claude Code: `--permission-mode plan` + `--add-dir <resolved-workspace-path>`
+  - Claude Code: `--permission-mode dontAsk` + `--add-dir <resolved-workspace-path>`
 
 Provider `extra_args` cannot include these security-managed flags; config validation fails fast.
 Workspace allowlisting always uses the resolved workspace path for the active agent/session.
 If workspace resolution fails, request execution fails with wrapped context.
+Codex `exec resume` runs keep security-mode enforcement by placing security-managed flags before the `resume` subcommand, because the Codex CLI rejects those flags after `resume`.
 
 ## Process and network boundary
 

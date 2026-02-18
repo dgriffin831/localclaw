@@ -41,6 +41,7 @@ func (t *localTicker) Stop() {
 type LocalMonitor struct {
 	enabled  bool
 	interval time.Duration
+	logf     func(format string, args ...interface{})
 
 	mu      sync.Mutex
 	started bool
@@ -50,13 +51,31 @@ type LocalMonitor struct {
 }
 
 func NewLocalMonitor(enabled bool, intervalSeconds int) *LocalMonitor {
-	interval := time.Duration(intervalSeconds) * time.Second
+	return NewLocalMonitorWithSettings(Settings{
+		Enabled:         enabled,
+		IntervalSeconds: intervalSeconds,
+	})
+}
+
+type Settings struct {
+	Enabled         bool
+	IntervalSeconds int
+	Logf            func(format string, args ...interface{})
+}
+
+func NewLocalMonitorWithSettings(settings Settings) *LocalMonitor {
+	logf := settings.Logf
+	if logf == nil {
+		logf = log.Printf
+	}
+	interval := time.Duration(settings.IntervalSeconds) * time.Second
 	if interval <= 0 {
 		interval = defaultTickInterval
 	}
 	return &LocalMonitor{
-		enabled:  enabled,
+		enabled:  settings.Enabled,
 		interval: interval,
+		logf:     logf,
 		newTicker: func(interval time.Duration) ticker {
 			return &localTicker{t: time.NewTicker(interval)}
 		},
@@ -68,7 +87,7 @@ func (m *LocalMonitor) Ping(ctx context.Context, message string) error {
 	if trimmed == "" {
 		return nil
 	}
-	log.Printf("heartbeat: %s", trimmed)
+	m.log("heartbeat: %s", trimmed)
 	return nil
 }
 
@@ -99,18 +118,25 @@ func (m *LocalMonitor) Start(ctx context.Context, run Runner) {
 				return
 			case <-t.C():
 				if !m.startRun() {
-					log.Printf("heartbeat: skipped tick while previous run is active")
+					m.log("heartbeat: skipped tick while previous run is active")
 					continue
 				}
 				go func() {
 					defer m.endRun()
 					if err := run(ctx); err != nil {
-						log.Printf("heartbeat: run failed: %v", err)
+						m.log("heartbeat: run failed: %v", err)
 					}
 				}()
 			}
 		}
 	}()
+}
+
+func (m *LocalMonitor) log(format string, args ...interface{}) {
+	if m == nil || m.logf == nil {
+		return
+	}
+	m.logf(format, args...)
 }
 
 func (m *LocalMonitor) startRun() bool {

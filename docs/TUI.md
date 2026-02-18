@@ -14,6 +14,8 @@ This document describes current terminal UI behavior in `internal/tui`.
 
 Streaming output comes from `app.PromptStreamForSessionWithOptions`.
 
+`localclaw tui [initial-prompt]` accepts one optional positional startup prompt; when provided, TUI auto-submits it after startup.
+
 ## Header and status
 
 Header currently shows:
@@ -139,6 +141,7 @@ On TUI model creation:
 - Adds `localclaw ready. Type /help for commands.` system line.
 - Loads and renders workspace `WELCOME.md` (if present) as markdown system content.
 - Schedules automatic onboarding seed run (`Wake up, my friend!`) when `BOOTSTRAP.md` exists and the active session has no transcript yet.
+- If an initial startup prompt argument is provided (`localclaw tui "<prompt>"`), schedules that prompt instead and suppresses the default bootstrap seed run for that startup.
 - Applies startup toggles from `app.default`:
   - `verbose` -> verbose diagnostics mode
   - `mouse` -> mouse capture

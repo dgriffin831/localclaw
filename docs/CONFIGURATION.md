@@ -234,7 +234,8 @@ Security mode behavior:
     - Claude Code: `--permission-mode acceptEdits --add-dir <resolved-workspace-path>`
   - `read-only`
     - Codex: `--sandbox read-only --add-dir <resolved-workspace-path>`
-    - Claude Code: `--permission-mode plan --add-dir <resolved-workspace-path>`
+    - Claude Code: `--permission-mode dontAsk --add-dir <resolved-workspace-path>`
+- Codex resume requests keep security-mode enforcement by passing security-managed flags before the `resume` subcommand (`codex exec <security flags> resume ...`), because the Codex CLI rejects them after `resume`.
 - workspace allowlisting uses the resolved runtime workspace path for the active agent/session.
 - if workspace resolution fails, prompt execution fails with wrapped context.
 

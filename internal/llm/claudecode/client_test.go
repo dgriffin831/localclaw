@@ -137,8 +137,8 @@ func TestBuildCommandArgsForRequestUsesSecurityModeReadOnly(t *testing.T) {
 			SecurityMode:  "read-only",
 		},
 	}, "/tmp/mcp.json")
-	if !containsArgSequence(args, []string{"--permission-mode", "plan"}) {
-		t.Fatalf("expected plan permission mode, got %v", args)
+	if !containsArgSequence(args, []string{"--permission-mode", "dontAsk"}) {
+		t.Fatalf("expected dontAsk permission mode, got %v", args)
 	}
 	if !containsArgSequence(args, []string{"--add-dir", "/resolved/workspace"}) {
 		t.Fatalf("expected add-dir workspace allowlist, got %v", args)

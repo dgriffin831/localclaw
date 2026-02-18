@@ -80,6 +80,7 @@ type streamErrMsg struct {
 type statusTickMsg time.Time
 type ctxDoneMsg struct{}
 type bootstrapSeedTriggerMsg struct{}
+type initialPromptTriggerMsg struct{}
 type providerToolsDiscoveredMsg struct {
 	Provider string
 	Model    string
@@ -148,10 +149,11 @@ type model struct {
 	renderer      *glamour.TermRenderer
 	rendererWidth int
 
-	history      []string
-	historyIdx   int
-	historyDraft string
-	queuedInputs []string
+	history       []string
+	historyIdx    int
+	historyDraft  string
+	queuedInputs  []string
+	initialPrompt string
 
 	slashQuery    string
 	slashMatches  []slashCommandDef

@@ -337,7 +337,7 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 	hasAddDir := false
 	hasAllowedTools := false
 	for i, arg := range args {
-		if arg == "--permission-mode" && i+1 < len(args) && args[i+1] == "plan" {
+		if arg == "--permission-mode" && i+1 < len(args) && args[i+1] == "dontAsk" {
 			hasPermissionMode = true
 		}
 		if arg == "--add-dir" && i+1 < len(args) && args[i+1] == workspacePath {
@@ -349,7 +349,7 @@ printf '%%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"
 		}
 	}
 	if !hasPermissionMode {
-		t.Fatalf("expected --permission-mode plan in args: %v", args)
+		t.Fatalf("expected --permission-mode dontAsk in args: %v", args)
 	}
 	if !hasAddDir {
 		t.Fatalf("expected --add-dir <workspace> in args: %v", args)
@@ -376,6 +376,7 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 
 	cfg := config.Default()
 	cfg.App.Root = stateRoot
+	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
 	cfg.LLM.Provider = "codex"
 	cfg.LLM.Codex.BinaryPath = codexScriptPath
 	cfg.Security.Mode = "sandbox-write"

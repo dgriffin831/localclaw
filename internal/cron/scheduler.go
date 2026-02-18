@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -93,6 +94,7 @@ type Settings struct {
 	StateRoot  string
 	RunTimeout time.Duration
 	Executor   EntryExecutor
+	Logf       func(format string, args ...interface{})
 }
 
 type InProcessScheduler struct {
@@ -102,6 +104,7 @@ type InProcessScheduler struct {
 
 	now      func() time.Time
 	executor EntryExecutor
+	logf     func(format string, args ...interface{})
 
 	mu      sync.RWMutex
 	jobs    map[string]*scheduledJob
@@ -140,12 +143,17 @@ func NewInProcessSchedulerWithSettings(settings Settings) *InProcessScheduler {
 	if executor == nil {
 		executor = defaultEntryExecutor
 	}
+	logf := settings.Logf
+	if logf == nil {
+		logf = log.Printf
+	}
 	return &InProcessScheduler{
 		enabled:    settings.Enabled,
 		storePath:  resolveStorePath(settings.StateRoot),
 		runTimeout: timeout,
 		now:        time.Now,
 		executor:   executor,
+		logf:       logf,
 		jobs:       map[string]*scheduledJob{},
 	}
 }
@@ -493,6 +501,10 @@ func (s *InProcessScheduler) executeInvocation(invocation runInvocation) (RunRes
 	s.mu.Unlock()
 
 	s.notifyLoop()
+	s.logRunOutcome(invocation.entry, result, duration)
+	if persistErr != nil {
+		s.log("cron: persist failed id=%s status=%s: %v", invocation.entry.ID, result.Status, persistErr)
+	}
 	return result, persistErr
 }
 
@@ -680,4 +692,19 @@ func (s *InProcessScheduler) loopWakeChannel() chan struct{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.wakeCh
+}
+
+func (s *InProcessScheduler) logRunOutcome(entry Entry, result RunResult, duration time.Duration) {
+	if strings.TrimSpace(result.Error) == "" {
+		s.log("cron: run completed id=%s status=%s duration_ms=%d", entry.ID, result.Status, duration.Milliseconds())
+		return
+	}
+	s.log("cron: run completed id=%s status=%s duration_ms=%d error=%s", entry.ID, result.Status, duration.Milliseconds(), result.Error)
+}
+
+func (s *InProcessScheduler) log(format string, args ...interface{}) {
+	if s == nil || s.logf == nil {
+		return
+	}
+	s.logf(format, args...)
 }

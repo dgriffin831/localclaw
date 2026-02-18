@@ -44,6 +44,7 @@ type App struct {
 	llmClients      map[string]llm.Client
 	transcript      *session.TranscriptWriter
 	now             func() time.Time
+	heartbeatLogf   func(format string, args ...interface{})
 
 	snapshotMu          sync.Mutex
 	skillPromptSnapshot map[string]skillsSessionSnapshot
@@ -124,6 +125,8 @@ func New(cfg config.Config) (*App, error) {
 		DefaultWorkspace: cfg.Agents.Defaults.Workspace,
 		AgentWorkspaces:  agentWorkspaces,
 	})
+	heartbeatLogf := newStateFileLogger(resolvedStateRoot, "heartbeats.log")
+	cronLogf := newStateFileLogger(resolvedStateRoot, "crons.log")
 	claudeClient := claudecode.NewClient(claudecode.Settings{
 		BinaryPath:          cfg.LLM.ClaudeCode.BinaryPath,
 		Profile:             cfg.LLM.ClaudeCode.Profile,
@@ -224,7 +227,11 @@ func New(cfg config.Config) (*App, error) {
 				return workspaceManager.ResolveWorkspace(agentID)
 			},
 		}),
-		heartbeat:     heartbeat.NewLocalMonitor(cfg.Heartbeat.Enabled, cfg.Heartbeat.IntervalSeconds),
+		heartbeat: heartbeat.NewLocalMonitorWithSettings(heartbeat.Settings{
+			Enabled:         cfg.Heartbeat.Enabled,
+			IntervalSeconds: cfg.Heartbeat.IntervalSeconds,
+			Logf:            heartbeatLogf,
+		}),
 		slack:         slackAdapter,
 		signal:        signalAdapter,
 		signalReceive: signal.ReceiveBatch,
@@ -233,6 +240,7 @@ func New(cfg config.Config) (*App, error) {
 		// TODO: Wire transcript appends into memory autosync (StartAutoSync/HandleTranscriptUpdate) via a runtime event bus so session delta indexing is active at startup.
 		transcript:          session.NewTranscriptWriter(session.TranscriptWriterSettings{}),
 		now:                 time.Now,
+		heartbeatLogf:       heartbeatLogf,
 		skillPromptSnapshot: map[string]skillsSessionSnapshot{},
 		providerModelsCache: map[string]llm.ProviderModelCatalog{},
 	}
@@ -240,6 +248,7 @@ func New(cfg config.Config) (*App, error) {
 		Enabled:   cfg.Cron.Enabled,
 		StateRoot: resolvedStateRoot,
 		Executor:  app.runCronEntry,
+		Logf:      cronLogf,
 	})
 	return app, nil
 }
@@ -308,13 +317,21 @@ func (a *App) runHeartbeatTick(ctx context.Context) error {
 	}
 	heartbeatPath := filepath.Join(workspacePath, "HEARTBEAT.md")
 	if _, err := os.ReadFile(heartbeatPath); err != nil {
-		log.Printf("heartbeat: skipped tick; unable to read %s: %v", heartbeatPath, err)
+		a.logHeartbeatf("heartbeat: skipped tick; unable to read %s: %v", heartbeatPath, err)
 		return nil
 	}
 	if _, err := a.PromptForSession(ctx, DefaultAgentID, DefaultSessionID, buildHeartbeatPrompt(heartbeatPath)); err != nil {
 		return fmt.Errorf("prompt heartbeat: %w", err)
 	}
 	return nil
+}
+
+func (a *App) logHeartbeatf(format string, args ...interface{}) {
+	if a != nil && a.heartbeatLogf != nil {
+		a.heartbeatLogf(format, args...)
+		return
+	}
+	log.Printf(format, args...)
 }
 
 func buildHeartbeatPrompt(heartbeatPath string) string {

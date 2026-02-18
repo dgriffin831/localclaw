@@ -11,7 +11,7 @@ Supported command modes:
 - no command (default): renders detailed CLI help.
 - `doctor`: runs startup initialization checks and validates resolved workspace/session-store paths with detailed output.
 - `doctor --deep`: runs `doctor` checks plus deep checks (currently an LLM prompt probe).
-- `tui`: runs startup initialization, then starts Bubble Tea UI.
+- `tui`: runs startup initialization, then starts Bubble Tea UI. Accepts an optional positional startup prompt (`localclaw tui "..."`) that is auto-submitted on open.
 - `backup`: creates one compressed backup archive under `<app.root>/backups`.
 - `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`, `grep`).
 - `channels`: runs startup initialization, then runs channel workers (`serve` subcommand).
@@ -24,6 +24,7 @@ go run ./cmd/localclaw
 go run ./cmd/localclaw doctor
 go run ./cmd/localclaw doctor --deep
 go run ./cmd/localclaw tui
+go run ./cmd/localclaw tui "run BOOTSTRAP.md"
 go run ./cmd/localclaw backup
 go run ./cmd/localclaw memory status
 go run ./cmd/localclaw memory index --force
@@ -166,6 +167,7 @@ Cron behavior:
 - `localclaw_cron_run` uses the same prompt execution/status path as scheduled runs.
 - `@reboot` jobs run once per scheduler start.
 - missed schedules while runtime is offline are not backfilled.
+- cron run logs are written to `<app.root>/logs/crons.log` (default: `~/.localclaw/logs/crons.log`), not stdout.
 
 Heartbeat behavior:
 
@@ -175,6 +177,7 @@ Heartbeat behavior:
 - each successful tick submits a local prompt in `default/main` that references `HEARTBEAT.md`.
 - overlapping heartbeat executions are skipped while a prior tick is still running.
 - heartbeat tick failures are non-fatal; future ticks continue.
+- heartbeat logs are written to `<app.root>/logs/heartbeats.log` (default: `~/.localclaw/logs/heartbeats.log`), not stdout.
 
 Backup behavior:
 

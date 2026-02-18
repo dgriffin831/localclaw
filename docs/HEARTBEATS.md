@@ -81,6 +81,8 @@ Guidelines:
 
 ## Observability and Troubleshooting
 
+Heartbeat logs are written to `<app.root>/logs/heartbeats.log` (default: `~/.localclaw/logs/heartbeats.log`) and are not printed to stdout.
+
 Useful logs:
 
 - missing/unreadable file: `heartbeat: skipped tick; unable to read .../HEARTBEAT.md`
@@ -93,7 +95,7 @@ If heartbeat appears idle:
 2. Confirm `heartbeat.interval_seconds` is positive.
 3. Confirm runtime is in a long-running mode.
 4. Confirm `HEARTBEAT.md` exists and is readable in default workspace.
-5. Check logs for skip/error messages.
+5. Check `<app.root>/logs/heartbeats.log` for skip/error messages.
 
 ## Related Docs
 

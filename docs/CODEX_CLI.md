@@ -20,6 +20,7 @@ Implementation location:
     - `full-access` -> `--dangerously-bypass-approvals-and-sandbox`
     - `sandbox-write` -> `--sandbox workspace-write --add-dir <resolved-workspace-path>`
     - `read-only` -> `--sandbox read-only --add-dir <resolved-workspace-path>`
+  - for resume runs, security-managed flags are emitted before the `resume` subcommand (`codex exec <security flags> resume ...`) because `codex exec resume ...` does not accept those flags after the subcommand token
   - optional passthrough args from `llm.codex.extra_args`
     - default config includes `--skip-git-repo-check`
 - request input is composed with `llm.ComposePromptFallback(req)`, then written to stdin (`-` argument) using `exec.CommandContext`.
