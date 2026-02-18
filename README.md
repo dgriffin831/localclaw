@@ -160,6 +160,7 @@ Optional TUI startup defaults:
 - `docs/ARCHITECTURE.md` - implementation-detail architecture map.
 - `docs/RUNTIME.md` - startup flow and command mode behavior.
 - `docs/CONFIGURATION.md` - config schema/defaults/validation contract.
+- `docs/INSTALL.md` - cross-platform source install and PATH setup guide.
 - `docs/CRON.md` - recurring cron scheduling behavior, implementation, and usage.
 - `docs/HEARTBEATS.md` - heartbeat scheduling behavior and `HEARTBEAT.md` authoring guide.
 - `docs/MEMORY.md` - memory retrieval v2 model (`memory_search` + `memory_grep`) and implementation notes.

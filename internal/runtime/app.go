@@ -295,9 +295,6 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.cron.Start(ctx); err != nil {
 		return fmt.Errorf("cron start: %w", err)
 	}
-	if err := a.heartbeat.Ping(ctx, "localclaw startup heartbeat"); err != nil {
-		return fmt.Errorf("heartbeat ping: %w", err)
-	}
 	a.heartbeat.Start(ctx, func(runCtx context.Context) error {
 		return a.runHeartbeatTick(runCtx)
 	})

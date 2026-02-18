@@ -58,8 +58,7 @@ No server, gateway, or listener process exists.
 3. `sessions.Init`
 4. `skills.Load`
 5. `cron.Start` (load persisted cron jobs + start in-process scheduling loop)
-6. `heartbeat.Ping("localclaw startup heartbeat")`
-7. `heartbeat.Start` (background ticker loop; overlapping ticks are skipped)
+6. `heartbeat.Start` (background ticker loop; overlapping ticks are skipped)
 
 Any failure aborts startup.
 

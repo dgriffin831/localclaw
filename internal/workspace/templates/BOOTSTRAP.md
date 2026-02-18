@@ -60,4 +60,7 @@ If periodic checks are used, add a short actionable checklist to `HEARTBEAT.md`.
 
 ## 8. Complete Bootstrap
 
-After setup is complete, delete `BOOTSTRAP.md`.
+After setup is complete:
+
+1. Delete the `First Run` section from `AGENTS.md`.
+2. Delete `BOOTSTRAP.md`.

@@ -62,8 +62,8 @@ func TestRunStartsHeartbeatRunner(t *testing.T) {
 	if monitor.startCalls != 1 {
 		t.Fatalf("expected heartbeat runner to start once, got %d", monitor.startCalls)
 	}
-	if len(monitor.pingMessages) != 1 || monitor.pingMessages[0] != "localclaw startup heartbeat" {
-		t.Fatalf("expected startup heartbeat ping, got %#v", monitor.pingMessages)
+	if len(monitor.pingMessages) != 0 {
+		t.Fatalf("expected no startup heartbeat ping, got %#v", monitor.pingMessages)
 	}
 	if monitor.run == nil {
 		t.Fatalf("expected heartbeat tick callback to be registered")

@@ -7,6 +7,7 @@ This directory is the implementation-level documentation surface for `localclaw`
 - `ARCHITECTURE.md`: component map and runtime boundaries.
 - `RUNTIME.md`: startup flow, app wiring, and command modes.
 - `CONFIGURATION.md`: JSON config contract, defaults, and validation rules.
+- `INSTALL.md`: cross-platform source install and `PATH` setup instructions.
 - `CRON.md`: recurring scheduler behavior, implementation, and usage.
 - `HEARTBEATS.md`: heartbeat scheduling, prompt behavior, and `HEARTBEAT.md` usage.
 - `MEMORY.md`: retrieval-v2 search/grep model and implementation behavior.

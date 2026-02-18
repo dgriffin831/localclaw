@@ -83,7 +83,6 @@ Guidelines:
 
 Useful logs:
 
-- startup ping: `heartbeat: localclaw startup heartbeat`
 - missing/unreadable file: `heartbeat: skipped tick; unable to read .../HEARTBEAT.md`
 - overlap skip: `heartbeat: skipped tick while previous run is active`
 - tick failure: `heartbeat: run failed: ...`

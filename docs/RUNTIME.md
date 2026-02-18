@@ -60,8 +60,7 @@ go run ./cmd/localclaw mcp serve
 3. `sessions.Init`
 4. `skills.Load`
 5. `cron.Start` (loads `<app.root>/cron/jobs.json` and starts background scheduling loop)
-6. `heartbeat.Ping("localclaw startup heartbeat")`
-7. start heartbeat background loop (when enabled) using `heartbeat.interval_seconds`
+6. start heartbeat background loop (when enabled) using `heartbeat.interval_seconds`
    - each tick submits a local prompt that references workspace `HEARTBEAT.md`
    - heartbeat tick errors are logged and do not fail runtime startup
 

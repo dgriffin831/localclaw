@@ -10,6 +10,7 @@ Keep it current when architecture, tooling, or workflows change.
 - `docs/ARCHITECTURE.md` is the implementation-detail architecture reference.
 - `docs/RUNTIME.md` documents startup wiring and runtime lifecycle.
 - `docs/CONFIGURATION.md` documents config schema, defaults, and validation guardrails.
+- `docs/INSTALL.md` documents cross-platform source installation and `PATH` setup.
 - `docs/TOOLS.md` documents MCP/provider tools architecture and implementation details.
 - `docs/HEARTBEATS.md` documents heartbeat scheduling behavior and `HEARTBEAT.md` usage.
 - `docs/SLACK.md` documents Slack channel setup and outbound delivery behavior.
