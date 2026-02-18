@@ -180,6 +180,7 @@ func (m *model) handleSessionResume(rawSessionID string) {
 	}
 
 	m.abortRun("")
+	m.clearQueuedInputs()
 	m.agentID = resolution.AgentID
 	m.sessionID = resolution.SessionID
 	m.sessionKey = resolution.SessionKey

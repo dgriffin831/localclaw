@@ -19,12 +19,6 @@ func (m *model) submitInput() tea.Cmd {
 	if value == "" {
 		return nil
 	}
-	if m.running {
-		m.addSystem("run already in progress; press Esc to abort")
-		m.refreshViewport(true)
-		return nil
-	}
-
 	m.rememberHistory(value)
 	m.input.Reset()
 	m.updateSlashAutocomplete()
@@ -32,6 +26,11 @@ func (m *model) submitInput() tea.Cmd {
 
 	if strings.HasPrefix(value, "/") {
 		return m.handleSlash(value)
+	}
+	if m.running {
+		m.enqueueInput(value)
+		m.refreshViewport(true)
+		return nil
 	}
 	m.startRun(value)
 	m.refreshViewport(true)
@@ -77,7 +76,7 @@ func (m *model) runBootstrapSeedPrompt() tea.Cmd {
 }
 
 func (m *model) activeRunCommands() tea.Cmd {
-	cmds := []tea.Cmd{m.spinner.Tick, tickStatus()}
+	cmds := []tea.Cmd{tickStatus()}
 	if m.streamEvents != nil {
 		cmds = append(cmds, waitStreamEvent(m.activeRunID, m.streamEvents))
 	}
@@ -85,6 +84,40 @@ func (m *model) activeRunCommands() tea.Cmd {
 		cmds = append(cmds, waitStreamErr(m.activeRunID, m.streamErrs))
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *model) enqueueInput(value string) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return
+	}
+	m.queuedInputs = append(m.queuedInputs, trimmed)
+}
+
+func (m *model) dequeueInput() (string, bool) {
+	if len(m.queuedInputs) == 0 {
+		return "", false
+	}
+	next := m.queuedInputs[0]
+	m.queuedInputs = m.queuedInputs[1:]
+	return next, true
+}
+
+func (m *model) clearQueuedInputs() {
+	m.queuedInputs = nil
+}
+
+func (m *model) startNextQueuedInput() tea.Cmd {
+	if m.running {
+		return nil
+	}
+	next, ok := m.dequeueInput()
+	if !ok {
+		return nil
+	}
+	m.startRun(next)
+	m.refreshViewport(true)
+	return m.activeRunCommands()
 }
 
 func (m *model) startRun(input string) {
@@ -185,6 +218,8 @@ func (m *model) applyFinal(final string) {
 	if m.activeAssistantIdx < 0 || m.activeAssistantIdx >= len(m.messages) {
 		m.addAssistant("", false)
 	}
+	// Final response should always appear after any tool-card activity.
+	m.ensureActiveAssistantAtEnd()
 	msg := &m.messages[m.activeAssistantIdx]
 	trimmed := strings.TrimSpace(final)
 	if trimmed != "" {
@@ -209,8 +244,25 @@ func (m *model) applyFinal(final string) {
 	msg.ThinkingPlaceholder = false
 }
 
+func (m *model) ensureActiveAssistantAtEnd() {
+	if m.activeAssistantIdx < 0 || m.activeAssistantIdx >= len(m.messages) {
+		return
+	}
+	if m.activeAssistantIdx == len(m.messages)-1 {
+		return
+	}
+	if m.messages[m.activeAssistantIdx].Role != roleAssistant {
+		return
+	}
+	assistant := m.messages[m.activeAssistantIdx]
+	m.messages = append(m.messages[:m.activeAssistantIdx], m.messages[m.activeAssistantIdx+1:]...)
+	m.messages = append(m.messages, assistant)
+	m.activeAssistantIdx = len(m.messages) - 1
+}
+
 func (m *model) runSessionReset(startNew bool, source string) {
 	m.abortRun("")
+	m.clearQueuedInputs()
 	if m.app != nil {
 		next := m.app.ResetSession(m.ctx, runtime.ResetSessionRequest{
 			AgentID:   m.agentID,

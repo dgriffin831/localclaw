@@ -26,6 +26,10 @@ const (
 	statusAborted     = "aborted"
 	statusError       = "error"
 	slashMenuLimit    = 6
+	composerMinLines  = 4
+	composerMaxLines  = 12
+	composerPrompt    = "> "
+	composerIndent    = "  "
 	welcomeFileName   = "WELCOME.md"
 	bootstrapFileName = "BOOTSTRAP.md"
 	bootstrapSeedText = "Wake up, my friend!"
@@ -145,6 +149,7 @@ type model struct {
 	history      []string
 	historyIdx   int
 	historyDraft string
+	queuedInputs []string
 
 	slashQuery    string
 	slashMatches  []slashCommandDef
@@ -240,16 +245,17 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	// bubbles/textarea v0.13.0 treats CharLimit <= 0 as effectively no input.
 	// Use a high practical ceiling instead of 0.
 	input.CharLimit = 100000
-	input.Prompt = "❯ "
-	input.SetHeight(1)
+	// Render a single top-row prompt in view_layout to avoid per-line prompts.
+	input.Prompt = ""
+	input.SetHeight(composerMinLines)
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
 
 	focused, blurred := textarea.DefaultStyles()
 	focused.Base = focused.Base.Background(colorBackgroundPane).Foreground(colorText)
-	focused.Text = lipgloss.NewStyle().Foreground(colorText)
+	focused.Text = lipgloss.NewStyle().Foreground(colorText).Background(colorBackgroundPane)
 	focused.Prompt = lipgloss.NewStyle().Foreground(colorPrimary)
-	focused.Placeholder = lipgloss.NewStyle().Foreground(colorTextMuted)
-	focused.CursorLine = lipgloss.NewStyle().Background(colorBackgroundPane)
+	focused.Placeholder = lipgloss.NewStyle().Foreground(colorTextMuted).Background(colorBackgroundPane)
+	focused.CursorLine = lipgloss.NewStyle().Foreground(colorText).Background(colorBackgroundPane)
 	focused.CursorLineNumber = lipgloss.NewStyle().Foreground(colorTextMuted)
 	focused.LineNumber = lipgloss.NewStyle().Foreground(colorTextMuted)
 	focused.EndOfBuffer = lipgloss.NewStyle().Foreground(colorBorderSubtle)
@@ -259,7 +265,7 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 	input.BlurredStyle = blurred
 
 	sp := spinner.New()
-	sp.Spinner = spinner.Dot
+	sp.Spinner = statusIconSpinner(statusIdle)
 	sp.Style = lipgloss.NewStyle().Foreground(colorText)
 
 	vp := viewport.New(0, 0)

@@ -100,6 +100,7 @@ func (m *model) recordToolResultCard(callID, toolName string, result *llm.ToolRe
 	card.Status = strings.TrimSpace(result.Status)
 	card.Error = strings.TrimSpace(result.Error)
 	card.Data = copyInterfaceMap(result.Data)
+	card.Args = reconcileToolCardArgs(card.Args, card.Data)
 }
 
 func (m *model) appendToolCard(card *toolCardMessage) int {
@@ -187,13 +188,16 @@ func (m *model) renderToolCard(card *toolCardMessage, expanded bool) string {
 	status := resolveToolCardStatus(card)
 	header := fmt.Sprintf("tool %s • %s", toolName, status)
 	if !expanded {
+		if argSummary := summarizeCollapsedToolCardArgs(toolName, card.Args); argSummary != "" {
+			return fmt.Sprintf("tool %s • args: %s • %s", toolName, argSummary, status)
+		}
 		return header
 	}
 	lines := []string{
 		header,
 		"call_id: " + valueOrDefault(strings.TrimSpace(card.CallID), "n/a"),
 	}
-	argLines := formatToolCardMap("arg.", card.Args)
+	argLines := formatToolCardArgMap("arg.", card.Args)
 	if len(argLines) == 0 {
 		lines = append(lines, "arg: none")
 	} else {
@@ -241,6 +245,222 @@ func copyInterfaceMap(values map[string]interface{}) map[string]interface{} {
 		out[key] = value
 	}
 	return out
+}
+
+func reconcileToolCardArgs(args map[string]interface{}, data map[string]interface{}) map[string]interface{} {
+	if len(data) == 0 {
+		return args
+	}
+
+	out := copyInterfaceMap(args)
+	if out == nil {
+		out = map[string]interface{}{}
+	}
+
+	keys := map[string]struct{}{}
+	for key := range out {
+		keys[key] = struct{}{}
+	}
+	for _, key := range collapsedToolCardPreferredArgs {
+		keys[key] = struct{}{}
+	}
+
+	for key := range keys {
+		dataValue, ok := data[key]
+		if !ok || isEmptyToolCardValue(dataValue) {
+			continue
+		}
+		argValue, hasArg := out[key]
+		if hasArg && !isEmptyToolCardValue(argValue) {
+			continue
+		}
+		out[key] = dataValue
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func isEmptyToolCardValue(raw interface{}) bool {
+	if raw == nil {
+		return true
+	}
+
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value) == ""
+	case []interface{}:
+		return len(value) == 0
+	case map[string]interface{}:
+		return len(value) == 0
+	}
+
+	typed := reflect.TypeOf(raw)
+	if typed == nil {
+		return true
+	}
+	switch typed.Kind() {
+	case reflect.Map, reflect.Slice, reflect.Array:
+		return reflect.ValueOf(raw).Len() == 0
+	}
+	return false
+}
+
+var collapsedToolCardRequiredArgs = map[string][]string{
+	"bash":                                    {"command"},
+	"command_execution":                       {"command"},
+	"cron_remove":                             {"id"},
+	"cron_run":                                {"id"},
+	"localclaw_cron_remove":                   {"id"},
+	"localclaw_cron_run":                      {"id"},
+	"localclaw_memory_get":                    {"path"},
+	"localclaw_memory_grep":                   {"query"},
+	"localclaw_memory_search":                 {"query"},
+	"localclaw_signal_send":                   {"text"},
+	"localclaw_slack_send":                    {"text"},
+	"mcp__localclaw__localclaw_memory_get":    {"path"},
+	"mcp__localclaw__localclaw_memory_grep":   {"query"},
+	"mcp__localclaw__localclaw_memory_search": {"query"},
+	"memory_get":                              {"path"},
+	"memory_grep":                             {"query"},
+	"memory_search":                           {"query"},
+	"signal_send":                             {"text"},
+	"slack_send":                              {"text"},
+	"web_search":                              {"query"},
+}
+
+var collapsedToolCardPreferredArgs = []string{
+	"query",
+	"path",
+	"id",
+	"command",
+	"action",
+	"text",
+	"pattern",
+	"message",
+	"schedule",
+	"session_id",
+	"sessionId",
+	"agent_id",
+	"agentId",
+	"channel",
+	"recipient",
+}
+
+func summarizeCollapsedToolCardArgs(toolName string, args map[string]interface{}) string {
+	keys := selectCollapsedToolCardArgKeys(toolName, args)
+	if len(keys) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value, ok := args[key]
+		if !ok {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", key, formatCollapsedToolCardArgValue(value)))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func selectCollapsedToolCardArgKeys(toolName string, args map[string]interface{}) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	normalizedToolName := strings.ToLower(strings.TrimSpace(toolName))
+	if required := collapsedToolCardRequiredArgs[normalizedToolName]; len(required) > 0 {
+		if keys := filterCollapsedToolCardArgKeys(args, required); len(keys) > 0 {
+			return keys
+		}
+	}
+	keys := filterCollapsedToolCardArgKeys(args, collapsedToolCardPreferredArgs)
+	if len(keys) == 0 {
+		for key, value := range args {
+			if isEmptyToolCardValue(value) {
+				continue
+			}
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+	}
+	const maxCollapsedToolCardArgs = 2
+	if len(keys) > maxCollapsedToolCardArgs {
+		return keys[:maxCollapsedToolCardArgs]
+	}
+	return keys
+}
+
+func filterCollapsedToolCardArgKeys(args map[string]interface{}, preferred []string) []string {
+	if len(args) == 0 || len(preferred) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	keys := make([]string, 0, len(preferred))
+	for _, key := range preferred {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		if _, ok := seen[trimmedKey]; ok {
+			continue
+		}
+		value, ok := args[trimmedKey]
+		if !ok || isEmptyToolCardValue(value) {
+			continue
+		}
+		seen[trimmedKey] = struct{}{}
+		keys = append(keys, trimmedKey)
+	}
+	return keys
+}
+
+func formatCollapsedToolCardArgValue(raw interface{}) string {
+	switch value := raw.(type) {
+	case nil:
+		return "(empty)"
+	case string:
+		return truncateCollapsedToolCardArgText(value)
+	default:
+		if isStructuredToolCardValue(value) {
+			if marshaled, err := json.Marshal(value); err == nil {
+				return truncateCollapsedToolCardArgText(string(marshaled))
+			}
+		}
+		return truncateCollapsedToolCardArgText(fmt.Sprint(value))
+	}
+}
+
+func truncateCollapsedToolCardArgText(value string) string {
+	normalized := strings.TrimSpace(strings.Join(strings.Fields(value), " "))
+	if normalized == "" {
+		return "(empty)"
+	}
+	const maxCollapsedToolCardArgChars = 64
+	if len(normalized) <= maxCollapsedToolCardArgChars {
+		return normalized
+	}
+	return normalized[:maxCollapsedToolCardArgChars-3] + "..."
+}
+
+func formatToolCardArgMap(prefix string, values map[string]interface{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key, value := range values {
+		if isEmptyToolCardValue(value) {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, formatToolCardValue(prefix+key, values[key])...)
+	}
+	return lines
 }
 
 func formatToolCardMap(prefix string, values map[string]interface{}) []string {
@@ -404,6 +624,7 @@ func (m *model) renderMarkdown(input string, width int) string {
 	if m.renderer == nil || m.rendererWidth != width {
 		renderer, err := glamour.NewTermRenderer(
 			glamour.WithWordWrap(width),
+			glamour.WithPreservedNewLines(),
 			glamour.WithStyles(localclawMarkdownStyles()),
 		)
 		if err != nil {

@@ -35,7 +35,8 @@ Status state machine values:
 
 Behavior notes:
 
-- Busy statuses show spinner + elapsed time.
+- Status icons are animated and use the same spinner icon for every status.
+- Busy statuses (`sending`, `waiting`, `streaming`, `tool*`) show elapsed time.
 - While waiting and no stream delta has arrived, status text always shows the active thinking message.
 - Thinking messages come from `app.thinking_messages`; fallback is `thinking`.
 - Status row shows lifecycle text only (`idle`, `waiting`, etc.); runtime settings are rendered in the footer row under the composer.
@@ -47,7 +48,7 @@ Behavior notes:
 
 Composer behavior:
 
-- `Enter`: submit input
+- `Enter`: submit input (slash commands execute immediately; non-slash prompts queue FIFO while a run is active)
 - `Ctrl+J`: insert newline
 - `Tab`: autocomplete selected slash command when typing `/...`
 - `Shift+Tab`: move slash menu selection backward
@@ -56,6 +57,10 @@ Composer behavior:
 - `Alt+Up` / `Alt+Down`: history navigation aliases
 - `Mouse wheel`: transcript scroll
 - Footer row: left side shows keyboard shortcuts hint, right side shows `provider/model/reasoning/verbose/tools/mouse` runtime settings.
+- Queued prompt previews render above the composer input as single-line truncated entries in FIFO execution order.
+- Multiline paste is normalized so pasted `CR`/`CRLF` line endings are preserved as newline breaks in the composer.
+- Composer prompt uses a single top-row marker (`>`); continuation lines are indented without repeated prompt markers and share the same pane background.
+- Submitted multiline content preserves line breaks in the transcript view (single newlines are no longer collapsed).
 
 Global controls:
 
@@ -114,6 +119,7 @@ Command behavior details:
 - `/model <provider>/<model>[/<reasoning>]` sets a session-local selector used for subsequent prompts and metadata probes.
 - `/model <model>` shorthand keeps the current provider and updates only model/reasoning.
 - `/model default` or `/model off` clears the active selector override.
+- Slash submissions are never queued; they run immediately and keep existing command-specific active-run guards (for example `/model` still requires abort first).
 - selector validation uses discovered provider catalogs when available; if discovery is unavailable, selector is accepted with explicit non-validated notice.
 - `/exit` and `/quit` abort active run and quit.
 
@@ -139,6 +145,7 @@ On TUI model creation:
 On `/new`:
 
 - Aborts active run if needed.
+- Clears queued prompt inputs.
 - Invokes runtime `ResetSession` with `StartNew=true`.
 - Clears transcript and shows `started new session <id>`.
 - Clears any active `/model` selector override.
@@ -148,13 +155,26 @@ On `/new`:
 On `/reset`:
 
 - Aborts active run if needed.
+- Clears queued prompt inputs.
 - Invokes runtime `ResetSession` with `StartNew=false`.
 - Clears transcript and shows `session reset`.
 - Clears any active `/model` selector override.
 
+On `/resume <session_id>`:
+
+- Aborts active run if needed.
+- Clears queued prompt inputs when session switch succeeds.
+- Switches active session and reloads transcript history.
+
 ## Run lifecycle
 
-When submitting non-slash input:
+Input submission behavior:
+
+- Slash commands are handled immediately (not queued).
+- Non-slash prompts submitted while a run is active are appended to an in-memory FIFO queue, composer input is cleared, and no rejection system message is added.
+- When a run reaches terminal state (`idle`, `error`, or `aborted`), the next queued prompt auto-starts until the queue is empty.
+
+When a non-slash input run starts:
 
 1. Add user message to transcript.
 2. Update coarse session token accounting (`EstimateTokensFromText`).
@@ -166,10 +186,11 @@ Completion behavior:
 
 - Delta chunks append to active assistant message.
 - Final payload replaces assistant text when non-empty.
+- Final assistant response is rendered after tool-card activity so transcript rows remain execution-ordered.
 - If final and delta are both empty, assistant message becomes `(no output)`.
 - Assistant final text is appended to transcript file and token accounting.
 - Tool call/result activity renders as transcript tool cards from provider stream events.
-- Collapsed cards show summary (`tool`, tool name, terminal status).
+- Collapsed cards show summary (`tool`, tool name, key input args when available, terminal status).
 - Expanded cards include call ID, arguments, status, error (if any), and canonical result data fields.
 - Structured argument/result values (maps, slices, JSON strings) render as multiline fenced blocks for readability.
 - Expanded cards omit duplicated result metadata when equivalent context is already shown in call/header fields.

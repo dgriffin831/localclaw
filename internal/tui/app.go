@@ -34,7 +34,7 @@ func newProgram(m model) *tea.Program {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := []tea.Cmd{textarea.Blink, tickStatus()}
+	cmds := []tea.Cmd{textarea.Blink, tickStatus(), m.spinner.Tick}
 	if m.bootstrapSeedPendingForSession() {
 		cmds = append(cmds, emitBootstrapSeedTrigger())
 	}
@@ -87,7 +87,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.handleStreamEvent(msg.Event)
-		if m.streamEvents != nil {
+		queuedStarted := false
+		if !m.running {
+			if cmd := m.startNextQueuedInput(); cmd != nil {
+				cmds = append(cmds, cmd)
+				queuedStarted = true
+			}
+		}
+		if !queuedStarted && m.streamEvents != nil {
 			cmds = append(cmds, waitStreamEvent(m.activeRunID, m.streamEvents))
 		}
 
@@ -105,6 +112,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addSystem("prompt error: " + msg.Err.Error())
 			m.finishRun(statusError)
 			m.refreshViewport(true)
+			if cmd := m.startNextQueuedInput(); cmd != nil {
+				return m, cmd
+			}
 			return m, nil
 		}
 

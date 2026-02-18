@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -148,6 +149,54 @@ func TestSpinnerUsesWhiteForeground(t *testing.T) {
 	}
 }
 
+func TestStatusIconSpinnerUsesExpectedAnimationByStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+	}{
+		{name: "idle", status: statusIdle},
+		{name: "sending", status: statusSending},
+		{name: "waiting", status: statusWaiting},
+		{name: "streaming", status: statusStreaming},
+		{name: "tool", status: "tool memory_search"},
+		{name: "aborted", status: statusAborted},
+		{name: "error", status: statusError},
+		{name: "fallback", status: "press ctrl+c again to exit"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := statusIconSpinner(tc.status)
+			if !reflect.DeepEqual(got, spinner.Dot) {
+				t.Fatalf("expected dot spinner for status %q", tc.status)
+			}
+		})
+	}
+}
+
+func TestNewModelStartsWithIdleStatusAnimation(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	if !reflect.DeepEqual(m.spinner.Spinner, statusIconSpinner(statusIdle)) {
+		t.Fatalf("expected new model spinner animation to match idle status")
+	}
+}
+
+func TestSetStatusSwitchesStatusAnimation(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	m.setStatus("tool memory_search")
+	if !reflect.DeepEqual(m.spinner.Spinner, statusIconSpinner("tool memory_search")) {
+		t.Fatalf("expected tool status to set tool animation")
+	}
+
+	m.setStatus(statusError)
+	if !reflect.DeepEqual(m.spinner.Spinner, statusIconSpinner(statusError)) {
+		t.Fatalf("expected error status to set error animation")
+	}
+}
+
 func TestHeaderViewHiddenWhenMouseOff(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.width = 160
@@ -275,6 +324,36 @@ func TestInputAcceptsTyping(t *testing.T) {
 	}
 }
 
+func TestInputViewShowsSinglePromptMarker(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.width = 120
+	m.height = 30
+	m.input.SetValue("line 1\nline 2")
+
+	m.layout()
+	got := ansiEscapePattern.ReplaceAllString(m.inputView(), "")
+	if count := strings.Count(got, composerPrompt); count != 1 {
+		t.Fatalf("expected a single top-row composer prompt marker, got %d in %q", count, got)
+	}
+	if strings.Contains(got, "> line 2") {
+		t.Fatalf("expected continuation line to omit prompt marker, got %q", got)
+	}
+}
+
+func TestInputUsesUniformBackgroundAcrossComposerLines(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	if got := fmt.Sprint(m.input.FocusedStyle.Text.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected textarea text background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.Text.GetBackground())
+	}
+	if got := fmt.Sprint(m.input.FocusedStyle.CursorLine.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected cursor-line background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.CursorLine.GetBackground())
+	}
+	if got := fmt.Sprint(m.input.FocusedStyle.Placeholder.GetBackground()); got != fmt.Sprint(colorBackgroundPane) {
+		t.Fatalf("expected placeholder background %v, got %v", colorBackgroundPane, m.input.FocusedStyle.Placeholder.GetBackground())
+	}
+}
+
 func TestInputInsertNewlineUsesCtrlJ(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 
@@ -294,6 +373,17 @@ func TestCtrlJInsertsNewlineInsteadOfSubmitting(t *testing.T) {
 
 	if got := next.input.Value(); got != "h\n" {
 		t.Fatalf("expected ctrl+j to insert newline, got %q", got)
+	}
+}
+
+func TestMultilinePasteNormalizesCarriageReturns(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line 1\rline 2\r\nline 3")})
+	next := updated.(model)
+
+	if got := next.input.Value(); got != "line 1\nline 2\nline 3" {
+		t.Fatalf("expected multiline paste newlines to be preserved, got %q", got)
 	}
 }
 
@@ -322,6 +412,217 @@ func TestInputHintMentionsCtrlJ(t *testing.T) {
 	}
 	if strings.Contains(hint, "/help") {
 		t.Fatalf("expected input hint not to mention /help, got %q", hint)
+	}
+}
+
+func TestSubmitInputQueuesWhileRunActive(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.running = true
+	m.input.SetValue("  queued prompt  ")
+	initialMessageCount := len(m.messages)
+
+	cmd := m.submitInput()
+	if cmd != nil {
+		t.Fatalf("expected active-run queued submit to return no command, got non-nil")
+	}
+	if !m.running {
+		t.Fatalf("expected active run to remain active after queueing input")
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected queued submit to clear composer input, got %q", got)
+	}
+	if len(m.queuedInputs) != 1 || m.queuedInputs[0] != "queued prompt" {
+		t.Fatalf("expected queued inputs to contain trimmed prompt, got %v", m.queuedInputs)
+	}
+	if len(m.history) == 0 || m.history[len(m.history)-1] != "queued prompt" {
+		t.Fatalf("expected queued prompt to be added to history, got %v", m.history)
+	}
+	if len(m.messages) != initialMessageCount {
+		t.Fatalf("expected queued submit not to append system rejection message")
+	}
+	if strings.Contains(joinedMessageRaw(m.messages), "run already in progress; press Esc to abort") {
+		t.Fatalf("expected legacy active-run rejection message to be removed")
+	}
+}
+
+func TestQueuedInputAutoRuns(t *testing.T) {
+	assertQueuedUserMessage := func(t *testing.T, messages []chatMessage, expected string) {
+		t.Helper()
+		for _, msg := range messages {
+			if msg.Role == roleUser && msg.Raw == expected {
+				return
+			}
+		}
+		t.Fatalf("expected queued input %q to be appended as user message", expected)
+	}
+
+	t.Run("after final stream event", func(t *testing.T) {
+		m := newModel(context.Background(), nil, config.Default())
+		m.running = true
+		m.status = statusWaiting
+		m.activeRunID = 41
+		m.queuedInputs = []string{"queued after final"}
+
+		updated, _ := m.Update(streamEventMsg{
+			RunID: 41,
+			OK:    true,
+			Event: llm.StreamEvent{
+				Type: llm.StreamEventFinal,
+				Text: "done",
+			},
+		})
+		next := updated.(model)
+
+		if len(next.queuedInputs) != 0 {
+			t.Fatalf("expected queue to drain after final stream event, got %v", next.queuedInputs)
+		}
+		assertQueuedUserMessage(t, next.messages, "queued after final")
+	})
+
+	t.Run("after stream error", func(t *testing.T) {
+		m := newModel(context.Background(), nil, config.Default())
+		m.running = true
+		m.status = statusWaiting
+		m.activeRunID = 51
+		m.queuedInputs = []string{"queued after error"}
+
+		updated, _ := m.Update(streamErrMsg{
+			RunID: 51,
+			OK:    true,
+			Err:   errors.New("boom"),
+		})
+		next := updated.(model)
+
+		if len(next.queuedInputs) != 0 {
+			t.Fatalf("expected queue to drain after stream error, got %v", next.queuedInputs)
+		}
+		if !strings.Contains(joinedMessageRaw(next.messages), "prompt error: boom") {
+			t.Fatalf("expected stream error message in transcript")
+		}
+		assertQueuedUserMessage(t, next.messages, "queued after error")
+	})
+
+	t.Run("after manual abort", func(t *testing.T) {
+		m := newModel(context.Background(), nil, config.Default())
+		m.running = true
+		m.status = statusWaiting
+		m.activeRunID = 61
+		m.queuedInputs = []string{"queued after abort"}
+
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		next := updated.(model)
+
+		if len(next.queuedInputs) != 0 {
+			t.Fatalf("expected queue to drain after manual abort, got %v", next.queuedInputs)
+		}
+		if !strings.Contains(joinedMessageRaw(next.messages), "run aborted") {
+			t.Fatalf("expected abort confirmation message in transcript")
+		}
+		assertQueuedUserMessage(t, next.messages, "queued after abort")
+	})
+}
+
+func TestQueueClearedOnSessionLifecycle(t *testing.T) {
+	t.Run("new and reset", func(t *testing.T) {
+		m := newModel(context.Background(), nil, config.Default())
+		m.queuedInputs = []string{"queued reset"}
+
+		_ = m.handleSlash("/reset")
+		if len(m.queuedInputs) != 0 {
+			t.Fatalf("expected /reset to clear queued inputs, got %v", m.queuedInputs)
+		}
+
+		m.queuedInputs = []string{"queued new"}
+		_ = m.handleSlash("/new")
+		if len(m.queuedInputs) != 0 {
+			t.Fatalf("expected /new to clear queued inputs, got %v", m.queuedInputs)
+		}
+	})
+
+	t.Run("resume", func(t *testing.T) {
+		m, app := newRuntimeBackedModel(t)
+		ctx := context.Background()
+		if err := app.AddSessionTokens(ctx, "default", "archive-queue", 3); err != nil {
+			t.Fatalf("seed archive session metadata: %v", err)
+		}
+		m.queuedInputs = []string{"queued resume"}
+
+		_ = m.handleSlash("/resume archive-queue")
+
+		if m.sessionID != "archive-queue" {
+			t.Fatalf("expected session to switch during /resume, got %q", m.sessionID)
+		}
+		if len(m.queuedInputs) != 0 {
+			t.Fatalf("expected /resume to clear queued inputs, got %v", m.queuedInputs)
+		}
+	})
+}
+
+func TestQueueListRendering(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.width = 36
+	m.queuedInputs = []string{
+		"first line\nsecond line with extra words to truncate",
+		"second queued prompt",
+	}
+	m.input.SetValue("draft")
+
+	queueBlock := m.queueListView()
+	lines := strings.Split(queueBlock, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected one rendered queue line per queued input, got %d lines (%q)", len(lines), queueBlock)
+	}
+	if !strings.Contains(lines[0], "queued: first line second line") {
+		t.Fatalf("expected first queue preview to flatten multiline input, got %q", lines[0])
+	}
+	if !strings.HasSuffix(lines[0], "…") {
+		t.Fatalf("expected long queue preview to be truncated with ellipsis, got %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "queued: second queued prompt") {
+		t.Fatalf("expected second queue preview in FIFO order, got %q", lines[1])
+	}
+
+	renderedInput := ansiEscapePattern.ReplaceAllString(m.inputView(), "")
+	firstLineIdx := strings.Index(renderedInput, lines[0])
+	promptIdx := strings.Index(renderedInput, composerPrompt)
+	if firstLineIdx == -1 {
+		t.Fatalf("expected queue list to render in composer panel, got %q", renderedInput)
+	}
+	if promptIdx == -1 {
+		t.Fatalf("expected composer prompt marker in rendered input view, got %q", renderedInput)
+	}
+	if firstLineIdx > promptIdx {
+		t.Fatalf("expected queue list to render above composer input, got %q", renderedInput)
+	}
+}
+
+func TestSlashNotQueued(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.running = true
+	m.input.SetValue("/model codex/gpt-5-mini")
+	initialMessageCount := len(m.messages)
+
+	cmd := m.submitInput()
+	if cmd != nil {
+		t.Fatalf("expected slash submission to run inline without queued run command, got non-nil")
+	}
+	if len(m.queuedInputs) != 0 {
+		t.Fatalf("expected slash command not to be queued, got %v", m.queuedInputs)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected slash submission to clear composer input, got %q", got)
+	}
+	if len(m.history) == 0 || m.history[len(m.history)-1] != "/model codex/gpt-5-mini" {
+		t.Fatalf("expected slash submission to be added to history, got %v", m.history)
+	}
+	if len(m.messages) != initialMessageCount+1 {
+		t.Fatalf("expected slash submission to append one system message, got %d new messages", len(m.messages)-initialMessageCount)
+	}
+	if got := m.messages[len(m.messages)-1].Raw; got != "cannot change selector while a run is active; abort first" {
+		t.Fatalf("expected command-specific active-run guard message, got %q", got)
+	}
+	if strings.Contains(joinedMessageRaw(m.messages), "run already in progress; press Esc to abort") {
+		t.Fatalf("expected legacy active-run rejection message to be removed for slash inputs")
 	}
 }
 
@@ -661,6 +962,27 @@ func TestWelcomeMessageRendersOrderedListMarkersWithSpacing(t *testing.T) {
 	}
 	if strings.Contains(rendered, "1Run check") {
 		t.Fatalf("expected ordered list marker not to run into text, got %q", rendered)
+	}
+}
+
+func TestUserMessageRenderingPreservesLineBreaks(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.viewport.Width = 90
+	m.messages = nil
+	m.addUser("line 1\nline 2\nline 3")
+
+	rendered := ansiEscapePattern.ReplaceAllString(m.renderTranscript(), "")
+	if strings.Contains(rendered, "line 1 line 2 line 3") {
+		t.Fatalf("expected user message line breaks to be preserved, got %q", rendered)
+	}
+	idx1 := strings.Index(rendered, "line 1")
+	idx2 := strings.Index(rendered, "line 2")
+	idx3 := strings.Index(rendered, "line 3")
+	if idx1 == -1 || idx2 == -1 || idx3 == -1 {
+		t.Fatalf("expected rendered transcript to include all lines, got %q", rendered)
+	}
+	if !(idx1 < idx2 && idx2 < idx3) {
+		t.Fatalf("expected rendered line order line1->line2->line3, got %q", rendered)
 	}
 }
 

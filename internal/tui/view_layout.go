@@ -40,16 +40,17 @@ func (m *model) statusView() string {
 	if base == statusWaiting && !m.hasStreamDelta {
 		base = m.currentThinkingMessage()
 	}
+	icon := m.spinner.View()
 	innerWidth := panelInnerWidth(m.width)
 
 	if m.isBusy() {
-		left := fmt.Sprintf("%s %s%s", m.spinner.View(), base, elapsed)
+		left := fmt.Sprintf("%s %s%s", icon, base, elapsed)
 		return statusBusyStyle.Width(max(1, m.width)).Render(twoColumn(left, "", innerWidth))
 	}
 	if m.status == statusError {
-		return statusErrStyle.Width(max(1, m.width)).Render(twoColumn("error", "", innerWidth))
+		return statusErrStyle.Width(max(1, m.width)).Render(twoColumn(fmt.Sprintf("%s error", icon), "", innerWidth))
 	}
-	return statusIdleStyle.Width(max(1, m.width)).Render(twoColumn(base, "", innerWidth))
+	return statusIdleStyle.Width(max(1, m.width)).Render(twoColumn(fmt.Sprintf("%s %s", icon, base), "", innerWidth))
 }
 
 func (m *model) statusSettings(innerWidth int) string {
@@ -75,11 +76,54 @@ func (m *model) statusSettings(innerWidth int) string {
 }
 
 func (m *model) inputView() string {
-	body := m.input.View()
-	if menu := m.slashMenuView(); menu != "" {
-		body += "\n" + menu
+	parts := make([]string, 0, 3)
+	if queue := m.queueListView(); queue != "" {
+		parts = append(parts, queue)
 	}
+	parts = append(parts, m.decorateComposerInput(m.input.View()))
+	if menu := m.slashMenuView(); menu != "" {
+		parts = append(parts, menu)
+	}
+	body := strings.Join(parts, "\n")
 	return inputStyle.Width(max(1, m.width)).Render(body)
+}
+
+func (m *model) queueListView() string {
+	if len(m.queuedInputs) == 0 {
+		return ""
+	}
+	maxWidth := panelInnerWidth(m.width)
+	lines := make([]string, 0, len(m.queuedInputs))
+	for _, queued := range m.queuedInputs {
+		preview := flattenQueuedPreview(queued)
+		lines = append(lines, truncateText("queued: "+preview, maxWidth))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func flattenQueuedPreview(raw string) string {
+	flattened := normalizeInputNewlines(raw)
+	flattened = strings.ReplaceAll(flattened, "\n", " ")
+	flattened = strings.TrimSpace(flattened)
+	if flattened == "" {
+		return "(empty)"
+	}
+	return flattened
+}
+
+func (m *model) decorateComposerInput(body string) string {
+	lines := strings.Split(body, "\n")
+	if len(lines) == 0 {
+		return composerPrompt
+	}
+	for i := range lines {
+		if i == 0 {
+			lines[i] = composerPrompt + lines[i]
+			continue
+		}
+		lines[i] = composerIndent + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *model) composerGapView() string {
@@ -144,15 +188,15 @@ func optionalRowHeight(row string) int {
 }
 
 func (m *model) adjustInputHeight() {
-	lineCount := 1
+	lineCount := composerMinLines
 	if v := m.input.Value(); v != "" {
 		lineCount = strings.Count(v, "\n") + 1
 	}
-	if lineCount < 1 {
-		lineCount = 1
+	if lineCount < composerMinLines {
+		lineCount = composerMinLines
 	}
-	if lineCount > 8 {
-		lineCount = 8
+	if lineCount > composerMaxLines {
+		lineCount = composerMaxLines
 	}
 	m.input.SetHeight(lineCount)
 }
