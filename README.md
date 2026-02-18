@@ -85,7 +85,7 @@ Backup lifecycle notes:
 
 ## TUI controls
 
-- `Enter` send message
+- `Enter` send message (`/` commands run immediately; non-slash prompts queue FIFO while a run is active)
 - `Ctrl+J` insert newline
 - `Tab` autocomplete selected slash command while typing `/...`
 - `Shift+Tab` move slash-command selection backward
@@ -97,6 +97,8 @@ Backup lifecycle notes:
 - `Ctrl+Y` toggle mouse capture (off enables standard text selection)
 - `Ctrl+C` clear input (press twice quickly to exit)
 - `Ctrl+D` exit when input is empty
+
+When prompts are queued, the composer shows queued single-line previews above the input box in next-to-run order.
 
 TUI slash commands:
 

@@ -76,11 +76,39 @@ func (m *model) statusSettings(innerWidth int) string {
 }
 
 func (m *model) inputView() string {
-	body := m.decorateComposerInput(m.input.View())
-	if menu := m.slashMenuView(); menu != "" {
-		body += "\n" + menu
+	parts := make([]string, 0, 3)
+	if queue := m.queueListView(); queue != "" {
+		parts = append(parts, queue)
 	}
+	parts = append(parts, m.decorateComposerInput(m.input.View()))
+	if menu := m.slashMenuView(); menu != "" {
+		parts = append(parts, menu)
+	}
+	body := strings.Join(parts, "\n")
 	return inputStyle.Width(max(1, m.width)).Render(body)
+}
+
+func (m *model) queueListView() string {
+	if len(m.queuedInputs) == 0 {
+		return ""
+	}
+	maxWidth := panelInnerWidth(m.width)
+	lines := make([]string, 0, len(m.queuedInputs))
+	for _, queued := range m.queuedInputs {
+		preview := flattenQueuedPreview(queued)
+		lines = append(lines, truncateText("queued: "+preview, maxWidth))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func flattenQueuedPreview(raw string) string {
+	flattened := normalizeInputNewlines(raw)
+	flattened = strings.ReplaceAll(flattened, "\n", " ")
+	flattened = strings.TrimSpace(flattened)
+	if flattened == "" {
+		return "(empty)"
+	}
+	return flattened
 }
 
 func (m *model) decorateComposerInput(body string) string {

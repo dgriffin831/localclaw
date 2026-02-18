@@ -39,6 +39,9 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 			m.abortRun("run aborted")
 			m.addSystem("run aborted")
 			m.refreshViewport(true)
+			if cmd := m.startNextQueuedInput(); cmd != nil {
+				return true, cmd
+			}
 			return true, nil
 		}
 	}

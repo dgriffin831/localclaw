@@ -149,6 +149,7 @@ type model struct {
 	history      []string
 	historyIdx   int
 	historyDraft string
+	queuedInputs []string
 
 	slashQuery    string
 	slashMatches  []slashCommandDef

@@ -19,12 +19,6 @@ func (m *model) submitInput() tea.Cmd {
 	if value == "" {
 		return nil
 	}
-	if m.running {
-		m.addSystem("run already in progress; press Esc to abort")
-		m.refreshViewport(true)
-		return nil
-	}
-
 	m.rememberHistory(value)
 	m.input.Reset()
 	m.updateSlashAutocomplete()
@@ -32,6 +26,11 @@ func (m *model) submitInput() tea.Cmd {
 
 	if strings.HasPrefix(value, "/") {
 		return m.handleSlash(value)
+	}
+	if m.running {
+		m.enqueueInput(value)
+		m.refreshViewport(true)
+		return nil
 	}
 	m.startRun(value)
 	m.refreshViewport(true)
@@ -85,6 +84,40 @@ func (m *model) activeRunCommands() tea.Cmd {
 		cmds = append(cmds, waitStreamErr(m.activeRunID, m.streamErrs))
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *model) enqueueInput(value string) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return
+	}
+	m.queuedInputs = append(m.queuedInputs, trimmed)
+}
+
+func (m *model) dequeueInput() (string, bool) {
+	if len(m.queuedInputs) == 0 {
+		return "", false
+	}
+	next := m.queuedInputs[0]
+	m.queuedInputs = m.queuedInputs[1:]
+	return next, true
+}
+
+func (m *model) clearQueuedInputs() {
+	m.queuedInputs = nil
+}
+
+func (m *model) startNextQueuedInput() tea.Cmd {
+	if m.running {
+		return nil
+	}
+	next, ok := m.dequeueInput()
+	if !ok {
+		return nil
+	}
+	m.startRun(next)
+	m.refreshViewport(true)
+	return m.activeRunCommands()
 }
 
 func (m *model) startRun(input string) {
@@ -229,6 +262,7 @@ func (m *model) ensureActiveAssistantAtEnd() {
 
 func (m *model) runSessionReset(startNew bool, source string) {
 	m.abortRun("")
+	m.clearQueuedInputs()
 	if m.app != nil {
 		next := m.app.ResetSession(m.ctx, runtime.ResetSessionRequest{
 			AgentID:   m.agentID,
