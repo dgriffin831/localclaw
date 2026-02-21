@@ -22,6 +22,18 @@ type fakeLLMClient struct {
 	promptErr      error
 }
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func stringPtr(v string) *string {
+	return &v
+}
+
 func (f fakeLLMClient) Prompt(ctx context.Context, input string) (string, error) {
 	if f.promptErr != nil {
 		return "", f.promptErr
@@ -540,9 +552,9 @@ func TestResolveMemoryFlushConfigMergesAgentOverride(t *testing.T) {
 	cfg.Agents.List = []config.AgentConfig{
 		{
 			ID: "writer",
-			Compaction: config.CompactionConfig{
-				MemoryFlush: config.MemoryFlushConfig{
-					Prompt: "agent prompt",
+			Compaction: config.CompactionOverrideConfig{
+				MemoryFlush: config.MemoryFlushOverrideConfig{
+					Prompt: stringPtr("agent prompt"),
 				},
 			},
 		},
@@ -604,6 +616,85 @@ func TestResolveMemoryFlushConfigWithoutAgentOverrideUsesDefaults(t *testing.T) 
 	}
 	if resolved.Prompt != "default prompt" {
 		t.Fatalf("expected default prompt to be preserved, got %q", resolved.Prompt)
+	}
+}
+
+func TestRunMemoryFlushIfNeededSkipsWhenAgentOverrideDisablesDefault(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.App.Root = t.TempDir()
+	cfg.Agents.Defaults.Workspace = "."
+	cfg.Session.Store = "agents/{agentId}/sessions/sessions.json"
+	cfg.Agents.Defaults.Compaction.MemoryFlush.Enabled = true
+	cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens = 1
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TriggerWindowTokens = 0
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TimeoutSeconds = 20
+	cfg.Agents.List = []config.AgentConfig{
+		{
+			ID: "writer",
+			Compaction: config.CompactionOverrideConfig{
+				MemoryFlush: config.MemoryFlushOverrideConfig{
+					Enabled: boolPtr(false),
+				},
+			},
+		},
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if err := app.Run(ctx); err != nil {
+		t.Fatalf("run app: %v", err)
+	}
+	if err := app.AddSessionTokens(ctx, "writer", "main", 2); err != nil {
+		t.Fatalf("add session tokens: %v", err)
+	}
+
+	app.llm = fakeLLMClient{promptErr: fmt.Errorf("flush should not run")}
+	if err := app.RunMemoryFlushIfNeeded(ctx, "writer", "main"); err != nil {
+		t.Fatalf("expected run memory flush to short-circuit, got %v", err)
+	}
+}
+
+func TestResolveMemoryFlushConfigAppliesExplicitZeroOverrides(t *testing.T) {
+	cfg := config.Default()
+	cfg.Agents.Defaults.Compaction.MemoryFlush.Enabled = true
+	cfg.Agents.Defaults.Compaction.MemoryFlush.ThresholdTokens = 28000
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TriggerWindowTokens = 4000
+	cfg.Agents.Defaults.Compaction.MemoryFlush.TimeoutSeconds = 20
+	cfg.Agents.Defaults.Compaction.MemoryFlush.Prompt = "default prompt"
+	cfg.Agents.List = []config.AgentConfig{
+		{
+			ID: "writer",
+			Compaction: config.CompactionOverrideConfig{
+				MemoryFlush: config.MemoryFlushOverrideConfig{
+					ThresholdTokens:     intPtr(0),
+					TriggerWindowTokens: intPtr(0),
+					TimeoutSeconds:      intPtr(0),
+					Prompt:              stringPtr(""),
+				},
+			},
+		},
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+
+	resolved := app.resolveMemoryFlushConfig("writer")
+	if resolved.ThresholdTokens != 0 {
+		t.Fatalf("expected thresholdTokens=0, got %d", resolved.ThresholdTokens)
+	}
+	if resolved.TriggerWindowTokens != 0 {
+		t.Fatalf("expected triggerWindowTokens=0, got %d", resolved.TriggerWindowTokens)
+	}
+	if resolved.TimeoutSeconds != 0 {
+		t.Fatalf("expected timeoutSeconds=0, got %d", resolved.TimeoutSeconds)
+	}
+	if resolved.Prompt != "" {
+		t.Fatalf("expected prompt override to be empty, got %q", resolved.Prompt)
 	}
 }
 

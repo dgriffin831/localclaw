@@ -538,8 +538,7 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	}
 	sessionsRoot := filepath.Dir(sessionsPath)
 
-	// TODO: Resolve per-agent memory config with the same merge logic used by runtime (including agent overrides) instead of always using defaults.
-	memoryCfg := cfg.Agents.Defaults.Memory
+	memoryCfg := runtime.ResolveMemoryConfig(cfg, resolvedAgent)
 	storePath, err := resolveStorePath(cfg.App.Root, memoryCfg.Store.Path, resolvedAgent)
 	if err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("resolve memory store path: %w", err)

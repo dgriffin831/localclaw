@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+func cfgBoolPtr(v bool) *bool {
+	return &v
+}
+
+func cfgIntPtr(v int) *int {
+	return &v
+}
+
 func TestDefaultConfigIsValid(t *testing.T) {
 	cfg := Default()
 	if err := cfg.Validate(); err != nil {
@@ -331,6 +339,92 @@ func TestLoadSupportsMemorySearchSettingsUnderMemorySection(t *testing.T) {
 	}
 	if !cfg.Agents.Defaults.Memory.Sync.OnSearch {
 		t.Fatalf("expected memory.sync.onSearch=true")
+	}
+}
+
+func TestLoadSupportsAgentMemorySyncOnSearchFalseOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"list": [
+				{
+					"id": "ops",
+					"memory": {
+						"sync": {
+							"onSearch": false
+						}
+					}
+				}
+			]
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Agents.List) != 1 {
+		t.Fatalf("expected one agent override, got %d", len(cfg.Agents.List))
+	}
+	if cfg.Agents.List[0].Memory.Sync.OnSearch == nil {
+		t.Fatalf("expected agents.list[0].memory.sync.onSearch override to be set")
+	}
+	if *cfg.Agents.List[0].Memory.Sync.OnSearch {
+		t.Fatalf("expected agents.list[0].memory.sync.onSearch=false override")
+	}
+}
+
+func TestLoadSupportsAgentCompactionMemoryFlushExplicitFalseAndZeroOverrides(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"list": [
+				{
+					"id": "ops",
+					"compaction": {
+						"memoryFlush": {
+							"enabled": false,
+							"thresholdTokens": 0,
+							"triggerWindowTokens": 0,
+							"timeoutSeconds": 0,
+							"prompt": ""
+						}
+					}
+				}
+			]
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Agents.List) != 1 {
+		t.Fatalf("expected one agent override, got %d", len(cfg.Agents.List))
+	}
+	override := cfg.Agents.List[0].Compaction.MemoryFlush
+	if override.Enabled == nil || *override.Enabled {
+		t.Fatalf("expected agents.list[0].compaction.memoryFlush.enabled=false override")
+	}
+	if override.ThresholdTokens == nil || *override.ThresholdTokens != 0 {
+		t.Fatalf("expected agents.list[0].compaction.memoryFlush.thresholdTokens=0 override")
+	}
+	if override.TriggerWindowTokens == nil || *override.TriggerWindowTokens != 0 {
+		t.Fatalf("expected agents.list[0].compaction.memoryFlush.triggerWindowTokens=0 override")
+	}
+	if override.TimeoutSeconds == nil || *override.TimeoutSeconds != 0 {
+		t.Fatalf("expected agents.list[0].compaction.memoryFlush.timeoutSeconds=0 override")
+	}
+	if override.Prompt == nil || *override.Prompt != "" {
+		t.Fatalf("expected agents.list[0].compaction.memoryFlush.prompt empty override")
 	}
 }
 
@@ -847,6 +941,54 @@ func TestValidateRejectsNegativeMemoryFlushValues(t *testing.T) {
 	cfg.Agents.Defaults.Compaction.MemoryFlush.TimeoutSeconds = -1
 	if err := cfg.Validate(); err == nil {
 		t.Fatalf("expected negative timeoutSeconds error")
+	}
+}
+
+func TestValidateRejectsNegativeAgentMemoryFlushOverrideValues(t *testing.T) {
+	cfg := Default()
+	cfg.Agents.List = []AgentConfig{
+		{
+			ID: "ops",
+			Compaction: CompactionOverrideConfig{
+				MemoryFlush: MemoryFlushOverrideConfig{
+					ThresholdTokens: cfgIntPtr(-1),
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected negative agent thresholdTokens override error")
+	}
+
+	cfg = Default()
+	cfg.Agents.List = []AgentConfig{
+		{
+			ID: "ops",
+			Compaction: CompactionOverrideConfig{
+				MemoryFlush: MemoryFlushOverrideConfig{
+					TriggerWindowTokens: cfgIntPtr(-1),
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected negative agent triggerWindowTokens override error")
+	}
+
+	cfg = Default()
+	cfg.Agents.List = []AgentConfig{
+		{
+			ID: "ops",
+			Compaction: CompactionOverrideConfig{
+				MemoryFlush: MemoryFlushOverrideConfig{
+					TimeoutSeconds: cfgIntPtr(-1),
+					Enabled:        cfgBoolPtr(false),
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected negative agent timeoutSeconds override error")
 	}
 }
 

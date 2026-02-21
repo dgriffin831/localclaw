@@ -584,32 +584,30 @@ func (a *App) resolveMemoryFlushConfig(agentID string) config.MemoryFlushConfig 
 	return resolved
 }
 
-func hasMemoryFlushOverride(cfg config.MemoryFlushConfig) bool {
-	// TODO: Replace truthy/positive heuristic detection with explicit optional override fields so agents can intentionally disable inherited defaults (for example enabled=false or threshold=0).
-	return cfg.Enabled ||
-		cfg.ThresholdTokens > 0 ||
-		cfg.TriggerWindowTokens > 0 ||
-		strings.TrimSpace(cfg.Prompt) != "" ||
-		cfg.TimeoutSeconds > 0
+func hasMemoryFlushOverride(cfg config.MemoryFlushOverrideConfig) bool {
+	return cfg.Enabled != nil ||
+		cfg.ThresholdTokens != nil ||
+		cfg.TriggerWindowTokens != nil ||
+		cfg.Prompt != nil ||
+		cfg.TimeoutSeconds != nil
 }
 
-func mergeMemoryFlushConfig(base, override config.MemoryFlushConfig) config.MemoryFlushConfig {
+func mergeMemoryFlushConfig(base config.MemoryFlushConfig, override config.MemoryFlushOverrideConfig) config.MemoryFlushConfig {
 	merged := base
-	// TODO: Support explicit false/zero overrides from agent config; current merge only applies enabling/positive values and cannot turn inherited settings off.
-	if override.Enabled {
-		merged.Enabled = true
+	if override.Enabled != nil {
+		merged.Enabled = *override.Enabled
 	}
-	if override.ThresholdTokens > 0 {
-		merged.ThresholdTokens = override.ThresholdTokens
+	if override.ThresholdTokens != nil {
+		merged.ThresholdTokens = *override.ThresholdTokens
 	}
-	if override.TriggerWindowTokens > 0 {
-		merged.TriggerWindowTokens = override.TriggerWindowTokens
+	if override.TriggerWindowTokens != nil {
+		merged.TriggerWindowTokens = *override.TriggerWindowTokens
 	}
-	if strings.TrimSpace(override.Prompt) != "" {
-		merged.Prompt = override.Prompt
+	if override.Prompt != nil {
+		merged.Prompt = *override.Prompt
 	}
-	if override.TimeoutSeconds > 0 {
-		merged.TimeoutSeconds = override.TimeoutSeconds
+	if override.TimeoutSeconds != nil {
+		merged.TimeoutSeconds = *override.TimeoutSeconds
 	}
 	return merged
 }

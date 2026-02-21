@@ -136,6 +136,78 @@ func TestRunMemorySearchRequiresQuery(t *testing.T) {
 	}
 }
 
+func TestRunMemoryStatusJSONUsesPerAgentStorePathOverride(t *testing.T) {
+	ctx := context.Background()
+	const agentID = "ops"
+	cfg, app, _ := newTestAppWithConfig(t, []string{"memory"}, func(cfg *config.Config) {
+		cfg.Agents.List = []config.AgentConfig{
+			{
+				ID: agentID,
+				Memory: config.MemoryOverrideConfig{
+					Store: config.MemoryStoreConfig{
+						Path: filepath.Join("stores", "{agentId}", "index.sqlite"),
+					},
+				},
+			},
+		}
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := RunMemoryCommand(ctx, cfg, app, []string{"status", "--agent", agentID, "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run memory status: %v (stderr=%q)", err, stderr.String())
+	}
+
+	var payload statusOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode status json: %v\noutput=%s", err, stdout.String())
+	}
+
+	wantStorePath := filepath.Join(cfg.App.Root, "stores", agentID, "index.sqlite")
+	if payload.StorePath != wantStorePath {
+		t.Fatalf("expected storePath=%q, got %q", wantStorePath, payload.StorePath)
+	}
+}
+
+func TestRunMemorySearchUsesPerAgentQueryMaxResultsOverrideByDefault(t *testing.T) {
+	ctx := context.Background()
+	const agentID = "ops"
+	cfg, app, workspace := newTestAppWithConfig(t, []string{"memory"}, func(cfg *config.Config) {
+		cfg.Agents.List = []config.AgentConfig{
+			{
+				ID: agentID,
+				Memory: config.MemoryOverrideConfig{
+					Query: config.QueryConfig{MaxResults: 3},
+				},
+			},
+		}
+	})
+
+	if err := os.WriteFile(filepath.Join(workspace, "MEMORY.md"), []byte("match term in memory"), 0o600); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := RunMemoryCommand(ctx, cfg, app, []string{"index", "--agent", agentID}, &stdout, &stderr); err != nil {
+		t.Fatalf("index before search: %v (stderr=%q)", err, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := RunMemoryCommand(ctx, cfg, app, []string{"search", "--agent", agentID, "match term", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("memory search: %v (stderr=%q)", err, stderr.String())
+	}
+
+	var payload searchOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode search json: %v\noutput=%s", err, stdout.String())
+	}
+	if payload.MaxResults != 3 {
+		t.Fatalf("expected maxResults=3 from per-agent override, got %d", payload.MaxResults)
+	}
+}
+
 func TestRunMemoryGrepJSONReturnsMatches(t *testing.T) {
 	ctx := context.Background()
 	cfg, app, workspace := newTestApp(t, []string{"memory"})
@@ -211,6 +283,11 @@ func TestRunMemoryStatusJSONOmitsEmbeddingAndVectorFields(t *testing.T) {
 
 func newTestApp(t *testing.T, sources []string) (config.Config, *runtime.App, string) {
 	t.Helper()
+	return newTestAppWithConfig(t, sources, nil)
+}
+
+func newTestAppWithConfig(t *testing.T, sources []string, mutate func(*config.Config)) (config.Config, *runtime.App, string) {
+	t.Helper()
 
 	cfg := config.Default()
 	cfg.App.Root = t.TempDir()
@@ -219,6 +296,9 @@ func newTestApp(t *testing.T, sources []string) (config.Config, *runtime.App, st
 	cfg.Agents.Defaults.Memory.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
 	cfg.Heartbeat.Enabled = false
 	cfg.Cron.Enabled = false
+	if mutate != nil {
+		mutate(&cfg)
+	}
 
 	app, err := runtime.New(cfg)
 	if err != nil {
