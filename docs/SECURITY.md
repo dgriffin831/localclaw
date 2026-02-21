@@ -2,15 +2,15 @@
 
 ## Default posture
 
-`localclaw` is deny-by-default for non-local runtime behavior.
+`localclaw` is local-first and deny-by-default for host-managed non-local runtime behavior.
 
-- Local-only enforcement is enabled by default.
 - Execution mode defaults to `security.mode = sandbox-write`.
 - Gateway/server/listener behavior is not configurable.
 - Channels are restricted to `slack` and `signal` identifiers.
 - LLM providers are constrained to local CLI subprocess invocation (`claudecode` or `codex`).
 - Runtime uses MCP-first provider execution; host no longer runs a legacy local tool-call execution loop.
 - Signal inbound processing is local subprocess polling only (no inbound network listeners/webhooks).
+- `channels.enabled` defaults to `["slack", "signal"]`, but outbound delivery still requires valid channel credentials/configuration at runtime.
 
 ## Enforced guardrails
 
@@ -47,27 +47,29 @@ Codex `exec resume` runs keep security-mode enforcement by placing security-mana
 - Runtime is a single CLI process.
 - No HTTP/gRPC server mode.
 - No open ports/listeners.
-- No browser-hosted execution surface.
-- No Node host/gateway process.
+- MCP server transport is stdio-only (`localclaw mcp serve`), not socket/listener based.
 - Slack delivery performs outbound HTTPS calls to Slack Web API only.
 - Signal inbound polling uses local `signal-cli receive` subprocess calls only.
+- LLM/channel subprocesses (`claude`, `codex`, `signal-cli`) may perform their own outbound network access; this is outside a host-side network sandbox.
 
 ## Filesystem and state controls
 
 - State defaults under `~/.localclaw`.
+- Bootstrap config writes `~/.localclaw/localclaw.json` with create-once semantics (`O_EXCL`) and file mode `0600`.
 - Workspace bootstrap includes a baseline `SECURITY.md` file.
 - `SECURITY.md` is injected into default bootstrap context (including subagent bootstrap allowlist).
 - Session store files are written with hardened permissions where supported (`0600` files, `0700` session dirs).
 - Session writes use lock files plus atomic replace behavior.
-- Memory file reads through `memory_get` are restricted to allowed markdown sources.
+- Memory file reads through `memory_get` are restricted to discovered markdown sources in scope (workspace memory files plus configured memory extra paths).
 - `memory_grep` scans only discovered in-scope memory/session files and rejects out-of-scope traversal globs.
 
 ## LLM execution boundary
 
 - Claude Code and Codex integrations are local subprocess only (`exec.CommandContext`).
 - No direct model HTTP client is implemented in `localclaw`.
-- Claude subprocess environment inherits parent process variables (with optional profile override).
-- Prompt streaming requires request-capable provider adapters; no compatibility fallback path is used.
+- Claude subprocess environment inherits parent process variables; configured profile is passed as `AWS_PROFILE`.
+- Prompt streaming requires request-capable provider adapters.
+- Claude stream parsing keeps a compatibility fallback for non-JSON output lines by emitting them as text deltas (no host-side tool execution loop).
 
 ## Tool boundary
 

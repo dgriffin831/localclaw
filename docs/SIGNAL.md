@@ -60,7 +60,7 @@ Configure Signal channel settings.
 ```json
 {
   "channels": {
-    "enabled": ["slack", "signal"],
+    "enabled": ["signal"],
     "signal": {
       "cli_path": "signal-cli",
       "account": "+15551234567",
@@ -120,6 +120,7 @@ go run ./cmd/localclaw channels serve --once
 
 Inbound policy behavior:
 - sender must be in `inbound.allow_from`
+- `inbound.allow_from` values must be E.164 numbers (for example `+15557654321`)
 - sender routes to `inbound.agent_by_sender[sender]` when present
 - otherwise sender routes to `inbound.default_agent` (or `default` when unset)
 - when `inbound.send_typing=true`, typing indicators are sent while the reply is running and stopped when done
@@ -154,7 +155,7 @@ Delivery path:
 4. Successful sends return `recipient` and `sent_at`.
 
 Inbound path:
-1. `channels serve` calls `signal-cli -o json -a <account> receive ...` in a loop.
+1. `channels serve` calls `signal-cli -o json -a <account> receive --timeout <seconds> --max-messages <n> --ignore-attachments --ignore-stories` in a loop.
 2. Runtime parses inbound envelopes and drops sync/group payloads.
 3. Runtime enforces `inbound.allow_from`.
 4. Runtime optionally sends a read receipt (`sendReceipt`) for accepted direct messages.
@@ -172,6 +173,7 @@ Command shape:
 ## Failure Modes
 
 - Disabled channel: `channel "signal" is disabled`
+- Inbound worker requires `channels.signal.inbound.enabled=true` and at least one `inbound.allow_from` sender
 - Missing recipient after fallback: send rejected before subprocess execution
 - Subprocess failure: stderr is surfaced in wrapped error text
 - Timeout/cancellation: subprocess is canceled through `exec.CommandContext`
