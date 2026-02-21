@@ -9,6 +9,7 @@ Primary implementation anchors:
 - Entrypoint: `cmd/localclaw/main.go`
 - Runtime composition: `internal/runtime/app.go`
 - Runtime tools + prompt assembly: `internal/runtime/tools.go`
+- Runtime MCP capability methods: `internal/runtime/mcp_support.go`
 - Config loading + strict validation: `internal/config/config.go`
 - Workspace lifecycle/bootstrap: `internal/workspace/manager.go`
 - Session store/transcripts: `internal/session/*`
@@ -31,7 +32,7 @@ localclaw binary (single process)
   |- runtime wiring
   |   |- workspace manager (resolve + bootstrap templates)
   |   |- session store + transcript writer
-  |   |- runtime tool registry (memory tools + workspace/session/cron/channel MCP tools)
+  |   |- runtime tool registry (memory tools only: search/get/grep)
   |   |- skills registry
   |   |- cron scheduler
   |   |- heartbeat monitor
@@ -42,8 +43,9 @@ localclaw binary (single process)
       |- default => help
       |- doctor
       |- tui
+      |- backup
       |- memory {status,index,search,grep}
-      |- channels {serve}
+      |- channels {serve[--once]}
       `- mcp {serve}
 ```
 
@@ -60,7 +62,7 @@ No server, gateway, or listener process exists.
 5. `cron.Start` (load persisted cron jobs + start in-process scheduling loop)
 6. `heartbeat.Start` (background ticker loop; overlapping ticks are skipped)
 
-Any failure aborts startup.
+Any error through step 5 aborts startup. `heartbeat.Start` is non-blocking and does not return an error.
 
 ## 4. Runtime execution model
 
@@ -82,6 +84,7 @@ Session lifecycle:
 Memory/runtime tool behavior:
 
 - Memory retrieval is keyword/FTS + grep/file-read based (`memory_search`, `memory_grep`, `memory_get`).
+- Runtime prompt tool definitions are memory-only. The broader workspace/session/cron/channel tool surface is exposed by `localclaw mcp serve` over MCP stdio.
 - Runtime and memory CLI construct managers on demand using resolved workspace + `app.root`-based paths.
 - Cron scheduler stores jobs under `app.root` and executes local prompt messages while runtime modes are active.
 
@@ -92,6 +95,8 @@ Default state root: `~/.localclaw`
 ```text
 ~/.localclaw/
   localclaw.json                        # scaffolded config file if missing
+  heartbeats.log                        # heartbeat monitor logs
+  crons.log                             # cron scheduler logs
   memory/<agentId>.sqlite              # SQLite memory index store
   cron/jobs.json                       # persisted cron jobs + latest run metadata
   agents/<agentId>/sessions/sessions.json

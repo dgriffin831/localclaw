@@ -12,7 +12,7 @@ Supported command modes:
 - `doctor`: runs startup initialization checks and validates resolved workspace/session-store paths with detailed output.
 - `doctor --deep`: runs `doctor` checks plus deep checks (currently an LLM prompt probe).
 - `tui`: runs startup initialization, then starts Bubble Tea UI. Accepts an optional positional startup prompt (`localclaw tui "..."`) that is auto-submitted on open.
-- `backup`: creates one compressed backup archive under `<app.root>/backups`.
+- `backup`: creates one compressed backup archive under `<app.root>/backups` (this mode does not call `App.Run`).
 - `memory`: runs startup initialization, then executes memory subcommands (`status`, `index`, `search`, `grep`).
 - `channels`: runs startup initialization, then runs channel workers (`serve` subcommand).
 - `mcp`: runs startup initialization, then serves stdio JSON-RPC MCP requests (`serve` subcommand).
@@ -75,13 +75,15 @@ Runtime exposes session-default and session-explicit prompt paths:
 - `PromptStream(ctx, input) (<-chan llm.StreamEvent, <-chan error)`
 - `PromptForSession(ctx, agentID, sessionID, input)`
 - `PromptStreamForSession(ctx, agentID, sessionID, input)`
+- `PromptForSessionWithOptions(ctx, agentID, sessionID, input, opts)`
+- `PromptStreamForSessionWithOptions(ctx, agentID, sessionID, input, opts)`
 
 Prompt assembly (`buildPromptRequest`) behavior:
 
 - Resolves `agentID/sessionID` into stable `session_key`.
 - Adds provider metadata (`provider`) and persisted provider-native session ID (`provider_session_id`) when available.
 - Adds resolved workspace path (`workspace_path`) and configured security mode (`security_mode`) into request session metadata.
-- Injects workspace bootstrap context on first prompt in a session when `BOOTSTRAP.md` exists (sentinel for pending setup).
+- Injects workspace bootstrap context on first prompt in a session from available bootstrap files (`AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`, optional `BOOTSTRAP.md`, etc.).
 - Re-injects bootstrap context after compaction count increases.
 - Injects a localclaw-authored skills block from workspace skill snapshots.
 - Carries provider-agnostic prompt options (for example model override) to request-capable adapters.
@@ -146,6 +148,7 @@ Channel dispatch behavior:
 Signal inbound behavior:
 
 - `channels serve` currently runs Signal inbound processing only.
+- It requires Signal to be enabled in `channels.enabled` and `channels.signal.inbound.enabled=true`.
 - Runtime polls `signal-cli receive` using JSON output (`-o json`) and local subprocess execution.
 - Allowed inbound senders are enforced by `channels.signal.inbound.allow_from`.
 - Group messages are always dropped (never routed/executed).
@@ -182,6 +185,7 @@ Heartbeat behavior:
 Backup behavior:
 
 - `localclaw backup` creates one `tar.gz` snapshot under `<app.root>/backups`.
+- backup sources are treated as optional; missing configured files/directories are skipped instead of failing the run.
 - backup auto-save/auto-clean loops are started only in long-running command paths:
   - `tui`
   - `channels serve` (excluding `--once`)
@@ -228,7 +232,7 @@ Memory flush behavior:
 
 - OS signals (`SIGINT`, `SIGTERM`) cancel root context.
 - TUI `Esc` cancels active run context.
-- Claude CLI invocation uses `exec.CommandContext`, so cancellation terminates subprocesses.
+- Claude Code and Codex CLI invocations use `exec.CommandContext`, so cancellation terminates subprocesses.
 - MCP tool failures are returned from MCP handlers as structured tool errors.
 
 ## Extension rules

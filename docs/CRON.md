@@ -60,6 +60,11 @@ Optional fields:
 - `wake_mode` (defaults to `next-heartbeat`; currently normalized/persisted only)
 - `timeout_seconds`
 
+Notes:
+
+- If `id` is omitted, the scheduler auto-generates one (`cron-<timestamp-like-id>`).
+- `session_target` also accepts legacy `main`, which is normalized to `default`.
+
 Example: isolated job (default behavior)
 
 ```json
@@ -116,7 +121,7 @@ Manual and scheduled runs share the same execution path and result contract:
 Use `localclaw_cron_remove` with `id`.
 
 - If the job is running, it is canceled before removal.
-- Removal is persisted immediately.
+- Removal persistence is attempted immediately; persistence errors are returned.
 
 ## Schedule Syntax
 
@@ -137,6 +142,8 @@ Notes:
 
 - `@reboot` runs once per scheduler start.
 - Missed schedules while runtime is offline are not backfilled.
+- Schedule evaluation uses UTC timestamps (not local timezone).
+- Day-of-week accepts `0-7` (`0` and `7` are Sunday).
 
 ## Persistence
 
@@ -174,7 +181,10 @@ Common validation and runtime errors:
 - missing fields: `schedule is required`, `message is required`, `id is required`
 - invalid schedule: field-level parser errors
 - invalid target: `sessionTarget must be one of: default, isolated`
+- invalid wake mode: `wakeMode must be one of: next-heartbeat, now`
+- invalid timeout: `timeout_seconds must be >= 0`
 - duplicate add id: `cron job "<id>" already exists`
+- run already active: `cron job "<id>" is already running`
 - run/remove unknown id: `cron job "<id>" not found`
 
 ## Implementation Map

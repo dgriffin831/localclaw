@@ -2,17 +2,19 @@
 
 `localclaw` memory retrieval is local-only and deterministic. The implementation is keyword search + grep over workspace/session sources, backed by SQLite.
 
-## Review status
+## Current state
 
-Implementation review against the completed retrieval-v2 work confirms the core contract is in place:
+Implemented retrieval primitives:
 
 - Embedding/vector retrieval paths are removed from runtime memory indexing and search.
 - Retrieval primitives are `memory_search`, `memory_grep`, and `memory_get`.
 - MCP memory tools are exposed as `localclaw_memory_search`, `localclaw_memory_grep`, and `localclaw_memory_get`.
 
-Current caveat:
+Known caveats:
 
 - Memory CLI command mode (`localclaw memory ...`) still resolves settings from `agents.defaults.memory` instead of the runtime's per-agent merged memory config.
+- In CLI mode, `memory search` does not auto-sync from `memory.sync.onSearch`; run `memory index` (or `memory status --index`) first when you need fresh results.
+- `memory status --deep` does not yet scan/count session sources; with `sessions` enabled it reports the placeholder issue `sessions source scanning is not yet available`.
 
 ## Retrieval primitives
 
@@ -31,6 +33,7 @@ Current caveat:
 - `memory_get`
   - Safe file-scoped reads for markdown memory files.
   - Enforces in-scope paths and optional line slicing (`from_line`, `lines`).
+  - Scope is memory markdown files only (not session transcript files).
 
 ## Index model
 
@@ -48,7 +51,7 @@ Indexed sources:
 - `MEMORY.md` / `memory.md`
 - `memory/**/*.md`
 - optional `memory.extraPaths`
-- optional sessions transcripts (`sessions` source)
+- optional session transcripts (`sessions` source, `.jsonl`, normalized for indexing)
 
 Chunk content is text-only. No embedding/model/vector columns are used by the active schema.
 
@@ -77,7 +80,18 @@ Memory command mode supports:
 - `memory search`
 - `memory grep`
 
-`memory status` reports index counts, FTS availability, source diagnostics, and sync summaries. It no longer reports embedding/vector/cache fields.
+Useful flags and defaults:
+
+- `memory status`: `--agent`, `--deep`, `--index`, `--json`
+  - `--index` performs sync before reporting and includes sync counts.
+  - `--deep` enables source diagnostics/counters.
+- `memory index`: `--agent`, `--force`, `--json`
+- `memory search <query>`: `--agent`, `--max-results`, `--min-score`, `--json`
+  - default `max-results` comes from `agents.defaults.memory.query.maxResults` (default `8`).
+- `memory grep <query>`: `--agent`, `--mode`, `--case-sensitive`, `--word`, `--max-matches`, `--context-lines`, repeatable `--path-glob`, `--source`, `--json`
+  - defaults: `mode=literal`, `max-matches=50` (cap `500`), `context-lines=0` (cap `5`), `source=all`.
+
+`memory status` no longer reports embedding/vector/cache fields.
 
 ## Configuration and migration notes
 
@@ -89,6 +103,7 @@ Important behavior:
 - Legacy embedding/vector config keys are not accepted in current config files.
 - Runtime/MCP memory behavior uses merged per-agent memory config.
 - CLI memory command mode currently does not apply per-agent merged overrides.
+- Runtime `memory_search` can auto-sync when `memory.sync.onSearch=true` in resolved agent memory config.
 
 SQLite migration note:
 

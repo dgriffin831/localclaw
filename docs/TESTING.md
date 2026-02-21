@@ -15,7 +15,7 @@ This document describes test coverage, commands, and Red/Green workflow for `loc
 | --- | --- | --- |
 | Config and policy | `internal/config/config_test.go` | defaults, strict config parsing, validation allowlists, local-only guardrails |
 | Runtime lifecycle and hooks | `internal/runtime/local_only_test.go`, `internal/runtime/tools_test.go`, `internal/runtime/cron_runtime_test.go` | startup boundaries, request-path prompt assembly, reset/session behavior, cron runtime session-target mapping |
-| LLM contract/adapter compatibility | `internal/runtime/tools_test.go` | request-stream-only runtime path and provider tool-event pass-through behavior |
+| LLM contract/adapter compatibility | `internal/runtime/tools_test.go`, `internal/llm/claudecode/client_test.go`, `internal/llm/codex/client_test.go` | runtime provider contract behavior plus Claude Code/Codex subprocess request and stream handling |
 | Skills loader/snapshot prompts | `internal/skills/registry_test.go`, `internal/runtime/tools_test.go` | workspace skill discovery, eligibility filtering, prompt-block injection/cache refresh |
 | TUI behavior | `internal/tui/app_test.go` | slash commands, autocomplete, waiting/status UX, welcome rendering, history/keybindings |
 | Workspace lifecycle | `internal/workspace/manager_test.go` | workspace resolution/bootstrap, `BOOTSTRAP.md` sentinel lifecycle, bootstrap loading/filtering, subagent allowlist |
@@ -28,7 +28,7 @@ This document describes test coverage, commands, and Red/Green workflow for `loc
 | Signal inbound receive/runtime | `internal/channels/signal/receive_test.go`, `internal/runtime/channels_inbound_test.go` | `signal-cli receive` parsing, allowlist enforcement, group-message denial, sender-to-agent routing |
 | Memory CLI | `internal/cli/memory_test.go` | `memory status/index/search/grep` JSON/text output and argument handling |
 | Channels CLI | `internal/cli/channels_test.go` | `channels serve` subcommand parsing and command-mode validation |
-| MCP runtime/tools | `internal/mcp/*_test.go`, `internal/cli/mcp_test.go` | stdio JSON-RPC loop, tool discovery/calls, `mcp serve` routing |
+| MCP runtime/tools | `internal/mcp/server_test.go`, `internal/mcp/tools_test.go`, `internal/mcp/tools/*_test.go`, `internal/cli/mcp_test.go` | stdio JSON-RPC loop, tool discovery/calls, tool policy behavior, `mcp serve` routing |
 | Session snapshot hook | `internal/hooks/session_memory_test.go` | snapshot generation, slug/summary fallback, transcript handling |
 | Memory indexing/search/grep/flush | `internal/memory/*_test.go` | discovery/chunking, SQLite sync/search/get/grep, autosync, flush logic, migration helpers |
 
@@ -57,7 +57,8 @@ go test ./internal/backup
 go test ./internal/cli
 go test ./internal/hooks
 go test ./internal/memory
-go test ./internal/mcp
+go test ./internal/mcp/...
+go test ./internal/llm/...
 ```
 
 ### Focused Red/Green examples
@@ -97,6 +98,9 @@ go run ./cmd/localclaw channels serve --once
 go run ./cmd/localclaw mcp serve
 ```
 
+- `go run ./cmd/localclaw` only prints help/usage; it does not initialize runtime.
+- `go run ./cmd/localclaw mcp serve` starts a stdio server and typically waits for input until EOF or interrupt.
+
 ## Red/Green workflow (default)
 
 1. Define behavior contract for the change.
@@ -123,8 +127,9 @@ go run ./cmd/localclaw mcp serve
   - ensure temporary workspace/session paths are isolated per test.
 - TUI behavior drift:
   - update tests together with slash keybinding/status changes.
-- Missing Claude binary in manual smoke runs:
-  - configure `llm.claude_code.binary_path` appropriately.
+- Missing provider binary in manual smoke runs:
+  - if using Claude Code, configure `llm.claude_code.binary_path`.
+  - if using Codex, configure `llm.codex.binary_path`.
 
 ## Recommended validation before handoff
 

@@ -17,6 +17,7 @@ This is a deliberate design choice and a regression guard.
 For an active prompt session, provider-reported tools are the source of truth.
 
 - `/tools` in TUI uses provider metadata discovery, not a runtime fallback list
+- if provider tools are not discovered yet, `/tools` reports `not discovered yet` (or `discovering...`) until discovery completes
 - runtime metadata probe entrypoint: `internal/runtime/provider_tools.go`
 - Codex fallback probe (when tool list is missing from stream metadata) uses constrained JSON self-report parsing in the same file
 
@@ -42,6 +43,7 @@ For an active prompt session, provider-reported tools are the source of truth.
 MCP server runtime:
 
 - entrypoint: `localclaw mcp serve`
+- only `serve` is supported under `mcp`; positional args are rejected
 - command wiring: `internal/cli/mcp.go`
 - JSON-RPC server: `internal/mcp/server.go`
 
@@ -121,11 +123,17 @@ MCP tool policy wrapper:
 
 - `internal/mcp/tools/policy.go`
 - applied in `internal/cli/mcp.go` (`applyMCPToolPolicy`)
+- current `mcp serve` wiring builds policy with empty allow/deny lists, so tools are allowed unless a custom policy is injected in code/tests
 
 Memory tool enablement also applies at runtime backend boundaries:
 
 - checks in `internal/runtime/tools.go` and `internal/runtime/mcp_support.go`
 - controlled by `agents.defaults.memory.*` and per-agent overrides
+
+Provider-side allowlists can further restrict callable tools:
+
+- Claude Code defaults include an explicit `--allowed-tools` MCP list from `internal/config/config.go` (`defaultClaudeAllowedMCPTools`)
+- runtime prompt requests currently do not inject `ToolDefinitions`; provider-visible tools come from provider metadata and provider CLI configuration
 
 ## Architecture constraints
 

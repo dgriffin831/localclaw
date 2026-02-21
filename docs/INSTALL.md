@@ -142,6 +142,11 @@ After install, coding agents (for example Claude Code or Codex CLI) should be ab
 localclaw doctor
 ```
 
+Notes:
+
+- `doctor` performs runtime/path checks without sending a model prompt.
+- `doctor --deep` also runs an LLM prompt probe and requires your configured provider CLI to be installed/configured.
+
 If an agent still cannot find `localclaw`:
 
 1. Restart the terminal/session where the agent runs.
@@ -151,3 +156,4 @@ If an agent still cannot find `localclaw`:
 3. Confirm command resolution:
    - Windows: `Get-Command localclaw`
    - macOS/Linux: `command -v localclaw`
+4. If `localclaw doctor` fails with `config error: parse config: json: unknown field ...`, you likely have an older `~/.localclaw/localclaw.json`. Update/remove that file or run with `-config /path/to/current-config.json`.

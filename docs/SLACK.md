@@ -6,6 +6,7 @@
 
 - Outbound only in this phase.
 - No inbound Slack event/webhook handling.
+- `channels serve` is Signal inbound only; it does not run a Slack worker.
 
 ## Prerequisites
 
@@ -37,6 +38,10 @@ export SLACK_BOT_TOKEN="xoxb-..."
 }
 ```
 
+Notes:
+- `default_channel` is optional, but Slack sends fail with `channel is required` if both the tool argument `channel` and `channels.slack.default_channel` are empty.
+- `bot_token_env`, `api_base_url`, and `timeout_seconds` must be set to valid values when `slack` is included in `channels.enabled`.
+
 ## MCP Tool
 
 Tool name: `localclaw_slack_send`
@@ -52,7 +57,7 @@ Structured result fields:
 - `ok`
 - `channel`
 - `message_id` (Slack `ts`)
-- `thread_id` (when present)
+- `thread_id` (may be empty)
 
 ## Implementation Notes
 
@@ -66,10 +71,15 @@ Delivery path:
 3. Adapter calls `POST /chat.postMessage` against `channels.slack.api_base_url`.
 4. Response metadata maps to `channel`, `message_id`, and `thread_id`.
 
+Caveat:
+- MCP tool registration includes `localclaw_slack_send` even when Slack is disabled; calls then fail at runtime with `channel "slack" is disabled`.
+
 ## Failure Modes
 
 - Disabled channel: `channel "slack" is disabled`
+- Missing channel after fallback: `channel is required`
 - Missing token env value: Slack send fails before request
+- Missing or blank text: Slack send fails validation before request
 - Slack API non-2xx or `ok=false`: mapped to deterministic send errors
 - Timeout/cancellation: request aborts via context
 
