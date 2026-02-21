@@ -179,15 +179,13 @@ func (c *LocalClient) PromptStreamRequest(ctx context.Context, req llm.Request) 
 }
 
 func (c *LocalClient) buildCommandArgsForRequest(req llm.Request) []string {
-	mode := strings.ToLower(strings.TrimSpace(c.settings.SessionMode))
-	if mode == "" {
-		mode = "existing"
-	}
+	resume := c.shouldResume(req)
 	providerSessionID := strings.TrimSpace(req.Session.ProviderSessionID)
-	resume := mode != "none" && providerSessionID != ""
+	securityArgs := c.buildSecurityArgsForRequest(req)
 
 	args := []string{"exec"}
 	if resume {
+		args = append(args, securityArgs...)
 		args = append(args, expandSessionArgs(c.settings.ResumeArgs, providerSessionID, []string{"resume", "{sessionId}"})...)
 	}
 	if !resume || c.resumeOutputMode() == "json" || c.resumeOutputMode() == "jsonl" {
@@ -206,7 +204,9 @@ func (c *LocalClient) buildCommandArgsForRequest(req llm.Request) []string {
 		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", reasoning))
 	}
 	args = append(args, normalizeNonBlankArgs(c.settings.ExtraArgs)...)
-	args = append(args, c.buildSecurityArgsForRequest(req)...)
+	if !resume {
+		args = append(args, securityArgs...)
+	}
 	args = append(args, "-")
 	return args
 }
@@ -227,6 +227,15 @@ func (c *LocalClient) validateSecurityContextForRequest(req llm.Request) error {
 	default:
 		return fmt.Errorf("unsupported security mode %q", mode)
 	}
+}
+
+func (c *LocalClient) shouldResume(req llm.Request) bool {
+	mode := strings.ToLower(strings.TrimSpace(c.settings.SessionMode))
+	if mode == "" {
+		mode = "existing"
+	}
+	providerSessionID := strings.TrimSpace(req.Session.ProviderSessionID)
+	return mode != "none" && providerSessionID != ""
 }
 
 func (c *LocalClient) buildSecurityArgsForRequest(req llm.Request) []string {

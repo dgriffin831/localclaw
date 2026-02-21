@@ -9,17 +9,19 @@ Implementation location:
 ## Execution model
 
 - `PromptStreamRequest` executes:
-  - non-resume baseline: `codex exec --json -C <workspace> ... -`
+  - non-resume baseline: `codex exec --json -C <agents.defaults.workspace> ... -`
+    - `-C` uses configured `agents.defaults.workspace` (runtime setting), not the resolved per-agent workspace path
   - resume path: `codex exec <resume_args...> ... -` with `--json` controlled by `llm.codex.resume_output`
     - `json` / `jsonl`: keep `--json`
     - `text`: omit `--json`
   - optional `-p <profile>` from `llm.codex.profile` (non-resume path)
   - optional `-m <model>` from `llm.codex.model` or runtime override
-  - optional `-c model_reasoning_effort="<level>"` from runtime/default selector reasoning
+  - `-c model_reasoning_effort="<level>"` from runtime/default selector reasoning (`reasoning_override` or `llm.codex.reasoning_default`)
   - security-mode flags derived from runtime request metadata:
     - `full-access` -> `--dangerously-bypass-approvals-and-sandbox`
     - `sandbox-write` -> `--sandbox workspace-write --add-dir <resolved-workspace-path>`
     - `read-only` -> `--sandbox read-only --add-dir <resolved-workspace-path>`
+  - for resume runs, security-managed flags are emitted before the `resume` subcommand (`codex exec <security flags> resume ...`) because `codex exec resume ...` does not accept those flags after the subcommand token
   - optional passthrough args from `llm.codex.extra_args`
     - default config includes `--skip-git-repo-check`
 - request input is composed with `llm.ComposePromptFallback(req)`, then written to stdin (`-` argument) using `exec.CommandContext`.
@@ -31,8 +33,9 @@ Implementation location:
     - delegated call args are normalized to input context (for example flattened `arguments`/`input` payloads without wrapper duplication)
     - delegated result data prefers structured execution payloads (`result.structured_content` when present) and omits redundant wrappers (`server`, `tool`, `arguments`, `result`)
   - `session.configured` -> `StreamEventProviderMetadata` (provider/model/tools when available)
-  - `thread.started` -> provider session ID metadata
+  - provider session ID metadata is emitted from any parsed event carrying a configured session-id field (commonly `thread_id` on events such as `thread.started`)
 - Note: some Codex CLI builds do not emit tool lists in stream metadata; runtime `/tools` discovery then uses a Codex JSON self-report probe fallback.
+- Note: when a stdout line is not parseable JSON, the adapter streams that line as raw `StreamEventDelta` text (compatibility fallback).
 - if no explicit final event appears, adapter emits `StreamEventFinal` from aggregated deltas.
 
 `Prompt`/`PromptRequest` are synchronous wrappers over streaming:
@@ -82,6 +85,7 @@ Implementation location:
 - scanner/read errors are returned with context.
 - non-zero exits include stderr text when available.
 - unsupported/missing security context returns a fast-fail request error.
+- runtime session continuation may clear an invalid persisted provider session ID and retry once without resume when the error indicates an invalid/expired/missing session.
 
 ## Security config interaction
 

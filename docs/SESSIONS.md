@@ -184,6 +184,12 @@ Row shape:
 
 If role is blank, the `role` field is omitted.
 
+Important runtime caveat:
+
+- prompt APIs (`Prompt*`/`PromptForSession*`) do not append transcript rows automatically
+- transcript persistence is caller-driven via `AppendSessionTranscriptMessage`
+- current built-in path that does this per turn is the TUI (`internal/tui/run_state.go`)
+
 ### 6.2 Normalization for memory/search
 
 `NormalizeJSONLTranscript` and `ReadNormalizedTranscript` produce line-oriented normalized text, extracting message text from common JSON transcript shapes (plain string, nested objects, arrays).
@@ -207,6 +213,11 @@ Request session metadata includes:
 - `provider_session_id` (if persisted for that provider)
 
 Provider session IDs are loaded from `sessions.json` before each prompt attempt.
+
+Session-entry creation caveat:
+
+- building/sending a prompt alone does not guarantee a `sessions.json` entry is created
+- entries are created/updated only when a session-store mutation path runs (for example provider metadata persistence, token accounting, or channel delivery persistence)
 
 ## 8. Provider Continuation Flow
 
@@ -420,7 +431,7 @@ Pagination/defaults at tool layer:
 
 ## 11. Session History Read Semantics
 
-`MCPSessionsHistory` reads transcript JSONL and returns normalized history rows.
+`MCPSessionsHistory` reads transcript JSONL and returns parsed history rows.
 
 Guardrails (`internal/runtime/mcp_support.go`):
 
@@ -428,6 +439,7 @@ Guardrails (`internal/runtime/mcp_support.go`):
 - each returned content string is truncated to `16 KiB`
 - invalid JSON rows are skipped
 - missing transcript file returns empty history (not error)
+- metadata entry must exist first (`MCPSessionStatus` check); otherwise history returns not-found
 
 Delete semantics (`MCPSessionDelete`):
 
@@ -514,3 +526,4 @@ Current implementation intentionally keeps these constraints:
 - provider key normalization currently does not enforce a strict allowlist
 - transcript event bus exists but runtime does not yet wire transcript update subscribers at startup
 - continuation state is provider-local per session and is not shared across providers
+- non-TUI runtime prompt paths do not automatically persist transcript rows or token counters

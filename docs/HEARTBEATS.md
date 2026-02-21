@@ -8,25 +8,32 @@ When enabled, LocalClaw starts a background heartbeat loop after runtime startup
 
 On each tick it:
 
-1. Resolves the default workspace.
+1. Resolves the default agent workspace (`default`).
 2. Checks that `HEARTBEAT.md` is readable in that workspace.
-3. Sends a local LLM prompt in session `default/main` that explicitly references `HEARTBEAT.md`.
+3. Sends a local LLM prompt in session `default/main` that references `HEARTBEAT.md`.
 
-Default heartbeat prompt body:
+Heartbeat prompt content:
 
 `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 
+Plus:
+
+`Use workspace heartbeat file: <resolved absolute path>`
+
+Note: workspace init bootstraps a default `HEARTBEAT.md` file when missing.
+
 ## Scheduling and Lifecycle
 
-Heartbeat scheduling uses existing config:
+Heartbeat scheduling uses:
 
 - `heartbeat.enabled`
 - `heartbeat.interval_seconds`
 
 Behavior contract:
 
+- Defaults are `heartbeat.enabled=true` and `heartbeat.interval_seconds=30`.
 - If `heartbeat.enabled=false`, no loop starts.
-- If enabled, ticks run every `heartbeat.interval_seconds`.
+- If enabled, the first tick fires after one full interval, then continues every `heartbeat.interval_seconds`.
 - If a previous heartbeat run is still active, the next tick is skipped (no overlap).
 - If a tick fails, the error is logged and future ticks continue.
 - The loop stops automatically when runtime context is canceled.
@@ -54,8 +61,10 @@ Heartbeats only run while runtime is alive.
 
 Practical implications:
 
+- Runtime is started by `doctor`, `tui`, `memory ...`, `channels serve`, and `mcp serve`.
+- `backup` does not start runtime, so it never runs heartbeats.
 - Long-running modes (for example `tui`, `mcp serve`, `channels serve`) can execute recurring heartbeats.
-- Short-lived modes (for example `doctor`) usually exit before interval ticks fire.
+- Short-lived invocations (for example `doctor`, many `memory` commands, `channels serve --once`) often exit before a tick fires.
 
 ## Authoring `HEARTBEAT.md`
 
@@ -81,6 +90,8 @@ Guidelines:
 
 ## Observability and Troubleshooting
 
+Heartbeat logs are written to `<app.root>/logs/heartbeats.log` (default: `~/.localclaw/logs/heartbeats.log`) and are not printed to stdout.
+
 Useful logs:
 
 - missing/unreadable file: `heartbeat: skipped tick; unable to read .../HEARTBEAT.md`
@@ -92,11 +103,12 @@ If heartbeat appears idle:
 1. Confirm `heartbeat.enabled=true`.
 2. Confirm `heartbeat.interval_seconds` is positive.
 3. Confirm runtime is in a long-running mode.
-4. Confirm `HEARTBEAT.md` exists and is readable in default workspace.
-5. Check logs for skip/error messages.
+4. Confirm at least one full interval has elapsed since startup.
+5. Confirm `HEARTBEAT.md` exists and is readable in default workspace.
+6. Confirm the configured LLM provider CLI can run successfully (tick failures are logged, then loop continues).
+7. Check `<app.root>/logs/heartbeats.log` for skip/error messages.
 
 ## Related Docs
 
 - `docs/RUNTIME.md`
 - `docs/CONFIGURATION.md`
-- `docs/specs/heartbeat.md`

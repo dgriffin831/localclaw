@@ -339,6 +339,41 @@ func TestBuildCommandArgsForRequestResumeTextOutputOmitsJSONFlag(t *testing.T) {
 	}
 }
 
+func TestBuildCommandArgsForRequestResumePlacesSecurityFlagsBeforeSubcommand(t *testing.T) {
+	client := NewClient(Settings{
+		BinaryPath:       "codex",
+		WorkingDirectory: "/tmp/workspace",
+		SessionMode:      "existing",
+		ResumeArgs:       []string{"resume", "{sessionId}"},
+	})
+	args := client.buildCommandArgsForRequest(llm.Request{
+		Input: "hello",
+		Session: llm.SessionMetadata{
+			ProviderSessionID: "thread-42",
+			WorkspacePath:     "/resolved/workspace",
+			SecurityMode:      "sandbox-write",
+		},
+	})
+	if !containsArgSequence(args, []string{"--sandbox", "workspace-write"}) {
+		t.Fatalf("expected resume path to include --sandbox workspace-write, got %v", args)
+	}
+	if !containsArgSequence(args, []string{"--add-dir", "/resolved/workspace"}) {
+		t.Fatalf("expected resume path to include --add-dir, got %v", args)
+	}
+	resumeIdx := indexOfArg(args, "resume")
+	if resumeIdx < 0 {
+		t.Fatalf("expected resume subcommand in args, got %v", args)
+	}
+	sandboxIdx := indexOfArg(args, "--sandbox")
+	if sandboxIdx < 0 || sandboxIdx > resumeIdx {
+		t.Fatalf("expected --sandbox before resume subcommand, got %v", args)
+	}
+	addDirIdx := indexOfArg(args, "--add-dir")
+	if addDirIdx < 0 || addDirIdx > resumeIdx {
+		t.Fatalf("expected --add-dir before resume subcommand, got %v", args)
+	}
+}
+
 func TestPromptStreamRequestParsesJSONStream(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("CODEX_HOME", "")
@@ -503,6 +538,15 @@ func containsArgSequence(args []string, seq []string) bool {
 		}
 	}
 	return false
+}
+
+func indexOfArg(args []string, target string) int {
+	for i, arg := range args {
+		if arg == target {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestPromptStreamRequestReturnsErrorWhenBinaryMissing(t *testing.T) {

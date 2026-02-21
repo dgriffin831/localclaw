@@ -10,8 +10,9 @@
 - If `-config` is provided, file JSON is decoded into defaults (merge-by-field behavior).
 - Config decoding is strict: unknown/removed keys fail parsing.
 - Config always passes `Validate()` before runtime startup.
-- On startup, `App.Run` creates `~/.localclaw/localclaw.json` if missing.
+- When `App.Run` executes, it creates `~/.localclaw/localclaw.json` if missing.
   - On later runs, this file is auto-loaded when `-config` is omitted.
+  - This bootstrap path is fixed to `~/.localclaw/localclaw.json` (it does not move with `app.root`).
 
 ## Top-level schema
 
@@ -177,7 +178,7 @@ General:
 - `llm.claude_code.binary_path` is required when `llm.provider` is `claudecode`.
 - `llm.codex.binary_path` is required when `llm.provider` is `codex`.
 - `llm.claude_code.session_mode` and `llm.codex.session_mode` must be `always`, `existing`, or `none`.
-- for `session_mode=existing`, configured `resume_args` must include `{sessionId}`.
+- for `session_mode=existing`, if `resume_args` is provided, it must include `{sessionId}`.
 - `llm.claude_code.session_id_fields[]` and `llm.codex.session_id_fields[]` entries cannot be blank.
 - `llm.codex.resume_output` must be one of `json`, `jsonl`, or `text` when set.
 - `llm.codex.reasoning_default` is required and must be one of `xlow`, `low`, `medium`, `high`, `xhigh`.
@@ -187,6 +188,7 @@ General:
   - rejected Claude Code flags in `llm.claude_code.extra_args`: `--dangerously-skip-permissions`, `--permission-mode`, `--add-dir`.
 - `channels.enabled` may be empty when channel integrations are not needed.
 - `channels.enabled` allowlist (when values are present): `slack`, `signal`.
+- `channels.enabled` entries are validated as exact values (lowercase, no extra whitespace).
 - duplicate channel names are rejected.
 - when `slack` is enabled:
   - `channels.slack.bot_token_env` is required.
@@ -234,7 +236,8 @@ Security mode behavior:
     - Claude Code: `--permission-mode acceptEdits --add-dir <resolved-workspace-path>`
   - `read-only`
     - Codex: `--sandbox read-only --add-dir <resolved-workspace-path>`
-    - Claude Code: `--permission-mode plan --add-dir <resolved-workspace-path>`
+    - Claude Code: `--permission-mode dontAsk --add-dir <resolved-workspace-path>`
+- Codex resume requests keep security-mode enforcement by passing security-managed flags before the `resume` subcommand (`codex exec <security flags> resume ...`), because the Codex CLI rejects them after `resume`.
 - workspace allowlisting uses the resolved runtime workspace path for the active agent/session.
 - if workspace resolution fails, prompt execution fails with wrapped context.
 
@@ -320,7 +323,7 @@ MCP channel tools:
   - `localclaw.json`
   - `cron/`
   - `workspace/`
-  - `workspace-<agentId>/` for configured agents
+  - `workspace-<sanitizedAgentId>-<hash>/` for configured agents
 
 ## Heartbeat configuration notes
 

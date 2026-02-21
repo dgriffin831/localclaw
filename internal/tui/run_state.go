@@ -43,6 +43,16 @@ func emitBootstrapSeedTrigger() tea.Cmd {
 	}
 }
 
+func emitInitialPromptTrigger() tea.Cmd {
+	return func() tea.Msg {
+		return initialPromptTriggerMsg{}
+	}
+}
+
+func (m *model) initialPromptPending() bool {
+	return strings.TrimSpace(m.initialPrompt) != ""
+}
+
 func (m *model) bootstrapSeedPendingForSession() bool {
 	if m.app == nil {
 		return false
@@ -64,6 +74,22 @@ func (m *model) bootstrapSeedPendingForSession() bool {
 		return os.IsNotExist(err)
 	}
 	return info.Size() == 0
+}
+
+func (m *model) runInitialPrompt() tea.Cmd {
+	prompt := strings.TrimSpace(m.initialPrompt)
+	if prompt == "" {
+		return nil
+	}
+	m.initialPrompt = ""
+	if m.running {
+		m.enqueueInput(prompt)
+		m.refreshViewport(true)
+		return nil
+	}
+	m.startRun(prompt)
+	m.refreshViewport(true)
+	return m.activeRunCommands()
 }
 
 func (m *model) runBootstrapSeedPrompt() tea.Cmd {

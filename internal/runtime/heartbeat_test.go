@@ -134,6 +134,40 @@ func TestHeartbeatTickSkipsWhenHeartbeatFileMissing(t *testing.T) {
 	}
 }
 
+func TestHeartbeatTickWritesSkipMessageToHeartbeatLogFile(t *testing.T) {
+	app := newHeartbeatRuntimeApp(t)
+	monitor := &recordingHeartbeatMonitor{}
+	app.heartbeat = monitor
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := app.Run(ctx); err != nil {
+		t.Fatalf("run app: %v", err)
+	}
+	workspacePath, err := app.ResolveWorkspacePath("")
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	heartbeatPath := filepath.Join(workspacePath, "HEARTBEAT.md")
+	if err := os.Remove(heartbeatPath); err != nil {
+		t.Fatalf("remove heartbeat file: %v", err)
+	}
+
+	if err := monitor.run(context.Background()); err != nil {
+		t.Fatalf("run heartbeat tick: %v", err)
+	}
+
+	logPath := filepath.Join(app.cfg.App.Root, "logs", "heartbeats.log")
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read heartbeat log file: %v", err)
+	}
+	if !strings.Contains(string(content), "heartbeat: skipped tick; unable to read") {
+		t.Fatalf("expected heartbeat skip message in %s, got %q", logPath, string(content))
+	}
+}
+
 func TestHeartbeatTickFailureDoesNotBlockSubsequentTicks(t *testing.T) {
 	app := newHeartbeatRuntimeApp(t)
 	monitor := &recordingHeartbeatMonitor{}

@@ -14,6 +14,8 @@ This document describes current terminal UI behavior in `internal/tui`.
 
 Streaming output comes from `app.PromptStreamForSessionWithOptions`.
 
+`localclaw tui [initial-prompt]` accepts one optional positional startup prompt; when provided, TUI auto-submits it after startup.
+
 ## Header and status
 
 Header currently shows:
@@ -24,7 +26,7 @@ Header currently shows:
 
 When mouse capture is off (`mouse:off`), the header row is hidden.
 
-Status state machine values:
+Primary run lifecycle statuses:
 
 - `idle`
 - `sending`
@@ -33,13 +35,17 @@ Status state machine values:
 - `aborted`
 - `error`
 
+Status row caveat:
+
+- The row can also show transient control text (for example `cleared input`, `press ctrl+c again to exit`, `run aborted`) in addition to lifecycle states.
+
 Behavior notes:
 
 - Status icons are animated and use the same spinner icon for every status.
 - Busy statuses (`sending`, `waiting`, `streaming`, `tool*`) show elapsed time.
 - While waiting and no stream delta has arrived, status text always shows the active thinking message.
 - Thinking messages come from `app.thinking_messages`; fallback is `thinking`.
-- Status row shows lifecycle text only (`idle`, `waiting`, etc.); runtime settings are rendered in the footer row under the composer.
+- Status row shows current status text (lifecycle or transient control text); runtime settings are rendered in the footer row under the composer.
 - The status row no longer includes a `/status` hint token.
 - A dedicated spacer row is rendered between the transcript viewport and the status/composer area.
 - `Ctrl+O` toggles tool-card expansion in the transcript (`collapsed` summary vs `expanded` details).
@@ -111,7 +117,7 @@ Command behavior details:
 - `/verbose off` suppresses the additional `[verbose]` diagnostics.
 - `/mouse off` disables mouse capture so the terminal can highlight/select text normally.
 - `/mouse on` re-enables wheel/click mouse capture for TUI interactions.
-- `/clear` clears transcript messages without adding a confirmation line.
+- `/clear` clears only the visible TUI transcript messages (no confirmation line); it does not delete persisted session transcript files.
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
 - `/new` schedules an automatic onboarding seed run (`Wake up, my friend!`) when `BOOTSTRAP.md` exists and the new session has no transcript yet.
@@ -139,6 +145,7 @@ On TUI model creation:
 - Adds `localclaw ready. Type /help for commands.` system line.
 - Loads and renders workspace `WELCOME.md` (if present) as markdown system content.
 - Schedules automatic onboarding seed run (`Wake up, my friend!`) when `BOOTSTRAP.md` exists and the active session has no transcript yet.
+- If an initial startup prompt argument is provided (`localclaw tui "<prompt>"`), schedules that prompt instead and suppresses the default bootstrap seed run for that startup.
 - Applies startup toggles from `app.default`:
   - `verbose` -> verbose diagnostics mode
   - `mouse` -> mouse capture
@@ -161,6 +168,7 @@ On `/reset`:
 - Invokes runtime `ResetSession` with `StartNew=false`.
 - Clears transcript and shows `session reset`.
 - Clears any active `/model` selector override.
+- Keeps the same session ID and does not delete persisted transcript history for that session.
 
 On `/resume <session_id>`:
 
@@ -174,7 +182,7 @@ Input submission behavior:
 
 - Slash commands are handled immediately (not queued).
 - Non-slash prompts submitted while a run is active are appended to an in-memory FIFO queue, composer input is cleared, and no rejection system message is added.
-- When a run reaches terminal state (`idle`, `error`, or `aborted`), the next queued prompt auto-starts until the queue is empty.
+- When a run stops (for example `idle`, `error`, or an abort path), the next queued prompt auto-starts until the queue is empty.
 
 When a non-slash input run starts:
 

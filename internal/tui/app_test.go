@@ -108,6 +108,30 @@ func cmdEmitsBootstrapSeedTrigger(cmd tea.Cmd) bool {
 	return false
 }
 
+func cmdEmitsInitialPromptTrigger(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	switch msg.(type) {
+	case initialPromptTriggerMsg:
+		return true
+	}
+	value := reflect.ValueOf(msg)
+	if value.IsValid() && value.Kind() == reflect.Slice {
+		for i := 0; i < value.Len(); i++ {
+			nested, ok := value.Index(i).Interface().(tea.Cmd)
+			if !ok {
+				continue
+			}
+			if cmdEmitsInitialPromptTrigger(nested) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func newRuntimeBackedModel(t *testing.T) (model, *runtime.App) {
 	t.Helper()
 
@@ -844,6 +868,27 @@ func TestInitSchedulesBootstrapSeedWhenPendingAndSessionIsEmpty(t *testing.T) {
 
 	if !cmdEmitsBootstrapSeedTrigger(m.Init()) {
 		t.Fatalf("expected init command batch to include bootstrap seed trigger")
+	}
+}
+
+func TestInitSchedulesInitialPromptWhenProvided(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.initialPrompt = "run BOOTSTRAP.md"
+
+	if !cmdEmitsInitialPromptTrigger(m.Init()) {
+		t.Fatalf("expected init command batch to include initial prompt trigger")
+	}
+}
+
+func TestInitInitialPromptTakesPrecedenceOverBootstrapSeed(t *testing.T) {
+	m, _ := newRuntimeBackedModel(t)
+	m.initialPrompt = "run BOOTSTRAP.md"
+
+	if !cmdEmitsInitialPromptTrigger(m.Init()) {
+		t.Fatalf("expected init command batch to include initial prompt trigger")
+	}
+	if cmdEmitsBootstrapSeedTrigger(m.Init()) {
+		t.Fatalf("did not expect bootstrap seed trigger when initial prompt is provided")
 	}
 }
 
