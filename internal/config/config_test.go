@@ -334,6 +334,42 @@ func TestLoadSupportsMemorySearchSettingsUnderMemorySection(t *testing.T) {
 	}
 }
 
+func TestLoadSupportsAgentMemorySyncOnSearchFalseOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.json")
+	payload := `{
+		"agents": {
+			"list": [
+				{
+					"id": "ops",
+					"memory": {
+						"sync": {
+							"onSearch": false
+						}
+					}
+				}
+			]
+		}
+	}`
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Agents.List) != 1 {
+		t.Fatalf("expected one agent override, got %d", len(cfg.Agents.List))
+	}
+	if cfg.Agents.List[0].Memory.Sync.OnSearch == nil {
+		t.Fatalf("expected agents.list[0].memory.sync.onSearch override to be set")
+	}
+	if *cfg.Agents.List[0].Memory.Sync.OnSearch {
+		t.Fatalf("expected agents.list[0].memory.sync.onSearch=false override")
+	}
+}
+
 func TestLoadSupportsMemorySearchExtraPaths(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")

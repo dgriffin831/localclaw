@@ -201,7 +201,7 @@ type MemoryOverrideConfig struct {
 	Store      MemoryStoreConfig         `json:"store,omitempty"`
 	Chunking   ChunkingConfig            `json:"chunking,omitempty"`
 	Query      QueryConfig               `json:"query,omitempty"`
-	Sync       SyncConfig                `json:"sync,omitempty"`
+	Sync       SyncOverrideConfig        `json:"sync,omitempty"`
 }
 
 type MemoryToolsOverrideConfig struct {
@@ -226,6 +226,11 @@ type QueryConfig struct {
 type SyncConfig struct {
 	OnSearch bool               `json:"onSearch"`
 	Sessions SyncSessionsConfig `json:"sessions"`
+}
+
+type SyncOverrideConfig struct {
+	OnSearch *bool              `json:"onSearch,omitempty"`
+	Sessions SyncSessionsConfig `json:"sessions,omitempty"`
 }
 
 type SyncSessionsConfig struct {
