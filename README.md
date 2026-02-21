@@ -3,10 +3,7 @@
 `localclaw` is a local-only, single-process Go CLI for running agent workflows on your machine.
 
 It keeps execution boundaries strict: no hosted gateway, no inbound server runtime, and no direct model HTTP clients. LLM execution runs through local CLI subprocesses (Claude Code or Codex), with local capabilities exposed through an MCP server (`localclaw mcp serve`).
-
-## Project Status
-
-`localclaw` is a small, actively evolving open-source project. Core runtime, TUI, memory, cron, MCP, and channel integrations are implemented, but interfaces may still change as features are refined.
+change as features are refined.
 
 ## Key Features
 
