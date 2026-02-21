@@ -154,14 +154,18 @@ type AgentDefaultsConfig struct {
 }
 
 type AgentConfig struct {
-	ID         string               `json:"id"`
-	Workspace  string               `json:"workspace,omitempty"`
-	Memory     MemoryOverrideConfig `json:"memory,omitempty"`
-	Compaction CompactionConfig     `json:"compaction,omitempty"`
+	ID         string                   `json:"id"`
+	Workspace  string                   `json:"workspace,omitempty"`
+	Memory     MemoryOverrideConfig     `json:"memory,omitempty"`
+	Compaction CompactionOverrideConfig `json:"compaction,omitempty"`
 }
 
 type CompactionConfig struct {
 	MemoryFlush MemoryFlushConfig `json:"memoryFlush"`
+}
+
+type CompactionOverrideConfig struct {
+	MemoryFlush MemoryFlushOverrideConfig `json:"memoryFlush,omitempty"`
 }
 
 type MemoryFlushConfig struct {
@@ -170,6 +174,14 @@ type MemoryFlushConfig struct {
 	TriggerWindowTokens int    `json:"triggerWindowTokens"`
 	Prompt              string `json:"prompt"`
 	TimeoutSeconds      int    `json:"timeoutSeconds"`
+}
+
+type MemoryFlushOverrideConfig struct {
+	Enabled             *bool   `json:"enabled,omitempty"`
+	ThresholdTokens     *int    `json:"thresholdTokens,omitempty"`
+	TriggerWindowTokens *int    `json:"triggerWindowTokens,omitempty"`
+	Prompt              *string `json:"prompt,omitempty"`
+	TimeoutSeconds      *int    `json:"timeoutSeconds,omitempty"`
 }
 
 type SessionConfig struct {
@@ -528,7 +540,7 @@ func (c Config) Validate() error {
 		}
 		seenAgentIDs[agentID] = struct{}{}
 		knownAgentIDs[agentID] = struct{}{}
-		if err := validateMemoryFlushConfig(agent.Compaction.MemoryFlush, "agents.list[].compaction.memoryFlush"); err != nil {
+		if err := validateMemoryFlushOverrideConfig(agent.Compaction.MemoryFlush, "agents.list[].compaction.memoryFlush"); err != nil {
 			return err
 		}
 	}
@@ -612,6 +624,19 @@ func validateMemoryFlushConfig(cfg MemoryFlushConfig, fieldPrefix string) error 
 		return fmt.Errorf("%s.triggerWindowTokens must be >= 0", fieldPrefix)
 	}
 	if cfg.TimeoutSeconds < 0 {
+		return fmt.Errorf("%s.timeoutSeconds must be >= 0", fieldPrefix)
+	}
+	return nil
+}
+
+func validateMemoryFlushOverrideConfig(cfg MemoryFlushOverrideConfig, fieldPrefix string) error {
+	if cfg.ThresholdTokens != nil && *cfg.ThresholdTokens < 0 {
+		return fmt.Errorf("%s.thresholdTokens must be >= 0", fieldPrefix)
+	}
+	if cfg.TriggerWindowTokens != nil && *cfg.TriggerWindowTokens < 0 {
+		return fmt.Errorf("%s.triggerWindowTokens must be >= 0", fieldPrefix)
+	}
+	if cfg.TimeoutSeconds != nil && *cfg.TimeoutSeconds < 0 {
 		return fmt.Errorf("%s.timeoutSeconds must be >= 0", fieldPrefix)
 	}
 	return nil
