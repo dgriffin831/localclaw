@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/pelletier/go-toml"
 
@@ -458,6 +459,7 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 		var deltaText strings.Builder
+		lastAgentMessageDelta := ""
 		finalSeen := false
 
 		for scanner.Scan() {
@@ -470,6 +472,7 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 				// NOTE: Compatibility fallback is intentionally retained for now; unparseable provider lines are streamed as raw text deltas.
 				delta := line + "\n"
 				deltaText.WriteString(delta)
+				lastAgentMessageDelta = ""
 				if !emitEvent(ctx, events, llm.StreamEvent{Type: llm.StreamEventDelta, Text: delta}) {
 					_ = cmd.Process.Kill()
 					_ = cmd.Wait()
@@ -480,6 +483,8 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 
 			for _, evt := range parsedEvents {
 				if evt.Type == llm.StreamEventDelta {
+					evt.Text = joinAgentMessageDelta(lastAgentMessageDelta, evt.Text)
+					lastAgentMessageDelta = evt.Text
 					deltaText.WriteString(evt.Text)
 				}
 				if evt.Type == llm.StreamEventFinal {
@@ -1082,4 +1087,48 @@ func emitError(ctx context.Context, ch chan<- error, err error) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+func joinAgentMessageDelta(previous, current string) string {
+	if strings.TrimSpace(current) == "" {
+		return ""
+	}
+	if strings.TrimSpace(previous) == "" {
+		return current
+	}
+	prevRune, prevOK := lastNonSpaceRune(previous)
+	currentRune, currentOK := firstNonSpaceRune(current)
+	if !prevOK || !currentOK {
+		return current
+	}
+	if unicode.IsSpace(prevRune) || unicode.IsSpace(currentRune) {
+		return current
+	}
+	// Preserve token-continuation chunks when providers split within a word.
+	if unicode.IsLetter(prevRune) && unicode.IsLetter(currentRune) && unicode.IsLower(currentRune) {
+		return current
+	}
+	if unicode.IsDigit(prevRune) && unicode.IsDigit(currentRune) {
+		return current
+	}
+	return "\n\n" + current
+}
+
+func firstNonSpaceRune(text string) (rune, bool) {
+	for _, r := range text {
+		if !unicode.IsSpace(r) {
+			return r, true
+		}
+	}
+	return 0, false
+}
+
+func lastNonSpaceRune(text string) (rune, bool) {
+	runes := []rune(text)
+	for i := len(runes) - 1; i >= 0; i-- {
+		if !unicode.IsSpace(runes[i]) {
+			return runes[i], true
+		}
+	}
+	return 0, false
 }

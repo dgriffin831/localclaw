@@ -475,6 +475,61 @@ printf '%%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"
 	}
 }
 
+func TestPromptStreamRequestSeparatesStandaloneAgentUpdates(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	fakeCodexPath := filepath.Join(tmpDir, "codex")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"first update complete."}}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"Second update started."}}'
+`
+	if err := os.WriteFile(fakeCodexPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	client := NewClient(Settings{
+		BinaryPath:       fakeCodexPath,
+		WorkingDirectory: "/tmp/workspace",
+	})
+
+	events, errs := client.PromptStreamRequest(context.Background(), llm.Request{Input: "prompt"})
+	var deltas []string
+	final := ""
+	for events != nil || errs != nil {
+		select {
+		case evt, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			if evt.Type == llm.StreamEventDelta {
+				deltas = append(deltas, evt.Text)
+			}
+			if evt.Type == llm.StreamEventFinal {
+				final = evt.Text
+			}
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			if err != nil {
+				t.Fatalf("unexpected prompt error: %v", err)
+			}
+		}
+	}
+
+	joined := strings.Join(deltas, "")
+	if !strings.Contains(joined, "first update complete.\n\nSecond update started.") {
+		t.Fatalf("expected standalone updates to be separated by a blank line, got %q", joined)
+	}
+	if !strings.Contains(final, "first update complete.\n\nSecond update started.") {
+		t.Fatalf("expected final aggregation to preserve update separators, got %q", final)
+	}
+}
+
 func TestParseCodexModelCatalogProbeOutput(t *testing.T) {
 	raw := "```json\n{\"models\":[{\"name\":\"gpt-5.3-codex\",\"reasoning\":{\"supported\":true,\"levels\":[\"low\",\"medium\",\"high\"],\"default\":\"medium\"}},\"gpt-5.2-codex\"]}\n```"
 	models := parseCodexModelCatalogProbeOutput(raw, "medium")
