@@ -47,17 +47,8 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
-	finalize := func(primary tea.Cmd) (tea.Model, tea.Cmd) {
-		m.queueScrollbackMirrorLines()
-		return m, combineWithScrollbackCmd(primary, m.scrollbackMirrorCmd())
-	}
-	finalizeBatch := func(batch []tea.Cmd) (tea.Model, tea.Cmd) {
-		var primary tea.Cmd
-		if len(batch) > 0 {
-			primary = tea.Batch(batch...)
-		}
-		return finalize(primary)
-	}
+	finalize := func(primary tea.Cmd) (tea.Model, tea.Cmd) { return m, primary }
+	finalizeBatch := func(batch []tea.Cmd) (tea.Model, tea.Cmd) { return m, tea.Batch(batch...) }
 
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
@@ -192,10 +183,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		v := tea.NewView("loading...")
-		v.AltScreen = m.mouseEnabled
-		if m.mouseEnabled {
-			v.MouseMode = tea.MouseModeCellMotion
-		}
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
 		return v
 	}
 
@@ -219,9 +208,7 @@ func (m model) View() tea.View {
 		Background(colorBackground).
 		Foreground(colorText).
 		Render(content))
-	v.AltScreen = m.mouseEnabled
-	if m.mouseEnabled {
-		v.MouseMode = tea.MouseModeCellMotion
-	}
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }

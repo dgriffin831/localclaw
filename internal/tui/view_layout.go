@@ -10,9 +10,6 @@ import (
 )
 
 func (m *model) headerView() string {
-	if !m.mouseEnabled {
-		return ""
-	}
 	session := valueOrDefault(strings.TrimSpace(m.sessionID), "n/a")
 	tokenCount := max(0, m.sessionTokens)
 	innerWidth := panelInnerWidth(m.width)
@@ -58,19 +55,18 @@ func (m *model) statusSettings(innerWidth int) string {
 	model := valueOrDefault(m.effectiveModel(), "unknown")
 	reasoning := valueOrDefault(m.effectiveReasoning(), "none")
 	settings := fmt.Sprintf(
-		"provider:%s  model:%s  reasoning:%s  verbose:%s  tools:%s  mouse:%s",
+		"provider:%s  model:%s  reasoning:%s  verbose:%s  tools:%s",
 		provider,
 		model,
 		reasoning,
 		onOff(m.verbose),
 		mapBool(m.toolsExpanded, "expanded", "collapsed"),
-		onOff(m.mouseEnabled),
 	)
 	if innerWidth < 70 {
-		settings = fmt.Sprintf("p:%s m:%s r:%s v:%s mouse:%s", provider, model, reasoning, onOff(m.verbose), onOff(m.mouseEnabled))
+		settings = fmt.Sprintf("p:%s m:%s r:%s v:%s", provider, model, reasoning, onOff(m.verbose))
 	}
 	if innerWidth < 42 {
-		settings = fmt.Sprintf("mouse:%s", onOff(m.mouseEnabled))
+		settings = fmt.Sprintf("p:%s m:%s", provider, model)
 	}
 	return settings
 }
@@ -138,12 +134,12 @@ func (m *model) composerFooterView() string {
 }
 
 func (m *model) inputHintText(innerWidth int) string {
-	hintText := "Shift+Enter newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
+	hintText := "Shift+Enter newline • Ctrl+O tools • /shortcuts"
 	if innerWidth < 90 {
-		hintText = "Shift+Enter newline • Ctrl+Y mouse • Ctrl+O tools • /shortcuts"
+		hintText = "Shift+Enter newline • Ctrl+O tools • /shortcuts"
 	}
 	if innerWidth < 70 {
-		hintText = "Shift+Enter newline • Ctrl+Y mouse • /shortcuts"
+		hintText = "Shift+Enter newline • /shortcuts"
 	}
 	if innerWidth < 42 {
 		hintText = "Shift+Enter • /shortcuts"
@@ -160,6 +156,8 @@ func (m *model) layout() {
 	m.input.SetWidth(max(10, innerWidth-2))
 	m.adjustInputHeight()
 
+	m.viewport.SetWidth(max(20, m.width))
+
 	headerHeight := optionalRowHeight(m.headerView())
 	statusHeight := optionalRowHeight(m.statusView())
 	inputHeight := lipgloss.Height(m.inputView())
@@ -175,8 +173,6 @@ func (m *model) layout() {
 	if viewportHeight < 1 {
 		viewportHeight = 1
 	}
-
-	m.viewport.SetWidth(max(20, m.width))
 	m.viewport.SetHeight(viewportHeight)
 }
 

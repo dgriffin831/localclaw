@@ -132,39 +132,11 @@ func cmdEmitsInitialPromptTrigger(cmd tea.Cmd) bool {
 	return false
 }
 
-func cmdPrintedLines(cmd tea.Cmd) []string {
+func execCmd(cmd tea.Cmd) {
 	if cmd == nil {
-		return nil
+		return
 	}
-	return collectPrintedLinesFromMsg(cmd())
-}
-
-func collectPrintedLinesFromMsg(msg tea.Msg) []string {
-	value := reflect.ValueOf(msg)
-	if !value.IsValid() {
-		return nil
-	}
-
-	if value.Kind() == reflect.Slice {
-		lines := make([]string, 0, value.Len())
-		for i := 0; i < value.Len(); i++ {
-			nested, ok := value.Index(i).Interface().(tea.Cmd)
-			if !ok {
-				continue
-			}
-			lines = append(lines, cmdPrintedLines(nested)...)
-		}
-		return lines
-	}
-
-	if typ := reflect.TypeOf(msg); typ != nil && typ.String() == "tea.printLineMessage" {
-		field := value.FieldByName("messageBody")
-		if field.IsValid() && field.Kind() == reflect.String {
-			return []string{field.String()}
-		}
-	}
-
-	return nil
+	_ = cmd()
 }
 
 func newRuntimeBackedModel(t *testing.T) (model, *runtime.App) {
@@ -188,8 +160,8 @@ func newRuntimeBackedModel(t *testing.T) (model, *runtime.App) {
 }
 
 func TestParseSlash(t *testing.T) {
-	name, arg := parseSlash("/mouse on")
-	if name != "mouse" || arg != "on" {
+	name, arg := parseSlash("/model codex/gpt-5-mini/high")
+	if name != "model" || arg != "codex/gpt-5-mini/high" {
 		t.Fatalf("unexpected parse result: name=%q arg=%q", name, arg)
 	}
 
@@ -281,24 +253,13 @@ func TestSetStatusSwitchesStatusAnimation(t *testing.T) {
 	}
 }
 
-func TestHeaderViewHiddenWhenMouseOff(t *testing.T) {
+func TestHeaderViewShowsSessionAndWorkspace(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.width = 160
-	m.mouseEnabled = false
-
-	if got := m.headerView(); got != "" {
-		t.Fatalf("expected header to be hidden when mouse capture is off, got %q", got)
-	}
-}
-
-func TestHeaderViewShownWhenMouseOn(t *testing.T) {
-	m := newModel(context.Background(), nil, config.Default())
-	m.width = 160
-	m.mouseEnabled = true
 
 	got := ansiEscapePattern.ReplaceAllString(m.headerView(), "")
 	if !strings.Contains(got, "localclaw") || !strings.Contains(got, "session:") || !strings.Contains(got, "tokens:0") || !strings.Contains(got, "workspace:") {
-		t.Fatalf("expected header to be shown when mouse capture is on, got %q", got)
+		t.Fatalf("expected header to include app/session/workspace metadata, got %q", got)
 	}
 	if strings.Contains(got, "#") {
 		t.Fatalf("expected header to omit hash prefix, got %q", got)
@@ -313,7 +274,6 @@ func TestHeaderViewUsesConfiguredAppName(t *testing.T) {
 	cfg.App.Name = "clawbox"
 	m := newModel(context.Background(), nil, cfg)
 	m.width = 160
-	m.mouseEnabled = true
 
 	got := ansiEscapePattern.ReplaceAllString(m.headerView(), "")
 	if !strings.Contains(got, "clawbox") {
@@ -334,28 +294,13 @@ func TestStatusViewOmitsSlashStatusHint(t *testing.T) {
 	}
 }
 
-func TestStatusViewHidesRightMetadataWhenMouseOff(t *testing.T) {
+func TestStatusViewOmitsRuntimeSettingsMetadata(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.width = 120
-	m.mouseEnabled = false
 
 	got := ansiEscapePattern.ReplaceAllString(m.statusView(), "")
-	if strings.Contains(got, "provider:") || strings.Contains(got, "model:") || strings.Contains(got, "mouse:") {
-		t.Fatalf("expected status row right metadata to be hidden when mouse capture is off, got %q", got)
-	}
-	if !strings.Contains(got, statusIdle) {
-		t.Fatalf("expected status row to keep lifecycle status text, got %q", got)
-	}
-}
-
-func TestStatusViewHidesRightMetadataWhenMouseOn(t *testing.T) {
-	m := newModel(context.Background(), nil, config.Default())
-	m.width = 120
-	m.mouseEnabled = true
-
-	got := ansiEscapePattern.ReplaceAllString(m.statusView(), "")
-	if strings.Contains(got, "provider:") || strings.Contains(got, "model:") || strings.Contains(got, "mouse:") {
-		t.Fatalf("expected status row right metadata to be moved to footer row, got %q", got)
+	if strings.Contains(got, "provider:") || strings.Contains(got, "model:") || strings.Contains(got, "reasoning:") || strings.Contains(got, "verbose:") {
+		t.Fatalf("expected status row to omit runtime settings metadata, got %q", got)
 	}
 	if !strings.Contains(got, statusIdle) {
 		t.Fatalf("expected status row to keep lifecycle status text, got %q", got)
@@ -365,14 +310,16 @@ func TestStatusViewHidesRightMetadataWhenMouseOn(t *testing.T) {
 func TestComposerFooterShowsShortcutsAndRuntimeSettings(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.width = 220
-	m.mouseEnabled = false
 
 	got := ansiEscapePattern.ReplaceAllString(m.composerFooterView(), "")
 	if !strings.Contains(got, "Shift+Enter newline") || !strings.Contains(got, "/shortcuts") {
 		t.Fatalf("expected composer footer left side to include shortcuts hint, got %q", got)
 	}
-	if !strings.Contains(got, "provider:") || !strings.Contains(got, "model:") || !strings.Contains(got, "reasoning:") || !strings.Contains(got, "mouse:off") {
+	if !strings.Contains(got, "provider:") || !strings.Contains(got, "model:") || !strings.Contains(got, "reasoning:") || !strings.Contains(got, "verbose:") {
 		t.Fatalf("expected composer footer right side to include runtime settings, got %q", got)
+	}
+	if strings.Contains(got, "mouse:") {
+		t.Fatalf("expected composer footer to omit mouse runtime setting, got %q", got)
 	}
 }
 
@@ -380,7 +327,6 @@ func TestLayoutReservesGapBetweenTranscriptAndComposer(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.width = 100
 	m.height = 30
-	m.mouseEnabled = true
 
 	m.layout()
 
@@ -565,8 +511,8 @@ func TestInputHintMentionsShiftEnter(t *testing.T) {
 	if strings.Contains(hint, "Ctrl+J") {
 		t.Fatalf("expected input hint to omit Ctrl+J newline shortcut, got %q", hint)
 	}
-	if !strings.Contains(hint, "Ctrl+Y mouse") {
-		t.Fatalf("expected input hint to mention Ctrl+Y mouse toggle, got %q", hint)
+	if strings.Contains(hint, "Ctrl+Y") {
+		t.Fatalf("expected input hint to omit removed Ctrl+Y mouse toggle, got %q", hint)
 	}
 	if !strings.Contains(hint, "Ctrl+O tools") {
 		t.Fatalf("expected input hint to mention Ctrl+O tools toggle, got %q", hint)
@@ -830,7 +776,6 @@ func TestHeaderUsesResolvedWorkspacePath(t *testing.T) {
 	}
 
 	m := newModel(ctx, app, cfg)
-	m.mouseEnabled = true
 	m.width = 180
 	header := m.headerView()
 	resolvedWorkspace, err := app.ResolveWorkspacePath("")
@@ -1375,115 +1320,41 @@ func TestViewportKeyboardScrollUsesPageKeysAndCtrlArrows(t *testing.T) {
 func TestNewModelAppliesAppDefaultFlags(t *testing.T) {
 	cfg := config.Default()
 	cfg.App.Default.Verbose = true
-	cfg.App.Default.Mouse = false
 	cfg.App.Default.Tools = true
+	legacyMouseOff := false
+	cfg.App.Default.Mouse = &legacyMouseOff
 
 	m := newModel(context.Background(), nil, cfg)
 	if !m.verbose {
 		t.Fatalf("expected verbose=true from app.default.verbose")
 	}
-	if m.mouseEnabled {
-		t.Fatalf("expected mouseEnabled=false from app.default.mouse")
-	}
 	if !m.toolsExpanded {
 		t.Fatalf("expected toolsExpanded=true from app.default.tools")
 	}
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("expected view mouse mode cell-motion regardless of deprecated app.default.mouse, got %v", got)
+	}
+	if !m.View().AltScreen {
+		t.Fatalf("expected view alt screen enabled regardless of deprecated app.default.mouse")
+	}
 }
 
-func TestCtrlYTogglesMouseCapture(t *testing.T) {
+func TestCtrlYDoesNotToggleMouseCapture(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
-	if m.mouseEnabled {
-		t.Fatalf("expected mouse capture to start disabled")
-	}
+	initial := m.View()
 
-	updated, cmd := m.Update(keyCtrl('y'))
+	updated, _ := m.Update(keyCtrl('y'))
 	next := updated.(model)
-	if !next.mouseEnabled {
-		t.Fatalf("expected ctrl+y to enable mouse capture")
-	}
-	if cmd != nil {
-		t.Fatalf("expected ctrl+y not to emit imperative mouse command")
-	}
-	if got := next.View().MouseMode; got != tea.MouseModeCellMotion {
-		t.Fatalf("expected view mouse mode cell-motion when enabled, got %v", got)
-	}
-	if !next.View().AltScreen {
-		t.Fatalf("expected view alt screen enabled when mouse capture is on")
-	}
+	after := next.View()
 
-	updated, cmd = next.Update(keyCtrl('y'))
-	next = updated.(model)
-	if next.mouseEnabled {
-		t.Fatalf("expected second ctrl+y to disable mouse capture")
+	if initial.MouseMode != tea.MouseModeCellMotion || after.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("expected mouse mode to remain cell-motion before/after ctrl+y, got before=%v after=%v", initial.MouseMode, after.MouseMode)
 	}
-	if cmd != nil {
-		t.Fatalf("expected second ctrl+y not to emit imperative mouse command")
+	if !initial.AltScreen || !after.AltScreen {
+		t.Fatalf("expected alt screen to remain enabled before/after ctrl+y")
 	}
-	if got := next.View().MouseMode; got != tea.MouseModeNone {
-		t.Fatalf("expected view mouse mode none when disabled, got %v", got)
-	}
-	if next.View().AltScreen {
-		t.Fatalf("expected view alt screen disabled when mouse capture is off")
-	}
-}
-
-func TestUpdateMirrorsAssistantOutputToTerminalScrollbackWhenMouseCaptureOff(t *testing.T) {
-	m := newModel(context.Background(), nil, config.Default())
-	m.messages = append(m.messages, chatMessage{
-		Role: roleAssistant,
-		Raw:  "first line\nsecond line",
-	})
-
-	updated, cmd := m.Update(statusTickMsg(time.Now()))
-	next := updated.(model)
-
-	lines := cmdPrintedLines(cmd)
-	if len(lines) != 1 {
-		t.Fatalf("expected one mirrored scrollback line, got %d (%q)", len(lines), strings.Join(lines, "\n"))
-	}
-	if !strings.Contains(lines[0], "assistant> first line") || !strings.Contains(lines[0], "second line") {
-		t.Fatalf("expected mirrored assistant output, got %q", lines[0])
-	}
-	if !next.messages[len(next.messages)-1].MirroredToScrollback {
-		t.Fatalf("expected assistant message to be marked as mirrored")
-	}
-
-	_, cmd = next.Update(statusTickMsg(time.Now()))
-	if lines := cmdPrintedLines(cmd); len(lines) != 0 {
-		t.Fatalf("expected mirrored assistant output only once, got %q", strings.Join(lines, "\n"))
-	}
-}
-
-func TestUpdateDoesNotMirrorAssistantOutputWhenMouseCaptureOn(t *testing.T) {
-	cfg := config.Default()
-	cfg.App.Default.Mouse = true
-	m := newModel(context.Background(), nil, cfg)
-	m.messages = append(m.messages, chatMessage{
-		Role: roleAssistant,
-		Raw:  "hello",
-	})
-
-	_, cmd := m.Update(statusTickMsg(time.Now()))
-	if lines := cmdPrintedLines(cmd); len(lines) != 0 {
-		t.Fatalf("expected no mirrored scrollback output when mouse capture is on, got %q", strings.Join(lines, "\n"))
-	}
-}
-
-func TestUpdateDoesNotMirrorStreamingAssistantOutput(t *testing.T) {
-	m := newModel(context.Background(), nil, config.Default())
-	m.messages = append(m.messages, chatMessage{
-		Role:      roleAssistant,
-		Raw:       "partial",
-		Streaming: true,
-	})
-
-	updated, cmd := m.Update(statusTickMsg(time.Now()))
-	next := updated.(model)
-	if lines := cmdPrintedLines(cmd); len(lines) != 0 {
-		t.Fatalf("expected no mirrored scrollback output for streaming assistant content, got %q", strings.Join(lines, "\n"))
-	}
-	if next.messages[len(next.messages)-1].MirroredToScrollback {
-		t.Fatalf("expected streaming assistant message to remain unmirrored")
+	if strings.Contains(joinedMessageRaw(next.messages), "mouse capture:") {
+		t.Fatalf("expected ctrl+y not to emit a mouse-capture system message")
 	}
 }
 
@@ -1520,8 +1391,8 @@ func TestHandleSlashShortcutsShowsKeyboardShortcuts(t *testing.T) {
 	if strings.Contains(got, "Alt+Enter") || strings.Contains(got, "Ctrl+J") {
 		t.Fatalf("expected /shortcuts output to omit Alt+Enter/Ctrl+J newline shortcuts, got %q", got)
 	}
-	if !strings.Contains(got, "Ctrl+Y") || !strings.Contains(got, "toggle mouse capture") {
-		t.Fatalf("expected /shortcuts output to include Ctrl+Y mouse shortcut, got %q", got)
+	if strings.Contains(got, "Ctrl+Y") || strings.Contains(got, "mouse capture") {
+		t.Fatalf("expected /shortcuts output to omit removed Ctrl+Y mouse shortcut, got %q", got)
 	}
 	if !strings.Contains(got, "Ctrl+O") || !strings.Contains(got, "toggle tool-card expansion") {
 		t.Fatalf("expected /shortcuts output to include Ctrl+O tools shortcut, got %q", got)
@@ -1540,12 +1411,12 @@ func TestHandleSlashShortcutsShowsKeyboardShortcuts(t *testing.T) {
 func TestSlashMenuShowsKeyboardShortcutColumnWhenAvailable(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.width = 160
-	m.input.SetValue("/mo")
+	m.input.SetValue("/to")
 	m.updateSlashAutocomplete()
 
 	menu := ansiEscapePattern.ReplaceAllString(m.slashMenuView(), "")
-	if !regexp.MustCompile(`(?m)/mouse <on\|off>\s+toggle mouse capture \(wheel/selection tradeoff\)\s+Ctrl\+Y`).MatchString(menu) {
-		t.Fatalf("expected slash menu /mouse row to include Ctrl+Y shortcut column, got %q", menu)
+	if !regexp.MustCompile(`(?m)/tools\s+show provider-reported tools\s+Ctrl\+O`).MatchString(menu) {
+		t.Fatalf("expected slash menu /tools row to include Ctrl+O shortcut column, got %q", menu)
 	}
 
 	m.input.SetValue("/st")
@@ -1556,35 +1427,15 @@ func TestSlashMenuShowsKeyboardShortcutColumnWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestHandleSlashMouseTogglesMouseCapture(t *testing.T) {
+func TestHandleSlashMouseReturnsUnknownCommand(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 
-	cmd := m.handleSlash("/mouse off")
-	if m.mouseEnabled {
-		t.Fatalf("expected /mouse off to disable mouse capture")
+	_ = m.handleSlash("/mouse off")
+	if len(m.messages) == 0 {
+		t.Fatalf("expected /mouse to add a system message")
 	}
-	if cmd != nil {
-		t.Fatalf("expected /mouse off not to return an imperative mouse command")
-	}
-	if got := m.View().MouseMode; got != tea.MouseModeNone {
-		t.Fatalf("expected /mouse off view mode none, got %v", got)
-	}
-	if m.View().AltScreen {
-		t.Fatalf("expected /mouse off to disable alt screen")
-	}
-
-	cmd = m.handleSlash("/mouse on")
-	if !m.mouseEnabled {
-		t.Fatalf("expected /mouse on to enable mouse capture")
-	}
-	if cmd != nil {
-		t.Fatalf("expected /mouse on not to return an imperative mouse command")
-	}
-	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
-		t.Fatalf("expected /mouse on view mode cell-motion, got %v", got)
-	}
-	if !m.View().AltScreen {
-		t.Fatalf("expected /mouse on to enable alt screen")
+	if got := m.messages[len(m.messages)-1].Raw; got != "unknown command: /mouse" {
+		t.Fatalf("expected unknown command for removed /mouse, got %q", got)
 	}
 }
 
@@ -1894,6 +1745,9 @@ func TestHandleSlashStatusIncludesEffectiveSelector(t *testing.T) {
 	if !strings.Contains(got, "effective_selector=codex/gpt-5-mini/high") {
 		t.Fatalf("expected status to include effective selector, got %q", got)
 	}
+	if strings.Contains(got, "mouse=") {
+		t.Fatalf("expected status output to omit deprecated mouse flag, got %q", got)
+	}
 }
 
 func TestComposerFooterShowsKnownStateWhenModelUnknown(t *testing.T) {
@@ -1904,7 +1758,6 @@ func TestComposerFooterShowsKnownStateWhenModelUnknown(t *testing.T) {
 
 	m := newModel(context.Background(), nil, cfg)
 	m.width = 220
-	m.mouseEnabled = false
 
 	got := ansiEscapePattern.ReplaceAllString(m.composerFooterView(), "")
 	if !strings.Contains(got, "provider:codex") {
@@ -1918,6 +1771,9 @@ func TestComposerFooterShowsKnownStateWhenModelUnknown(t *testing.T) {
 	}
 	if strings.Contains(got, "model:n/a") {
 		t.Fatalf("expected footer to avoid model n/a fallback, got %q", got)
+	}
+	if strings.Contains(got, "mouse:") {
+		t.Fatalf("expected footer to omit deprecated mouse setting, got %q", got)
 	}
 }
 

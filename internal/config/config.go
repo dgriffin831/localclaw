@@ -71,8 +71,10 @@ type AppConfig struct {
 
 type AppDefaultConfig struct {
 	Verbose bool `json:"verbose"`
-	Mouse   bool `json:"mouse"`
-	Tools   bool `json:"tools"`
+	// Mouse is deprecated and ignored by TUI runtime.
+	// It remains decode-compatible so older config files continue to load.
+	Mouse *bool `json:"mouse,omitempty"`
+	Tools bool  `json:"tools"`
 }
 
 type LLMConfig struct {
@@ -273,7 +275,6 @@ func Default() Config {
 			Root: "~/.localclaw",
 			Default: AppDefaultConfig{
 				Verbose: false,
-				Mouse:   false,
 				Tools:   false,
 			},
 		},

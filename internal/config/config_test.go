@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,8 +70,8 @@ func TestDefaultConfigIncludesAppRootAndAgentScaffolding(t *testing.T) {
 	if cfg.App.Default.Verbose {
 		t.Fatalf("expected app.default.verbose default false")
 	}
-	if cfg.App.Default.Mouse {
-		t.Fatalf("expected app.default.mouse default false")
+	if cfg.App.Default.Mouse != nil {
+		t.Fatalf("expected app.default.mouse default omitted/nil")
 	}
 	if cfg.App.Default.Tools {
 		t.Fatalf("expected app.default.tools default false")
@@ -124,11 +125,25 @@ func TestLoadSupportsAppDefaultFlags(t *testing.T) {
 	if !cfg.App.Default.Verbose {
 		t.Fatalf("expected app.default.verbose=true from config")
 	}
-	if cfg.App.Default.Mouse {
+	if cfg.App.Default.Mouse == nil {
+		t.Fatalf("expected app.default.mouse key to decode for compatibility")
+	}
+	if *cfg.App.Default.Mouse {
 		t.Fatalf("expected app.default.mouse=false from config")
 	}
 	if !cfg.App.Default.Tools {
 		t.Fatalf("expected app.default.tools=true from config")
+	}
+}
+
+func TestDefaultConfigOmitsDeprecatedAppDefaultMouse(t *testing.T) {
+	cfg := Default()
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal default config: %v", err)
+	}
+	if strings.Contains(string(encoded), `"mouse"`) {
+		t.Fatalf("expected default config JSON to omit deprecated app.default.mouse, got %s", string(encoded))
 	}
 }
 

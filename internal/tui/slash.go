@@ -31,7 +31,6 @@ var slashCommandDefs = []slashCommandDef{
 	{Name: "resume", Args: "<session_id>", Description: "resume a specific session"},
 	{Name: "delete", Args: "<session_id>", Description: "delete a non-active session"},
 	{Name: "verbose", Args: "<on|off>", Description: "toggle verbose mode"},
-	{Name: "mouse", Args: "<on|off>", Description: "toggle mouse capture (wheel/selection tradeoff)", Shortcut: "Ctrl+Y"},
 	{Name: "shortcuts", Description: "show keyboard shortcuts"},
 	{Name: "model", Args: "<provider>/<model>[/<reasoning>]", Description: "set active selector for this TUI session"},
 	{Name: "exit", Description: "exit the TUI", Shortcut: "Ctrl+D"},
@@ -51,7 +50,7 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 		if strings.TrimSpace(override) == "" {
 			override = "none"
 		}
-		m.addSystem(fmt.Sprintf("status=%s provider=%s configured_model=%s effective_model=%s effective_selector=%s selector_override=%s agent=%s session=%s workspace=%s verbose=%s mouse=%s", m.status, m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a"), valueOrDefault(m.effectiveModel(), "n/a"), valueOrDefault(m.effectiveSelector(), "n/a"), override, m.agentID, m.sessionID, m.workspacePath, onOff(m.verbose), onOff(m.mouseEnabled)))
+		m.addSystem(fmt.Sprintf("status=%s provider=%s configured_model=%s effective_model=%s effective_selector=%s selector_override=%s agent=%s session=%s workspace=%s verbose=%s", m.status, m.activeProvider(), valueOrDefault(m.configuredModel(), "n/a"), valueOrDefault(m.effectiveModel(), "n/a"), valueOrDefault(m.effectiveSelector(), "n/a"), override, m.agentID, m.sessionID, m.workspacePath, onOff(m.verbose)))
 	case "tools":
 		followUp = m.startProviderToolsDiscoveryIfNeeded()
 		m.addSystem(m.toolsSummary())
@@ -100,18 +99,6 @@ func (m *model) handleSlash(raw string) tea.Cmd {
 			m.addSystem("verbose: off")
 		} else {
 			m.addSystem("usage: /verbose <on|off>")
-		}
-	case "mouse":
-		if arg == "on" {
-			m.mouseEnabled = true
-			m.addSystem("mouse capture: on")
-			m.refreshViewport(true)
-		} else if arg == "off" {
-			m.mouseEnabled = false
-			m.addSystem("mouse capture: off")
-			m.refreshViewport(true)
-		} else {
-			m.addSystem("usage: /mouse <on|off>")
 		}
 	case "model":
 		m.handleModelSelectionSlash(arg)
@@ -884,7 +871,6 @@ func keyboardShortcutsText() string {
 		"Mouse wheel            scroll transcript viewport",
 		"Esc                    abort active run",
 		"Ctrl+O                 toggle tool-card expansion",
-		"Ctrl+Y                 toggle mouse capture",
 		"Ctrl+C                 clear input (press twice quickly to exit)",
 		"Ctrl+D                 exit when input is empty",
 	}

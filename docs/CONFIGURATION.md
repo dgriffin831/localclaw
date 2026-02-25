@@ -35,7 +35,6 @@
     "root": "~/.localclaw",
     "default": {
       "verbose": false,
-      "mouse": false,
       "tools": false
     }
   },
@@ -167,8 +166,8 @@ General:
 - `app.root` is required.
 - `app.default` controls TUI startup flags:
   - `verbose`: initial verbose diagnostics (`false` default)
-  - `mouse`: initial mouse capture (`false` default)
   - `tools`: initial tool-card expansion (`false` default)
+  - legacy `mouse` key is accepted for backward compatibility but ignored at runtime.
 - `app.thinking_messages` entries must be non-blank when provided.
 - `llm.provider` must be `claudecode` or `codex`.
 - `security.mode` must be one of:
@@ -404,7 +403,6 @@ Example:
   "app": {
     "default": {
       "verbose": false,
-      "mouse": false,
       "tools": false
     }
   }

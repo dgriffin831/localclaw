@@ -142,13 +142,20 @@ func (m *model) refreshViewport(forceBottom bool) {
 }
 
 func (m *model) renderTranscript() string {
-	if len(m.messages) == 0 {
-		return ""
-	}
+	return m.renderTranscriptForWidth(transcriptContentWidth(m.viewport.Width()))
+}
 
-	contentWidth := m.viewport.Width() - 6
+func transcriptContentWidth(viewportWidth int) int {
+	contentWidth := viewportWidth - 6
 	if contentWidth < 20 {
 		contentWidth = 20
+	}
+	return contentWidth
+}
+
+func (m *model) renderTranscriptForWidth(contentWidth int) string {
+	if len(m.messages) == 0 {
+		return ""
 	}
 
 	blocks := make([]string, 0, len(m.messages))

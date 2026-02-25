@@ -53,13 +53,6 @@ func (m *model) handleKeyMsg(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 
-	if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+y"))) {
-		m.mouseEnabled = !m.mouseEnabled
-		m.addSystem(fmt.Sprintf("mouse capture: %s", onOff(m.mouseEnabled)))
-		m.refreshViewport(true)
-		return true, nil
-	}
-
 	if key.Matches(msg, key.NewBinding(key.WithKeys("shift+tab"))) {
 		if m.moveSlashSelection(-1) {
 			return true, nil

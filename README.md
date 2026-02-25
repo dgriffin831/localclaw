@@ -75,7 +75,7 @@ See full schema, defaults, and validation rules in [`docs/CONFIGURATION.md`](doc
 ## Command Modes
 
 - `localclaw doctor` - startup checks and runtime diagnostics (`--deep` also probes the active LLM provider).
-- `localclaw tui [initial-prompt]` - full-screen terminal UI.
+- `localclaw tui [initial-prompt]` - full-screen terminal UI (always-on mouse reporting; see `docs/TUI.md` for terminal-specific text-selection bypass keys).
 - `localclaw backup` - create one compressed local backup archive.
 - `localclaw memory <status|index|search|grep>` - memory tooling.
 - `localclaw channels serve [--once]` - channel worker mode (Signal inbound processing).

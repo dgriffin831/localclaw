@@ -46,13 +46,12 @@ const (
 )
 
 type chatMessage struct {
-	Role                 messageRole
-	Raw                  string
-	RenderMarkdown       bool
-	Streaming            bool
-	ThinkingPlaceholder  bool
-	ToolCard             *toolCardMessage
-	MirroredToScrollback bool
+	Role                messageRole
+	Raw                 string
+	RenderMarkdown      bool
+	Streaming           bool
+	ThinkingPlaceholder bool
+	ToolCard            *toolCardMessage
 }
 
 type toolCardMessage struct {
@@ -112,8 +111,7 @@ type model struct {
 	input    textarea.Model
 	spinner  spinner.Model
 
-	messages               []chatMessage
-	pendingScrollbackLines []string
+	messages []chatMessage
 
 	status          string
 	statusStartedAt time.Time
@@ -122,7 +120,6 @@ type model struct {
 
 	verbose                         bool
 	toolsExpanded                   bool
-	mouseEnabled                    bool
 	thinkingMessages                []string
 	thinkingMessageIdx              int
 	activeThinkingMessage           string
@@ -293,7 +290,6 @@ func newModel(ctx context.Context, app *runtime.App, cfg config.Config) model {
 		status:                     statusIdle,
 		verbose:                    cfg.App.Default.Verbose,
 		toolsExpanded:              cfg.App.Default.Tools,
-		mouseEnabled:               cfg.App.Default.Mouse,
 		historyIdx:                 -1,
 		activeAssistantIdx:         -1,
 		thinkingMessages:           resolveThinkingMessages(cfg.App.ThinkingMessages),

@@ -4,13 +4,14 @@ This document describes current terminal UI behavior in `internal/tui`.
 
 ## Runtime model
 
-`localclaw tui` renders Bubble Tea `tea.View` state with view modes tied to mouse capture:
+`localclaw tui` renders Bubble Tea `tea.View` in full-screen mode:
 
-- `mouse:on` -> `AltScreen=true`, `MouseMode=CellMotion`
-- `mouse:off` -> `AltScreen=false`, `MouseMode=None` (terminal scrollback remains available)
-- when `mouse:off`, finalized assistant/tool transcript blocks are mirrored as unmanaged terminal lines so terminal scrollback retains run output.
+- `AltScreen=true`
+- `MouseMode=CellMotion`
 
-- header line (shown only when mouse capture is on)
+Layout:
+
+- header line
 - transcript viewport
 - status line
 - bordered multiline composer with slash-command menu
@@ -20,15 +21,21 @@ Streaming output comes from `app.PromptStreamForSessionWithOptions`.
 
 `localclaw tui [initial-prompt]` accepts one optional positional startup prompt; when provided, TUI auto-submits it after startup.
 
+## Text selection and highlight behavior
+
+Mouse reporting bypass is terminal-dependent:
+
+- iTerm2: bypass modifier is `Option` (not `Shift`). iTerm2 can also disable click/drag reporting while keeping wheel reporting.
+- WezTerm: bypass defaults to `SHIFT` and is configurable with `bypass_mouse_reporting_modifiers`.
+- xterm: Shift override behavior is controlled by `shiftEscape`.
+
 ## Header and status
 
-Header currently shows:
+Header shows:
 
 - app label from config (`app.name`, default `localclaw`)
 - session/token tuple (`session:<session_id>  tokens:<total_tokens>`)
 - resolved workspace path
-
-When mouse capture is off (`mouse:off`), the header row is hidden.
 
 Primary run lifecycle statuses:
 
@@ -68,7 +75,7 @@ Composer behavior:
 - `PgUp` / `PgDn`: transcript scroll by page
 - `Ctrl+Up` / `Ctrl+Down`: transcript scroll by line
 - `Mouse wheel`: transcript scroll
-- Footer row: left side shows keyboard shortcuts hint, right side shows `provider/model/reasoning/verbose/tools/mouse` runtime settings.
+- Footer row: left side shows keyboard shortcuts hint, right side shows `provider/model/reasoning/verbose/tools` runtime settings.
 - Queued prompt previews render above the composer input as single-line truncated entries in FIFO execution order.
 - Multiline paste is normalized so pasted `CR`/`CRLF` line endings are preserved as newline breaks in the composer.
 - Composer prompt uses a single top-row marker (`>`); continuation lines are indented without repeated prompt markers and share the same pane background.
@@ -78,7 +85,6 @@ Global controls:
 
 - `Esc`: abort active run
 - `Ctrl+O`: toggle tool-card expansion
-- `Ctrl+Y`: toggle mouse capture (also toggles alt-screen on/off)
 - `Ctrl+C`: clear composer; second press within 1 second exits
 - `Ctrl+D`: exit when composer is empty
 
@@ -103,7 +109,6 @@ Implemented command set:
 - `/resume <session_id>`
 - `/delete <session_id>`
 - `/verbose <on|off>`
-- `/mouse <on|off>`
 - `/model <provider>/<model>[/<reasoning>]`
 - `/exit`
 - `/quit`
@@ -111,7 +116,7 @@ Implemented command set:
 Command behavior details:
 
 - `/shortcuts` prints all available keyboard shortcuts and their behavior.
-- `/status` prints one system line containing status, provider, configured model, effective model, effective selector, selector override state, agent, session, workspace, verbose, and mouse-capture flags.
+- `/status` prints one system line containing status, provider, configured model, effective model, effective selector, selector override state, agent, session, workspace, and verbose flag.
 - `/tools` prints provider plus provider-reported `tools` only (no runtime fallback list).
 - when provider tools are not yet discovered, `/tools` starts a background probe and refreshes the summary when metadata arrives.
 - for providers that do not emit a tool list in metadata events (for example Codex), localclaw uses a provider-side JSON self-report probe as fallback.
@@ -119,8 +124,6 @@ Command behavior details:
 - `/models refresh` forces provider model catalog re-discovery.
 - `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
 - `/verbose off` suppresses the additional `[verbose]` diagnostics.
-- `/mouse off` disables mouse capture and exits alt-screen so terminal scrollback/highlight works normally.
-- `/mouse on` re-enables wheel/click mouse capture and enters alt-screen for full-screen TUI interactions.
 - `/clear` clears only the visible TUI transcript messages (no confirmation line); it does not delete persisted session transcript files.
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
@@ -152,8 +155,8 @@ On TUI model creation:
 - If an initial startup prompt argument is provided (`localclaw tui "<prompt>"`), schedules that prompt instead and suppresses the default bootstrap seed run for that startup.
 - Applies startup toggles from `app.default`:
   - `verbose` -> verbose diagnostics mode
-  - `mouse` -> mouse capture
   - `tools` -> tool-card expansion
+  - `mouse` is deprecated and ignored (accepted for compatibility only)
 
 On `/new`:
 

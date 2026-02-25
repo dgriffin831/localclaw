@@ -704,31 +704,18 @@ func TestAbortRunClearsToolCardCallIDIndex(t *testing.T) {
 	}
 }
 
-func TestViewDisablesAltScreenWhenMouseCaptureOff(t *testing.T) {
+func TestViewAlwaysEnablesAltScreen(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	view := m.View()
-	if view.AltScreen {
-		t.Fatalf("expected view to keep alt screen disabled when mouse capture is off")
-	}
-}
-
-func TestViewEnablesAltScreenWhenMouseCaptureOn(t *testing.T) {
-	cfg := config.Default()
-	cfg.App.Default.Mouse = true
-
-	m := newModel(context.Background(), nil, cfg)
-	view := m.View()
 	if !view.AltScreen {
-		t.Fatalf("expected view to request alt screen when mouse capture is on")
+		t.Fatalf("expected view to request alt screen")
 	}
 }
 
-func TestViewUsesMouseCellMotionWhenConfiguredOn(t *testing.T) {
-	cfg := config.Default()
-	cfg.App.Default.Mouse = true
-
-	m := newModel(context.Background(), nil, cfg)
-	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+func TestViewUsesMouseCellMotion(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	view := m.View()
+	if got := view.MouseMode; got != tea.MouseModeCellMotion {
 		t.Fatalf("expected view to request cell-motion mouse mode, got %v", got)
 	}
 }
