@@ -132,6 +132,41 @@ func cmdEmitsInitialPromptTrigger(cmd tea.Cmd) bool {
 	return false
 }
 
+func cmdPrintedLines(cmd tea.Cmd) []string {
+	if cmd == nil {
+		return nil
+	}
+	return collectPrintedLinesFromMsg(cmd())
+}
+
+func collectPrintedLinesFromMsg(msg tea.Msg) []string {
+	value := reflect.ValueOf(msg)
+	if !value.IsValid() {
+		return nil
+	}
+
+	if value.Kind() == reflect.Slice {
+		lines := make([]string, 0, value.Len())
+		for i := 0; i < value.Len(); i++ {
+			nested, ok := value.Index(i).Interface().(tea.Cmd)
+			if !ok {
+				continue
+			}
+			lines = append(lines, cmdPrintedLines(nested)...)
+		}
+		return lines
+	}
+
+	if typ := reflect.TypeOf(msg); typ != nil && typ.String() == "tea.printLineMessage" {
+		field := value.FieldByName("messageBody")
+		if field.IsValid() && field.Kind() == reflect.String {
+			return []string{field.String()}
+		}
+	}
+
+	return nil
+}
+
 func newRuntimeBackedModel(t *testing.T) (model, *runtime.App) {
 	t.Helper()
 
@@ -1372,6 +1407,9 @@ func TestCtrlYTogglesMouseCapture(t *testing.T) {
 	if got := next.View().MouseMode; got != tea.MouseModeCellMotion {
 		t.Fatalf("expected view mouse mode cell-motion when enabled, got %v", got)
 	}
+	if !next.View().AltScreen {
+		t.Fatalf("expected view alt screen enabled when mouse capture is on")
+	}
 
 	updated, cmd = next.Update(keyCtrl('y'))
 	next = updated.(model)
@@ -1383,6 +1421,69 @@ func TestCtrlYTogglesMouseCapture(t *testing.T) {
 	}
 	if got := next.View().MouseMode; got != tea.MouseModeNone {
 		t.Fatalf("expected view mouse mode none when disabled, got %v", got)
+	}
+	if next.View().AltScreen {
+		t.Fatalf("expected view alt screen disabled when mouse capture is off")
+	}
+}
+
+func TestUpdateMirrorsAssistantOutputToTerminalScrollbackWhenMouseCaptureOff(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.messages = append(m.messages, chatMessage{
+		Role: roleAssistant,
+		Raw:  "first line\nsecond line",
+	})
+
+	updated, cmd := m.Update(statusTickMsg(time.Now()))
+	next := updated.(model)
+
+	lines := cmdPrintedLines(cmd)
+	if len(lines) != 1 {
+		t.Fatalf("expected one mirrored scrollback line, got %d (%q)", len(lines), strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[0], "assistant> first line") || !strings.Contains(lines[0], "second line") {
+		t.Fatalf("expected mirrored assistant output, got %q", lines[0])
+	}
+	if !next.messages[len(next.messages)-1].MirroredToScrollback {
+		t.Fatalf("expected assistant message to be marked as mirrored")
+	}
+
+	_, cmd = next.Update(statusTickMsg(time.Now()))
+	if lines := cmdPrintedLines(cmd); len(lines) != 0 {
+		t.Fatalf("expected mirrored assistant output only once, got %q", strings.Join(lines, "\n"))
+	}
+}
+
+func TestUpdateDoesNotMirrorAssistantOutputWhenMouseCaptureOn(t *testing.T) {
+	cfg := config.Default()
+	cfg.App.Default.Mouse = true
+	m := newModel(context.Background(), nil, cfg)
+	m.messages = append(m.messages, chatMessage{
+		Role: roleAssistant,
+		Raw:  "hello",
+	})
+
+	_, cmd := m.Update(statusTickMsg(time.Now()))
+	if lines := cmdPrintedLines(cmd); len(lines) != 0 {
+		t.Fatalf("expected no mirrored scrollback output when mouse capture is on, got %q", strings.Join(lines, "\n"))
+	}
+}
+
+func TestUpdateDoesNotMirrorStreamingAssistantOutput(t *testing.T) {
+	m := newModel(context.Background(), nil, config.Default())
+	m.messages = append(m.messages, chatMessage{
+		Role:      roleAssistant,
+		Raw:       "partial",
+		Streaming: true,
+	})
+
+	updated, cmd := m.Update(statusTickMsg(time.Now()))
+	next := updated.(model)
+	if lines := cmdPrintedLines(cmd); len(lines) != 0 {
+		t.Fatalf("expected no mirrored scrollback output for streaming assistant content, got %q", strings.Join(lines, "\n"))
+	}
+	if next.messages[len(next.messages)-1].MirroredToScrollback {
+		t.Fatalf("expected streaming assistant message to remain unmirrored")
 	}
 }
 
@@ -1468,6 +1569,9 @@ func TestHandleSlashMouseTogglesMouseCapture(t *testing.T) {
 	if got := m.View().MouseMode; got != tea.MouseModeNone {
 		t.Fatalf("expected /mouse off view mode none, got %v", got)
 	}
+	if m.View().AltScreen {
+		t.Fatalf("expected /mouse off to disable alt screen")
+	}
 
 	cmd = m.handleSlash("/mouse on")
 	if !m.mouseEnabled {
@@ -1478,6 +1582,9 @@ func TestHandleSlashMouseTogglesMouseCapture(t *testing.T) {
 	}
 	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
 		t.Fatalf("expected /mouse on view mode cell-motion, got %v", got)
+	}
+	if !m.View().AltScreen {
+		t.Fatalf("expected /mouse on to enable alt screen")
 	}
 }
 

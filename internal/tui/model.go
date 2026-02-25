@@ -46,12 +46,13 @@ const (
 )
 
 type chatMessage struct {
-	Role                messageRole
-	Raw                 string
-	RenderMarkdown      bool
-	Streaming           bool
-	ThinkingPlaceholder bool
-	ToolCard            *toolCardMessage
+	Role                 messageRole
+	Raw                  string
+	RenderMarkdown       bool
+	Streaming            bool
+	ThinkingPlaceholder  bool
+	ToolCard             *toolCardMessage
+	MirroredToScrollback bool
 }
 
 type toolCardMessage struct {
@@ -111,7 +112,8 @@ type model struct {
 	input    textarea.Model
 	spinner  spinner.Model
 
-	messages []chatMessage
+	messages               []chatMessage
+	pendingScrollbackLines []string
 
 	status          string
 	statusStartedAt time.Time

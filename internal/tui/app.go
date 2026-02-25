@@ -47,11 +47,22 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	finalize := func(primary tea.Cmd) (tea.Model, tea.Cmd) {
+		m.queueScrollbackMirrorLines()
+		return m, combineWithScrollbackCmd(primary, m.scrollbackMirrorCmd())
+	}
+	finalizeBatch := func(batch []tea.Cmd) (tea.Model, tea.Cmd) {
+		var primary tea.Cmd
+		if len(batch) > 0 {
+			primary = tea.Batch(batch...)
+		}
+		return finalize(primary)
+	}
 
 	switch msg := msg.(type) {
 	case ctxDoneMsg:
 		m.abortRun("context cancelled")
-		return m, tea.Quit
+		return finalize(tea.Quit)
 
 	case bootstrapSeedTriggerMsg:
 		if cmd := m.runBootstrapSeedPrompt(); cmd != nil {
@@ -68,12 +79,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.layout()
 		m.refreshViewport(true)
-		return m, nil
+		return finalize(nil)
 
 	case tea.KeyPressMsg:
 		handled, cmd := m.handleKeyMsg(msg)
 		if handled {
-			return m, cmd
+			return finalize(cmd)
 		}
 
 	case spinner.TickMsg:
@@ -88,12 +99,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamEventMsg:
 		if msg.RunID != m.activeRunID {
-			return m, nil
+			return finalize(nil)
 		}
 		if !msg.OK {
 			m.addVerbose("stream: event channel closed")
 			m.streamEvents = nil
-			return m, nil
+			return finalize(nil)
 		}
 		m.handleStreamEvent(msg.Event)
 		queuedStarted := false
@@ -109,12 +120,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamErrMsg:
 		if msg.RunID != m.activeRunID {
-			return m, nil
+			return finalize(nil)
 		}
 		if !msg.OK {
 			m.addVerbose("stream: error channel closed")
 			m.streamErrs = nil
-			return m, nil
+			return finalize(nil)
 		}
 		if msg.Err != nil {
 			m.addVerbose("stream: error=%s", truncateVerboseText(msg.Err.Error()))
@@ -122,9 +133,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finishRun(statusError)
 			m.refreshViewport(true)
 			if cmd := m.startNextQueuedInput(); cmd != nil {
-				return m, cmd
+				return finalize(cmd)
 			}
-			return m, nil
+			return finalize(nil)
 		}
 
 	case providerToolsDiscoveredMsg:
@@ -140,12 +151,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addSystem("provider tools discovery failed: " + msg.Err.Error())
 			m.addSystem(m.toolsSummary())
 			m.refreshViewport(true)
-			return m, nil
+			return finalize(nil)
 		}
 		m.providerTools = normalizeProviderToolList(msg.Tools)
 		m.addSystem(m.toolsSummary())
 		m.refreshViewport(true)
-		return m, nil
+		return finalize(nil)
 
 	case providerModelsDiscoveredMsg:
 		m.providerModelsDiscoveryInFlight = false
@@ -157,7 +168,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.addSystem(m.modelsSummary())
 		m.refreshViewport(true)
-		return m, nil
+		return finalize(nil)
 	}
 
 	var inputCmd tea.Cmd
@@ -175,16 +186,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, viewportCmd)
 	}
 
-	if len(cmds) == 0 {
-		return m, nil
-	}
-	return m, tea.Batch(cmds...)
+	return finalizeBatch(cmds)
 }
 
 func (m model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		v := tea.NewView("loading...")
-		v.AltScreen = true
+		v.AltScreen = m.mouseEnabled
 		if m.mouseEnabled {
 			v.MouseMode = tea.MouseModeCellMotion
 		}
@@ -211,7 +219,7 @@ func (m model) View() tea.View {
 		Background(colorBackground).
 		Foreground(colorText).
 		Render(content))
-	v.AltScreen = true
+	v.AltScreen = m.mouseEnabled
 	if m.mouseEnabled {
 		v.MouseMode = tea.MouseModeCellMotion
 	}

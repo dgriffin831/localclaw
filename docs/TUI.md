@@ -4,7 +4,11 @@ This document describes current terminal UI behavior in `internal/tui`.
 
 ## Runtime model
 
-`localclaw tui` renders Bubble Tea `tea.View` state with `AltScreen=true` always enabled and `MouseMode=CellMotion` when `app.default.mouse` is on:
+`localclaw tui` renders Bubble Tea `tea.View` state with view modes tied to mouse capture:
+
+- `mouse:on` -> `AltScreen=true`, `MouseMode=CellMotion`
+- `mouse:off` -> `AltScreen=false`, `MouseMode=None` (terminal scrollback remains available)
+- when `mouse:off`, finalized assistant/tool transcript blocks are mirrored as unmanaged terminal lines so terminal scrollback retains run output.
 
 - header line (shown only when mouse capture is on)
 - transcript viewport
@@ -74,7 +78,7 @@ Global controls:
 
 - `Esc`: abort active run
 - `Ctrl+O`: toggle tool-card expansion
-- `Ctrl+Y`: toggle mouse capture (turn off to allow terminal text selection)
+- `Ctrl+Y`: toggle mouse capture (also toggles alt-screen on/off)
 - `Ctrl+C`: clear composer; second press within 1 second exits
 - `Ctrl+D`: exit when composer is empty
 
@@ -115,8 +119,8 @@ Command behavior details:
 - `/models refresh` forces provider model catalog re-discovery.
 - `/verbose on` emits `[verbose]` diagnostics for prompt/session summary, runtime/tool context, stream lifecycle counters/errors, transcript writes, and detailed tool call/result metadata.
 - `/verbose off` suppresses the additional `[verbose]` diagnostics.
-- `/mouse off` disables mouse capture so the terminal can highlight/select text normally.
-- `/mouse on` re-enables wheel/click mouse capture for TUI interactions.
+- `/mouse off` disables mouse capture and exits alt-screen so terminal scrollback/highlight works normally.
+- `/mouse on` re-enables wheel/click mouse capture and enters alt-screen for full-screen TUI interactions.
 - `/clear` clears only the visible TUI transcript messages (no confirmation line); it does not delete persisted session transcript files.
 - `/reset` keeps current session ID and runs runtime reset hook path when app runtime is attached.
 - `/new` rotates to a new session ID through runtime and then clears transcript.
