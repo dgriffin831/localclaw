@@ -342,7 +342,7 @@ func TestToolResultEventWithoutCallIDStillRendersCard(t *testing.T) {
 	}
 }
 
-func TestFinalResponsePreservesObservedOrderWithToolCards(t *testing.T) {
+func TestFinalResponseMovesAfterToolCardsWhenToolActivityOccursMidStream(t *testing.T) {
 	m := newModel(context.Background(), nil, config.Default())
 	m.running = true
 	m.activeRunID = 7
@@ -392,8 +392,8 @@ func TestFinalResponsePreservesObservedOrderWithToolCards(t *testing.T) {
 	if toolIdx == -1 {
 		t.Fatalf("expected tool card to be present in transcript")
 	}
-	if assistantIdx >= toolIdx {
-		t.Fatalf("expected assistant update to remain before later tool card (assistant=%d tool=%d)", assistantIdx, toolIdx)
+	if assistantIdx <= toolIdx {
+		t.Fatalf("expected final assistant message to move after later tool card (assistant=%d tool=%d)", assistantIdx, toolIdx)
 	}
 	if m.messages[assistantIdx].Raw != "final response" {
 		t.Fatalf("expected final assistant text to be preserved in-place, got %q", m.messages[assistantIdx].Raw)

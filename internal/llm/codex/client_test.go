@@ -616,6 +616,47 @@ func TestPromptStreamRequestReturnsErrorWhenBinaryMissing(t *testing.T) {
 	}
 }
 
+func TestPromptStreamRequestIncludesStreamErrorDetailWhenStderrEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("CODEX_HOME", tmpDir)
+
+	fakeCodexPath := filepath.Join(tmpDir, "codex")
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+cat >/dev/null
+printf '%s\n' '{"type":"error","error":{"message":"network access is not enabled"}}'
+exit 1
+`
+	if err := os.WriteFile(fakeCodexPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	client := NewClient(Settings{
+		BinaryPath:       fakeCodexPath,
+		WorkingDirectory: "/tmp/workspace",
+	})
+	events, errs := client.PromptStreamRequest(context.Background(), llm.Request{Input: "hello"})
+	for range events {
+		// no-op: drain channel
+	}
+	var gotErr error
+	for err := range errs {
+		if err != nil {
+			gotErr = err
+			break
+		}
+	}
+	if gotErr == nil {
+		t.Fatalf("expected non-nil execution error")
+	}
+	if !strings.Contains(gotErr.Error(), "codex cli execution failed: exit status 1") {
+		t.Fatalf("expected execution failure context, got %v", gotErr)
+	}
+	if !strings.Contains(gotErr.Error(), "network access is not enabled") {
+		t.Fatalf("expected streamed error detail, got %v", gotErr)
+	}
+}
+
 func TestParseStreamJSONLineCommandExecutionStarted(t *testing.T) {
 	line := `{"type":"item.started","item":{"type":"command_execution","id":"cmd_1","command":"ls -la"}}`
 	events, err := parseStreamJSONLine(line, nil)

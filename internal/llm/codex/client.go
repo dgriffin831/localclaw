@@ -461,11 +461,15 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 		var deltaText strings.Builder
 		lastAgentMessageDelta := ""
 		finalSeen := false
+		streamErrDetail := ""
 
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line == "" {
 				continue
+			}
+			if detail := extractCodexStreamErrorDetail(line); detail != "" {
+				streamErrDetail = detail
 			}
 			parsedEvents, parseErr := parseStreamJSONLine(line, c.settings.SessionIDFields)
 			if parseErr != nil {
@@ -509,6 +513,10 @@ func (c *LocalClient) promptStreamWithArgs(ctx context.Context, args []string, e
 		if waitErr != nil {
 			if stderrText != "" {
 				emitError(ctx, errs, fmt.Errorf("codex cli execution failed: %w: %s", waitErr, stderrText))
+				return
+			}
+			if streamErrDetail != "" {
+				emitError(ctx, errs, fmt.Errorf("codex cli execution failed: %w: %s", waitErr, streamErrDetail))
 				return
 			}
 			emitError(ctx, errs, fmt.Errorf("codex cli execution failed: %w", waitErr))
@@ -588,6 +596,61 @@ func parseStreamJSONLine(line string, sessionIDFields []string) ([]llm.StreamEve
 	}
 
 	return events, nil
+}
+
+func extractCodexStreamErrorDetail(line string) string {
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &payload); err != nil {
+		return ""
+	}
+	if !isFailureStatus(asString(payload["status"])) &&
+		!isFailureStatus(asString(lookupMap(payload, "item", "status"))) &&
+		!isFailureEventType(asString(payload["type"])) {
+		return ""
+	}
+	return firstNonBlankString(
+		extractCodexErrorText(payload["message"]),
+		extractCodexErrorText(payload["error"]),
+		extractCodexErrorText(lookupMap(payload, "item", "error")),
+		extractCodexErrorText(lookupMap(payload, "item", "message")),
+		extractCodexErrorText(lookupMap(payload, "result", "error")),
+	)
+}
+
+func extractCodexErrorText(value interface{}) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case map[string]interface{}:
+		return firstNonBlankString(
+			extractCodexErrorText(typed["message"]),
+			extractCodexErrorText(typed["detail"]),
+			extractCodexErrorText(typed["details"]),
+			extractCodexErrorText(typed["error"]),
+			extractCodexErrorText(typed["cause"]),
+			extractCodexErrorText(typed["content"]),
+		)
+	case []interface{}:
+		for _, entry := range typed {
+			if text := extractCodexErrorText(entry); text != "" {
+				return text
+			}
+		}
+		return ""
+	default:
+		return asLooseString(value)
+	}
+}
+
+func isFailureEventType(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return false
+	}
+	if normalized == "error" {
+		return true
+	}
+	return strings.Contains(normalized, "error") || strings.Contains(normalized, "failed")
 }
 
 func extractProviderSessionID(payload map[string]interface{}, fields []string) string {
@@ -1019,6 +1082,15 @@ func (c *LocalClient) resumeOutputMode() string {
 func isSuccessfulCommandStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "completed", "success", "succeeded", "ok":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFailureStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed", "error", "errored", "cancelled", "canceled", "aborted":
 		return true
 	default:
 		return false

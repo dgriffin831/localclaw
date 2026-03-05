@@ -83,7 +83,7 @@ Implementation location:
 - pipe setup/start failures return immediately with context.
 - stdin write/close failures are surfaced as adapter errors.
 - scanner/read errors are returned with context.
-- non-zero exits include stderr text when available.
+- non-zero exits include stderr text when available; when stderr is empty, structured stdout JSON error payloads are surfaced when present.
 - unsupported/missing security context returns a fast-fail request error.
 - runtime session continuation may clear an invalid persisted provider session ID and retry once without resume when the error indicates an invalid/expired/missing session.
 

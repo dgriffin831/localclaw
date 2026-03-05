@@ -244,6 +244,7 @@ func (m *model) applyFinal(final string) {
 	if m.activeAssistantIdx < 0 || m.activeAssistantIdx >= len(m.messages) {
 		m.addAssistant("", false)
 	}
+	m.moveActiveAssistantToEnd()
 	msg := &m.messages[m.activeAssistantIdx]
 	trimmed := strings.TrimSpace(final)
 	if trimmed != "" {
@@ -266,6 +267,19 @@ func (m *model) applyFinal(final string) {
 	}
 	msg.Streaming = false
 	msg.ThinkingPlaceholder = false
+}
+
+func (m *model) moveActiveAssistantToEnd() {
+	if m.activeAssistantIdx < 0 || m.activeAssistantIdx >= len(m.messages) {
+		return
+	}
+	if m.activeAssistantIdx == len(m.messages)-1 {
+		return
+	}
+	msg := m.messages[m.activeAssistantIdx]
+	m.messages = append(m.messages[:m.activeAssistantIdx], m.messages[m.activeAssistantIdx+1:]...)
+	m.messages = append(m.messages, msg)
+	m.activeAssistantIdx = len(m.messages) - 1
 }
 
 func (m *model) runSessionReset(startNew bool, source string) {
