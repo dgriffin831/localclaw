@@ -3,7 +3,7 @@ title: TOOLS
 ---
 # TOOLS.md - Local Tooling Notes
 
-This file stores environment-specific details that skills and generic docs do not cover.
+This file stores environment-specific details that generic docs do not cover.
 Keep entries concrete and operational.
 
 ## Verification Snapshot
@@ -22,7 +22,6 @@ Add practical details that improve reliability, for example:
 
 - Shell aliases and non-default binary paths
 - Repository runbooks and common command sequences
-- Channel/account naming conventions
 - Hostnames, device nicknames, or local service labels
 - Platform formatting constraints (for example markdown limitations)
 

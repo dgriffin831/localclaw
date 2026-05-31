@@ -30,6 +30,8 @@ type searchChunk struct {
 	Hash         string
 	Text         string
 	KeywordScore float64
+	VectorScore  float64
+	HybridScore  float64
 }
 
 // Search performs memory_search-style retrieval over indexed chunks.
@@ -53,37 +55,57 @@ func (m *SQLiteIndexManager) Search(ctx context.Context, query string, opts Sear
 		candidateLimit = maxResults
 	}
 
-	keywordChunks, err := m.keywordCandidates(ctx, trimmedQuery, candidateLimit)
-	if err != nil {
-		return nil, err
+	mode := normalizeSearchMode(opts.Mode, m.cfg.Vector.SearchMode)
+	var keywordChunks []searchChunk
+	if mode != SearchModeVector {
+		var err error
+		keywordChunks, err = m.keywordCandidates(ctx, trimmedQuery, candidateLimit)
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	merged := map[int64]*searchChunk{}
-	for i := range keywordChunks {
-		chunk := keywordChunks[i]
-		merged[chunk.ID] = &chunk
+	var vectorChunks []searchChunk
+	var vectorReason string
+	if mode != SearchModeKeyword {
+		var err error
+		vectorChunks, vectorReason, err = m.vectorCandidates(ctx, trimmedQuery, candidateLimit)
+		if err != nil {
+			return nil, err
+		}
+		if mode == SearchModeVector && len(vectorChunks) == 0 {
+			return nil, vectorUnavailableError(vectorReason)
+		}
 	}
-
-	mergedChunks := make([]*searchChunk, 0, len(merged))
-	for _, chunk := range merged {
-		mergedChunks = append(mergedChunks, chunk)
+	warning := ""
+	if mode == SearchModeHybrid && vectorReason != "" && len(vectorChunks) == 0 {
+		warning = "vector search unavailable: " + vectorReason
 	}
+	mergedChunks := mergeSearchChunks(keywordChunks, vectorChunks)
 
 	results := make([]SearchResult, 0, len(mergedChunks))
 	for _, chunk := range mergedChunks {
-		score := chunk.KeywordScore
+		score := chunk.HybridScore
+		if mode == SearchModeKeyword {
+			score = chunk.KeywordScore
+		}
+		if mode == SearchModeVector {
+			score = chunk.VectorScore
+		}
 
 		if score < opts.MinScore {
 			continue
 		}
 
 		results = append(results, SearchResult{
-			Path:      m.displayPath(chunk.Path),
-			StartLine: chunk.StartLine,
-			EndLine:   chunk.EndLine,
-			Score:     score,
-			Snippet:   snippetFromChunk(chunk.Text),
-			Source:    chunk.Source,
+			Path:         m.displayPath(chunk.Path),
+			StartLine:    chunk.StartLine,
+			EndLine:      chunk.EndLine,
+			Score:        score,
+			KeywordScore: chunk.KeywordScore,
+			VectorScore:  chunk.VectorScore,
+			Snippet:      snippetFromChunk(chunk.Text),
+			Source:       chunk.Source,
+			Warning:      warning,
 		})
 	}
 
@@ -112,7 +134,16 @@ func (m *SQLiteIndexManager) Get(ctx context.Context, path string, opts GetOptio
 		return GetResult{}, err
 	}
 
-	contentBytes, err := os.ReadFile(file.AbsolutePath)
+	resultPath := file.RelativePath
+	if resultPath == "" {
+		resultPath = filepath.ToSlash(filepath.Clean(file.AbsolutePath))
+	}
+	return ReadMarkdownFile(file.AbsolutePath, resultPath, classifyMemorySource(file), opts)
+}
+
+// ReadMarkdownFile reads a markdown file with memory_get-compatible line slicing.
+func ReadMarkdownFile(absolutePath, resultPath, source string, opts GetOptions) (GetResult, error) {
+	contentBytes, err := os.ReadFile(absolutePath)
 	if err != nil {
 		return GetResult{}, err
 	}
@@ -149,9 +180,8 @@ func (m *SQLiteIndexManager) Get(ctx context.Context, path string, opts GetOptio
 		endLine = fromLine - 1
 	}
 
-	resultPath := file.RelativePath
 	if resultPath == "" {
-		resultPath = filepath.ToSlash(filepath.Clean(file.AbsolutePath))
+		resultPath = filepath.ToSlash(filepath.Clean(absolutePath))
 	}
 
 	return GetResult{
@@ -159,7 +189,7 @@ func (m *SQLiteIndexManager) Get(ctx context.Context, path string, opts GetOptio
 		StartLine: startLine,
 		EndLine:   endLine,
 		Content:   strings.Join(slice, "\n"),
-		Source:    classifyMemorySource(file),
+		Source:    source,
 	}, nil
 }
 

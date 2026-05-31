@@ -25,6 +25,7 @@ func ResolveMemoryConfig(cfg config.Config, agentID string) config.MemoryConfig 
 
 func hasMemoryOverride(cfg config.MemoryOverrideConfig) bool {
 	return cfg.Enabled != nil ||
+		cfg.Tools.Create != nil ||
 		cfg.Tools.Get != nil ||
 		cfg.Tools.Search != nil ||
 		cfg.Tools.Grep != nil ||
@@ -35,14 +36,28 @@ func hasMemoryOverride(cfg config.MemoryOverrideConfig) bool {
 		cfg.Chunking.Overlap > 0 ||
 		cfg.Query.MaxResults > 0 ||
 		cfg.Sync.OnSearch != nil ||
-		cfg.Sync.Sessions.DeltaBytes > 0 ||
-		cfg.Sync.Sessions.DeltaMessages > 0
+		cfg.Vector.Enabled != nil ||
+		strings.TrimSpace(cfg.Vector.Provider) != "" ||
+		strings.TrimSpace(cfg.Vector.SearchMode) != "" ||
+		strings.TrimSpace(cfg.Vector.Model.ID) != "" ||
+		strings.TrimSpace(cfg.Vector.Model.Path) != "" ||
+		strings.TrimSpace(cfg.Vector.Model.PrimaryURL) != "" ||
+		strings.TrimSpace(cfg.Vector.Model.MirrorURL) != "" ||
+		strings.TrimSpace(cfg.Vector.Model.SHA256) != "" ||
+		cfg.Vector.Server.Managed != nil ||
+		strings.TrimSpace(cfg.Vector.Server.Binary) != "" ||
+		strings.TrimSpace(cfg.Vector.Server.Host) != "" ||
+		cfg.Vector.Server.Port > 0 ||
+		cfg.Vector.Server.StartupTimeoutSeconds > 0
 }
 
 func mergeMemoryConfig(base config.MemoryConfig, override config.MemoryOverrideConfig) config.MemoryConfig {
 	merged := base
 	if override.Enabled != nil {
 		merged.Enabled = *override.Enabled
+	}
+	if override.Tools.Create != nil {
+		merged.Tools.Create = *override.Tools.Create
 	}
 	if override.Tools.Get != nil {
 		merged.Tools.Get = *override.Tools.Get
@@ -74,11 +89,44 @@ func mergeMemoryConfig(base config.MemoryConfig, override config.MemoryOverrideC
 	if override.Sync.OnSearch != nil {
 		merged.Sync.OnSearch = *override.Sync.OnSearch
 	}
-	if override.Sync.Sessions.DeltaBytes > 0 {
-		merged.Sync.Sessions.DeltaBytes = override.Sync.Sessions.DeltaBytes
+	if override.Vector.Enabled != nil {
+		merged.Vector.Enabled = *override.Vector.Enabled
 	}
-	if override.Sync.Sessions.DeltaMessages > 0 {
-		merged.Sync.Sessions.DeltaMessages = override.Sync.Sessions.DeltaMessages
+	if strings.TrimSpace(override.Vector.Provider) != "" {
+		merged.Vector.Provider = override.Vector.Provider
+	}
+	if strings.TrimSpace(override.Vector.SearchMode) != "" {
+		merged.Vector.SearchMode = override.Vector.SearchMode
+	}
+	if strings.TrimSpace(override.Vector.Model.ID) != "" {
+		merged.Vector.Model.ID = override.Vector.Model.ID
+	}
+	if strings.TrimSpace(override.Vector.Model.Path) != "" {
+		merged.Vector.Model.Path = override.Vector.Model.Path
+	}
+	if strings.TrimSpace(override.Vector.Model.PrimaryURL) != "" {
+		merged.Vector.Model.PrimaryURL = override.Vector.Model.PrimaryURL
+	}
+	if strings.TrimSpace(override.Vector.Model.MirrorURL) != "" {
+		merged.Vector.Model.MirrorURL = override.Vector.Model.MirrorURL
+	}
+	if strings.TrimSpace(override.Vector.Model.SHA256) != "" {
+		merged.Vector.Model.SHA256 = override.Vector.Model.SHA256
+	}
+	if override.Vector.Server.Managed != nil {
+		merged.Vector.Server.Managed = *override.Vector.Server.Managed
+	}
+	if strings.TrimSpace(override.Vector.Server.Binary) != "" {
+		merged.Vector.Server.Binary = override.Vector.Server.Binary
+	}
+	if strings.TrimSpace(override.Vector.Server.Host) != "" {
+		merged.Vector.Server.Host = override.Vector.Server.Host
+	}
+	if override.Vector.Server.Port > 0 {
+		merged.Vector.Server.Port = override.Vector.Server.Port
+	}
+	if override.Vector.Server.StartupTimeoutSeconds > 0 {
+		merged.Vector.Server.StartupTimeoutSeconds = override.Vector.Server.StartupTimeoutSeconds
 	}
 	return merged
 }

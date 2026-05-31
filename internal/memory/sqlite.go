@@ -11,13 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgriffin831/localclaw/internal/session"
 	_ "modernc.org/sqlite"
 )
 
 const (
 	defaultWatchDebounce     = 500 * time.Millisecond
-	defaultSessionDebounce   = 500 * time.Millisecond
 	defaultWatchPollInterval = 250 * time.Millisecond
 )
 
@@ -33,23 +31,15 @@ type SQLiteIndexManager struct {
 	stateMu           sync.Mutex
 	dirty             bool
 	lastBackgroundErr error
+	lastVectorError   string
 	watchSnapshot     map[string]string
 	autoCancel        context.CancelFunc
 	autoDone          chan struct{}
-	autoTriggerCh     chan autoSyncTrigger
-	sessionDeltaBytes int
-	sessionDeltaMsgs  int
 
 	// test hooks exercised by package tests.
 	testHookSync              func(ctx context.Context, force bool) error
 	testHookBeforeReindexSwap func(tempPath string) error
 }
-
-type autoSyncTrigger int
-
-const (
-	autoSyncTriggerSession autoSyncTrigger = iota + 1
-)
 
 // NewSQLiteIndexManager creates a SQLite index manager.
 func NewSQLiteIndexManager(cfg IndexManagerConfig) *SQLiteIndexManager {
@@ -61,12 +51,6 @@ func NewSQLiteIndexManager(cfg IndexManagerConfig) *SQLiteIndexManager {
 	}
 	if len(cfg.Sources) == 0 {
 		cfg.Sources = []string{"memory"}
-	}
-	if cfg.SessionDeltaBytes < 0 {
-		cfg.SessionDeltaBytes = 0
-	}
-	if cfg.SessionDeltaMessages < 0 {
-		cfg.SessionDeltaMessages = 0
 	}
 	return &SQLiteIndexManager{cfg: cfg}
 }
@@ -162,6 +146,11 @@ func (m *SQLiteIndexManager) Sync(ctx context.Context, force bool) (SyncResult, 
 		m.setDirty(true)
 		return SyncResult{}, err
 	}
+	if out.VectorError != "" {
+		m.recordVectorError(out.VectorError)
+	} else {
+		m.recordVectorError("")
+	}
 
 	m.setDirty(false)
 	if snapshot, snapErr := m.scanWatchSnapshot(); snapErr == nil {
@@ -174,15 +163,11 @@ func (m *SQLiteIndexManager) Sync(ctx context.Context, force bool) (SyncResult, 
 
 // StartAutoSync starts background watch/interval sync loops.
 func (m *SQLiteIndexManager) StartAutoSync(ctx context.Context, cfg AutoSyncConfig) error {
-	// TODO: Runtime startup should call StartAutoSync for active agents and keep the lifecycle tied to app startup/shutdown; today this path is available but not wired.
-	if !cfg.Watch && cfg.Interval <= 0 && !m.sourceEnabled("sessions") {
+	if !cfg.Watch && cfg.Interval <= 0 {
 		return nil
 	}
 	if cfg.WatchDebounce <= 0 {
 		cfg.WatchDebounce = defaultWatchDebounce
-	}
-	if cfg.SessionDebounce <= 0 {
-		cfg.SessionDebounce = defaultSessionDebounce
 	}
 	if cfg.WatchPollInterval <= 0 {
 		cfg.WatchPollInterval = defaultWatchPollInterval
@@ -205,15 +190,11 @@ func (m *SQLiteIndexManager) StartAutoSync(ctx context.Context, cfg AutoSyncConf
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	triggerCh := make(chan autoSyncTrigger, 1)
 	m.autoCancel = cancel
 	m.autoDone = done
-	m.autoTriggerCh = triggerCh
-	m.sessionDeltaBytes = 0
-	m.sessionDeltaMsgs = 0
 	m.stateMu.Unlock()
 
-	go m.runAutoSync(runCtx, done, triggerCh, cfg)
+	go m.runAutoSync(runCtx, done, cfg)
 	return nil
 }
 
@@ -224,9 +205,6 @@ func (m *SQLiteIndexManager) StopAutoSync() error {
 	done := m.autoDone
 	m.autoCancel = nil
 	m.autoDone = nil
-	m.autoTriggerCh = nil
-	m.sessionDeltaBytes = 0
-	m.sessionDeltaMsgs = 0
 	m.stateMu.Unlock()
 
 	if cancel != nil {
@@ -252,49 +230,6 @@ func (m *SQLiteIndexManager) LastBackgroundError() error {
 	return m.lastBackgroundErr
 }
 
-// HandleTranscriptUpdate handles session transcript append notifications.
-func (m *SQLiteIndexManager) HandleTranscriptUpdate(ctx context.Context, update session.TranscriptUpdate) error {
-	// TODO: Runtime transcript writes should emit TranscriptUpdate events into this handler so session delta bytes/messages can trigger autosync as designed.
-	_ = ctx
-	if !m.sourceEnabled("sessions") {
-		return nil
-	}
-
-	shouldTrigger := false
-	m.stateMu.Lock()
-	m.sessionDeltaBytes += maxInt(update.DeltaBytes, 0)
-	m.sessionDeltaMsgs += maxInt(update.DeltaMessages, 0)
-	byteThreshold := m.cfg.SessionDeltaBytes
-	msgThreshold := m.cfg.SessionDeltaMessages
-	if byteThreshold <= 0 && msgThreshold <= 0 {
-		shouldTrigger = m.sessionDeltaBytes > 0 || m.sessionDeltaMsgs > 0
-	} else {
-		if byteThreshold > 0 && m.sessionDeltaBytes >= byteThreshold {
-			shouldTrigger = true
-		}
-		if msgThreshold > 0 && m.sessionDeltaMsgs >= msgThreshold {
-			shouldTrigger = true
-		}
-	}
-	if shouldTrigger {
-		m.sessionDeltaBytes = 0
-		m.sessionDeltaMsgs = 0
-	}
-	triggerCh := m.autoTriggerCh
-	m.stateMu.Unlock()
-
-	if shouldTrigger {
-		m.setDirty(true)
-		if triggerCh != nil {
-			select {
-			case triggerCh <- autoSyncTriggerSession:
-			default:
-			}
-		}
-	}
-	return nil
-}
-
 // Status returns indexed file/chunk counts.
 func (m *SQLiteIndexManager) Status(ctx context.Context) (IndexStatus, error) {
 	if err := m.InstallSchema(ctx); err != nil {
@@ -309,12 +244,15 @@ func (m *SQLiteIndexManager) Status(ctx context.Context) (IndexStatus, error) {
 	if err := m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks;`).Scan(&chunkCount); err != nil {
 		return IndexStatus{}, err
 	}
+	vectorStatus := m.buildVectorStatus(ctx)
 
 	return IndexStatus{
-		DBPath:     m.cfg.DBPath,
-		FileCount:  fileCount,
-		ChunkCount: chunkCount,
-		FTSEnabled: m.features.ftsEnabled,
+		DBPath:      m.cfg.DBPath,
+		FileCount:   fileCount,
+		ChunkCount:  chunkCount,
+		FTSEnabled:  m.features.ftsEnabled,
+		Vector:      vectorStatus,
+		VectorError: vectorStatus.LastError,
 	}, nil
 }
 
@@ -524,6 +462,9 @@ func (m *SQLiteIndexManager) syncIntoDB(ctx context.Context, db *sql.DB, force b
 	if err := tx.Commit(); err != nil {
 		return out, err
 	}
+	indexedVectors, vectorErr := m.embedMissingVectors(ctx, db)
+	out.IndexedVectors = indexedVectors
+	out.VectorError = vectorErr
 	return out, nil
 }
 
@@ -562,34 +503,10 @@ func (m *SQLiteIndexManager) discoverIndexDocuments() ([]indexDocument, error) {
 		}
 	}
 
-	if m.sourceEnabled("sessions") {
-		sessionFiles, err := DiscoverSessionFiles(m.cfg.SessionsRoot)
-		if err != nil {
-			return nil, err
-		}
-		for _, file := range sessionFiles {
-			normalized, err := ReadSessionTranscriptNormalized(file.AbsolutePath)
-			if err != nil {
-				return nil, fmt.Errorf("read session transcript %q: %w", file.AbsolutePath, err)
-			}
-			info, err := os.Stat(file.AbsolutePath)
-			if err != nil {
-				return nil, fmt.Errorf("stat session transcript %q: %w", file.AbsolutePath, err)
-			}
-			documents = append(documents, indexDocument{
-				Path:      file.AbsolutePath,
-				Source:    "sessions",
-				Text:      normalized,
-				MTimeUnix: info.ModTime().Unix(),
-				Size:      info.Size(),
-			})
-		}
-	}
-
 	return documents, nil
 }
 
-func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct{}, triggerCh <-chan autoSyncTrigger, cfg AutoSyncConfig) {
+func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct{}, cfg AutoSyncConfig) {
 	defer close(done)
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -616,9 +533,6 @@ func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct
 	watchDebounceDelay := cfg.WatchDebounce
 	watchDebounceCh := make(<-chan time.Time)
 	var watchDebounceTimer *time.Timer
-	sessionDebounceDelay := cfg.SessionDebounce
-	sessionDebounceCh := make(<-chan time.Time)
-	var sessionDebounceTimer *time.Timer
 
 	scheduleWatchDebouncedSync := func() {
 		if watchDebounceTimer == nil {
@@ -635,21 +549,6 @@ func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct
 		watchDebounceTimer.Reset(watchDebounceDelay)
 	}
 
-	scheduleSessionDebouncedSync := func() {
-		if sessionDebounceTimer == nil {
-			sessionDebounceTimer = time.NewTimer(sessionDebounceDelay)
-			sessionDebounceCh = sessionDebounceTimer.C
-			return
-		}
-		if !sessionDebounceTimer.Stop() {
-			select {
-			case <-sessionDebounceTimer.C:
-			default:
-			}
-		}
-		sessionDebounceTimer.Reset(sessionDebounceDelay)
-	}
-
 	runBackgroundSync := func() {
 		if _, err := m.Sync(ctx, false); err != nil {
 			m.recordBackgroundError(err)
@@ -662,15 +561,9 @@ func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct
 			if watchDebounceTimer != nil {
 				watchDebounceTimer.Stop()
 			}
-			if sessionDebounceTimer != nil {
-				sessionDebounceTimer.Stop()
-			}
 			return
 		case <-watchDebounceCh:
 			watchDebounceCh = nil
-			runBackgroundSync()
-		case <-sessionDebounceCh:
-			sessionDebounceCh = nil
 			runBackgroundSync()
 		case <-watchCh:
 			changed, err := m.detectWatchChanges()
@@ -681,11 +574,6 @@ func (m *SQLiteIndexManager) runAutoSync(ctx context.Context, done chan<- struct
 			if changed {
 				m.setDirty(true)
 				scheduleWatchDebouncedSync()
-			}
-		case trigger := <-triggerCh:
-			switch trigger {
-			case autoSyncTriggerSession:
-				scheduleSessionDebouncedSync()
 			}
 		case <-intervalCh:
 			m.setDirty(true)
@@ -743,6 +631,46 @@ func (m *SQLiteIndexManager) recordBackgroundError(err error) {
 	m.stateMu.Unlock()
 }
 
+func (m *SQLiteIndexManager) recordVectorError(message string) {
+	m.stateMu.Lock()
+	m.lastVectorError = strings.TrimSpace(message)
+	m.stateMu.Unlock()
+}
+
+func (m *SQLiteIndexManager) buildVectorStatus(ctx context.Context) VectorStatus {
+	status := VectorModelStatus(m.cfg.Vector)
+	out := VectorStatus{
+		Enabled:          m.cfg.Vector.Enabled,
+		ModelID:          m.cfg.Vector.Model.ID,
+		ModelPath:        status.Path,
+		ModelPresent:     status.Exists,
+		ModelSHA256:      status.SHA256,
+		LlamaServerFound: status.LlamaServerFound,
+		SearchMode:       normalizeSearchMode("", m.cfg.Vector.SearchMode),
+	}
+	count, dimension, err := m.vectorStats(ctx)
+	if err == nil {
+		out.VectorCount = count
+		out.Dimension = dimension
+	}
+	m.stateMu.Lock()
+	out.LastError = m.lastVectorError
+	m.stateMu.Unlock()
+	if out.LastError == "" {
+		if !m.cfg.Vector.Enabled {
+			out.LastError = "vector search is disabled"
+		} else if !status.Verified {
+			out.LastError = "vector model is missing or sha256 verification failed"
+		} else if !status.LlamaServerFound {
+			out.LastError = "llama-server binary is not available"
+		} else if err != nil {
+			out.LastError = err.Error()
+		}
+	}
+	out.Ready = m.cfg.Vector.Enabled && status.Verified && status.LlamaServerFound && out.VectorCount > 0 && out.Dimension > 0 && out.LastError == ""
+	return out
+}
+
 func (m *SQLiteIndexManager) sourceEnabled(name string) bool {
 	target := strings.ToLower(strings.TrimSpace(name))
 	if target == "" {
@@ -771,13 +699,6 @@ func mapsEqual(a map[string]string, b map[string]string) bool {
 	return true
 }
 
-func maxInt(v int, min int) int {
-	if v < min {
-		return min
-	}
-	return v
-}
-
 func openSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
 		return nil, err
@@ -788,6 +709,10 @@ func openSQLiteDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON;`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout = 5000;`); err != nil {
 		db.Close()
 		return nil, err
 	}

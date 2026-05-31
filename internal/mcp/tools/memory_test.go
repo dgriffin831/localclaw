@@ -6,12 +6,18 @@ import (
 	"testing"
 
 	"github.com/dgriffin831/localclaw/internal/memory"
+	"github.com/dgriffin831/localclaw/internal/runtime"
 )
 
 type stubMemoryBackend struct {
+	createFn func(ctx context.Context, req MemoryCreateRequest) (runtime.MCPMemoryCreateResult, error)
 	searchFn func(ctx context.Context, req MemorySearchRequest) ([]memory.SearchResult, error)
 	getFn    func(ctx context.Context, req MemoryGetRequest) (memory.GetResult, error)
 	grepFn   func(ctx context.Context, req MemoryGrepRequest) (memory.GrepResult, error)
+}
+
+func (s stubMemoryBackend) Create(ctx context.Context, req MemoryCreateRequest) (runtime.MCPMemoryCreateResult, error) {
+	return s.createFn(ctx, req)
 }
 
 func (s stubMemoryBackend) Search(ctx context.Context, req MemorySearchRequest) ([]memory.SearchResult, error) {
@@ -24,6 +30,44 @@ func (s stubMemoryBackend) Get(ctx context.Context, req MemoryGetRequest) (memor
 
 func (s stubMemoryBackend) Grep(ctx context.Context, req MemoryGrepRequest) (memory.GrepResult, error) {
 	return s.grepFn(ctx, req)
+}
+
+func TestMemoryCreateToolRequiresTitleAndContent(t *testing.T) {
+	h := NewMemoryCreateTool(stubMemoryBackend{
+		createFn: func(ctx context.Context, req MemoryCreateRequest) (runtime.MCPMemoryCreateResult, error) {
+			return runtime.MCPMemoryCreateResult{}, nil
+		},
+	})
+
+	res := h.Call(context.Background(), map[string]interface{}{"title": "note"})
+	if !res.IsError {
+		t.Fatalf("expected error result")
+	}
+}
+
+func TestMemoryCreateToolReturnsResult(t *testing.T) {
+	h := NewMemoryCreateTool(stubMemoryBackend{
+		createFn: func(ctx context.Context, req MemoryCreateRequest) (runtime.MCPMemoryCreateResult, error) {
+			if req.Title != "A note" || req.Content != "body" {
+				t.Fatalf("unexpected request: %+v", req)
+			}
+			if len(req.Tags) != 1 || req.Tags[0] != "tag" {
+				t.Fatalf("unexpected tags: %+v", req.Tags)
+			}
+			return runtime.MCPMemoryCreateResult{Path: "memory/a-note.md", Indexed: true}, nil
+		},
+	})
+	res := h.Call(context.Background(), map[string]interface{}{
+		"title":   "A note",
+		"content": "body",
+		"tags":    []interface{}{"tag"},
+	})
+	if res.IsError {
+		t.Fatalf("expected success, got %+v", res.StructuredContent)
+	}
+	if got := res.StructuredContent["ok"]; got != true {
+		t.Fatalf("expected ok=true, got %v", got)
+	}
 }
 
 func TestMemorySearchToolRejectsInvalidArgs(t *testing.T) {

@@ -54,14 +54,8 @@ Before substantial work:
 
 - Ask before destructive filesystem operations.
 - Ask before external communications or public actions.
-- Never share private user context into group or shared channels unless explicitly approved.
+- Never share private user context externally unless explicitly approved.
 - When policy is ambiguous, pause and ask.
-
-## Heartbeat Behavior
-
-- If `HEARTBEAT.md` exists, follow it during periodic checks.
-- Use heartbeats for lightweight maintenance and context refresh.
-- If no action is needed, return `HEARTBEAT_OK`.
 
 ## Maintenance
 

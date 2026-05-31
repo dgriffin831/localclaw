@@ -60,19 +60,12 @@ func TestToolDefinitionInputFieldsIncludeDescriptionsAndExamples(t *testing.T) {
 
 func exposedToolDefinitions() []protocol.Tool {
 	return []protocol.Tool{
+		MemoryCreateDefinition(),
 		MemorySearchDefinition(),
 		MemoryGetDefinition(),
 		MemoryGrepDefinition(),
 		WorkspaceStatusDefinition(),
-		CronListDefinition(),
-		CronAddDefinition(),
-		CronRemoveDefinition(),
-		CronRunDefinition(),
-		SessionsListDefinition(),
-		SessionsHistoryDefinition(),
-		SessionsDeleteDefinition(),
-		SessionStatusDefinition(),
-		SlackSendDefinition(),
-		SignalSendDefinition(),
+		WorkspaceListDefinition(),
+		WorkspaceReadDefinition(),
 	}
 }

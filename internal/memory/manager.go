@@ -12,40 +12,42 @@ const (
 
 // IndexManagerConfig controls SQLite memory index behavior.
 type IndexManagerConfig struct {
-	DBPath               string
-	WorkspaceRoot        string
-	SessionsRoot         string
-	Sources              []string
-	ExtraPaths           []string
-	ChunkTokens          int
-	ChunkOverlap         int
-	EnableFTS            bool
-	SessionDeltaBytes    int
-	SessionDeltaMessages int
+	DBPath          string
+	WorkspaceRoot   string
+	Sources         []string
+	ExtraPaths      []string
+	ChunkTokens     int
+	ChunkOverlap    int
+	EnableFTS       bool
+	Vector          VectorConfig
+	EmbedderFactory func(context.Context, VectorConfig) (Embedder, error)
 }
 
 // IndexStatus is a lightweight snapshot of indexed memory state.
 type IndexStatus struct {
-	DBPath     string
-	FileCount  int
-	ChunkCount int
-	FTSEnabled bool
+	DBPath      string
+	FileCount   int
+	ChunkCount  int
+	FTSEnabled  bool
+	Vector      VectorStatus
+	VectorError string
 }
 
 // SyncResult captures indexing work from one sync pass.
 type SyncResult struct {
-	ScannedFiles  int
-	IndexedFiles  int
-	SkippedFiles  int
-	RemovedFiles  int
-	IndexedChunks int
+	ScannedFiles   int
+	IndexedFiles   int
+	SkippedFiles   int
+	RemovedFiles   int
+	IndexedChunks  int
+	IndexedVectors int
+	VectorError    string
 }
 
 // AutoSyncConfig controls background watch/interval sync behavior.
 type AutoSyncConfig struct {
 	Watch             bool
 	WatchDebounce     time.Duration
-	SessionDebounce   time.Duration
 	WatchPollInterval time.Duration
 	Interval          time.Duration
 }
@@ -54,17 +56,59 @@ type AutoSyncConfig struct {
 type SearchOptions struct {
 	MaxResults int
 	MinScore   float64
-	SessionKey string
+	Mode       string
 }
 
 // SearchResult is one memory chunk match.
 type SearchResult struct {
-	Path      string
-	StartLine int
-	EndLine   int
-	Score     float64
-	Snippet   string
-	Source    string
+	Path         string
+	StartLine    int
+	EndLine      int
+	Score        float64
+	KeywordScore float64
+	VectorScore  float64
+	Snippet      string
+	Source       string
+	Warning      string
+}
+
+// VectorConfig controls optional local semantic indexing/search.
+type VectorConfig struct {
+	Enabled    bool
+	Provider   string
+	SearchMode string
+	Model      VectorModelConfig
+	Server     VectorServerConfig
+}
+
+type VectorModelConfig struct {
+	ID         string
+	Path       string
+	PrimaryURL string
+	MirrorURL  string
+	SHA256     string
+}
+
+type VectorServerConfig struct {
+	Managed               bool
+	Binary                string
+	Host                  string
+	Port                  int
+	StartupTimeoutSeconds int
+}
+
+type VectorStatus struct {
+	Enabled          bool
+	Ready            bool
+	ModelID          string
+	ModelPath        string
+	ModelPresent     bool
+	ModelSHA256      string
+	LlamaServerFound bool
+	VectorCount      int
+	Dimension        int
+	SearchMode       string
+	LastError        string
 }
 
 // GetOptions controls line-sliced file reads for memory_get semantics.

@@ -136,7 +136,7 @@ If you use `zsh`, add the same `PATH_LINE` to `~/.zshrc`.
 
 ## Agent/CLI Integration Check
 
-After install, coding agents (for example Claude Code or Codex CLI) should be able to run:
+After install, coding agents should be able to run:
 
 ```bash
 localclaw doctor
@@ -145,7 +145,47 @@ localclaw doctor
 Notes:
 
 - `doctor` performs runtime/path checks without sending a model prompt.
-- `doctor --deep` also runs an LLM prompt probe and requires your configured provider CLI to be installed/configured.
+- Configure MCP by asking the target harness to set itself up:
+
+```bash
+localclaw setup claude
+localclaw setup codex
+localclaw setup opencode
+```
+
+Use `--dry-run` to inspect the setup prompt without invoking the harness.
+
+## Optional Local Vector Memory
+
+Vector memory requires `llama-server` from llama.cpp and the EmbeddingGemma GGUF model.
+
+Install the model explicitly after `localclaw` is installed:
+
+```bash
+localclaw memory model install
+localclaw memory model status
+localclaw memory index --force
+```
+
+The default installer tries Hugging Face first. If Hugging Face is unavailable on the machine or network, use the GitHub mirror:
+
+```bash
+localclaw memory model install --source mirror
+```
+
+Mirror repository:
+
+```text
+https://github.com/dgriffin831/embeddinggemma-gguf-mirror
+```
+
+The expected SHA-256 is:
+
+```text
+b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63
+```
+
+LocalClaw verifies the SHA-256 before moving the model into place.
 
 If an agent still cannot find `localclaw`:
 
@@ -157,3 +197,5 @@ If an agent still cannot find `localclaw`:
    - Windows: `Get-Command localclaw`
    - macOS/Linux: `command -v localclaw`
 4. If `localclaw doctor` fails with `config error: parse config: json: unknown field ...`, you likely have an older `~/.localclaw/localclaw.json`. Update/remove that file or run with `-config /path/to/current-config.json`.
+
+For a full migration from older LocalClaw versions with TUI, cron, channels, sessions, or LocalClaw skills enabled, see [`UPGRADE.md`](../UPGRADE.md).

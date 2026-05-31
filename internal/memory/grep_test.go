@@ -68,51 +68,27 @@ func TestGrepRejectsOutOfScopePathGlob(t *testing.T) {
 func TestGrepHonorsConfiguredSources(t *testing.T) {
 	ctx := context.Background()
 	workspace := t.TempDir()
-	sessionsRoot := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "memory.sqlite")
 
 	mustWriteMemoryFile(t, filepath.Join(workspace, "MEMORY.md"), "only-memory-token")
-	mustWriteMemoryFile(t, filepath.Join(sessionsRoot, "session.jsonl"), `{"role":"user","content":"only-session-token"}`)
 
-	memoryOnly := NewSQLiteIndexManager(IndexManagerConfig{
+	disabled := NewSQLiteIndexManager(IndexManagerConfig{
 		DBPath:        dbPath,
 		WorkspaceRoot: workspace,
-		SessionsRoot:  sessionsRoot,
-		Sources:       []string{"memory"},
+		Sources:       []string{"disabled"},
 		ChunkTokens:   64,
 		ChunkOverlap:  0,
 	})
-	if err := memoryOnly.Open(ctx); err != nil {
+	if err := disabled.Open(ctx); err != nil {
 		t.Fatalf("open manager: %v", err)
 	}
-	defer memoryOnly.Close()
+	defer disabled.Close()
 
-	out, err := memoryOnly.Grep(ctx, "only-session-token", GrepOptions{Source: "all"})
+	out, err := disabled.Grep(ctx, "only-memory-token", GrepOptions{Source: "all"})
 	if err != nil {
-		t.Fatalf("grep sessions from memory-only manager: %v", err)
+		t.Fatalf("grep disabled source manager: %v", err)
 	}
 	if out.Count != 0 {
-		t.Fatalf("expected sessions to be excluded when memory is the only configured source, got %d matches", out.Count)
-	}
-
-	sessionsOnly := NewSQLiteIndexManager(IndexManagerConfig{
-		DBPath:        filepath.Join(t.TempDir(), "memory.sqlite"),
-		WorkspaceRoot: workspace,
-		SessionsRoot:  sessionsRoot,
-		Sources:       []string{"sessions"},
-		ChunkTokens:   64,
-		ChunkOverlap:  0,
-	})
-	if err := sessionsOnly.Open(ctx); err != nil {
-		t.Fatalf("open manager: %v", err)
-	}
-	defer sessionsOnly.Close()
-
-	out, err = sessionsOnly.Grep(ctx, "only-memory-token", GrepOptions{Source: "all"})
-	if err != nil {
-		t.Fatalf("grep memory from sessions-only manager: %v", err)
-	}
-	if out.Count != 0 {
-		t.Fatalf("expected memory files to be excluded when sessions is the only configured source, got %d matches", out.Count)
+		t.Fatalf("expected memory files to be excluded when memory source is disabled, got %d matches", out.Count)
 	}
 }

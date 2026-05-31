@@ -54,7 +54,7 @@ func TestRunMCPCommandServeRequiresRuntimeApp(t *testing.T) {
 	}
 }
 
-func TestRunMCPCommandServeStartsBackupLoops(t *testing.T) {
+func TestMCPServerExposesMemoryWorkspaceToolSurface(t *testing.T) {
 	home := t.TempDir()
 	if err := os.Setenv("HOME", home); err != nil {
 		t.Fatalf("set HOME: %v", err)
@@ -65,32 +65,8 @@ func TestRunMCPCommandServeStartsBackupLoops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtime.New error: %v", err)
 	}
-
-	originalStarter := startBackgroundBackupLoops
-	defer func() { startBackgroundBackupLoops = originalStarter }()
-	startCalls := 0
-	startBackgroundBackupLoops = func(ctx context.Context, cfg config.Config, app *runtime.App) {
-		startCalls++
-	}
-
-	if err := RunMCPCommand(context.Background(), cfg, app, []string{"serve"}, bytes.NewBuffer(nil), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
-		t.Fatalf("RunMCPCommand serve error: %v", err)
-	}
-	if startCalls != 1 {
-		t.Fatalf("expected backup loops to start once for mcp serve, got %d", startCalls)
-	}
-}
-
-func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
-	home := t.TempDir()
-	if err := os.Setenv("HOME", home); err != nil {
-		t.Fatalf("set HOME: %v", err)
-	}
-	cfg := config.Default()
-	cfg.App.Root = filepath.Join(t.TempDir(), "state")
-	app, err := runtime.New(cfg)
-	if err != nil {
-		t.Fatalf("runtime.New error: %v", err)
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("app.Run error: %v", err)
 	}
 	server, err := newMCPServer(app)
 	if err != nil {
@@ -119,19 +95,12 @@ func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 	}
 	sort.Strings(names)
 	want := []string{
-		"localclaw_cron_add",
-		"localclaw_cron_list",
-		"localclaw_cron_remove",
-		"localclaw_cron_run",
+		"localclaw_memory_create",
 		"localclaw_memory_get",
 		"localclaw_memory_grep",
 		"localclaw_memory_search",
-		"localclaw_session_status",
-		"localclaw_sessions_delete",
-		"localclaw_sessions_history",
-		"localclaw_sessions_list",
-		"localclaw_signal_send",
-		"localclaw_slack_send",
+		"localclaw_workspace_list",
+		"localclaw_workspace_read",
 		"localclaw_workspace_status",
 	}
 	if len(names) != len(want) {
@@ -144,17 +113,19 @@ func TestMCPServerExposesFullV1ToolSurface(t *testing.T) {
 	}
 }
 
-func TestMCPServerDispatchesPhase4ToolsByName(t *testing.T) {
+func TestMCPServerDispatchesMemoryWorkspaceToolsByName(t *testing.T) {
 	home := t.TempDir()
 	if err := os.Setenv("HOME", home); err != nil {
 		t.Fatalf("set HOME: %v", err)
 	}
 	cfg := config.Default()
 	cfg.App.Root = filepath.Join(t.TempDir(), "state")
-	cfg.Cron.Enabled = true
 	app, err := runtime.New(cfg)
 	if err != nil {
 		t.Fatalf("runtime.New error: %v", err)
+	}
+	if err := app.Run(context.Background()); err != nil {
+		t.Fatalf("app.Run error: %v", err)
 	}
 	server, err := newMCPServer(app)
 	if err != nil {
@@ -166,8 +137,9 @@ func TestMCPServerDispatchesPhase4ToolsByName(t *testing.T) {
 		args string
 	}{
 		{name: "localclaw_workspace_status", args: "{}"},
-		{name: "localclaw_cron_list", args: "{}"},
-		{name: "localclaw_sessions_list", args: "{}"},
+		{name: "localclaw_workspace_list", args: "{}"},
+		{name: "localclaw_workspace_read", args: "{\"path\":\"SOUL.md\"}"},
+		{name: "localclaw_memory_create", args: "{\"title\":\"MCP smoke\",\"content\":\"mcp smoke searchable content\"}"},
 		{name: "localclaw_memory_search", args: "{\"query\":\"mcp smoke\"}"},
 	}
 	for _, tc := range cases {
@@ -204,7 +176,7 @@ func TestMCPServerAppliesToolPolicyDenials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtime.New error: %v", err)
 	}
-	policy, err := mcpTools.NewPolicy(nil, []string{"localclaw_cron_list"})
+	policy, err := mcpTools.NewPolicy(nil, []string{"localclaw_memory_search"})
 	if err != nil {
 		t.Fatalf("NewPolicy error: %v", err)
 	}
@@ -213,7 +185,7 @@ func TestMCPServerAppliesToolPolicyDenials(t *testing.T) {
 		t.Fatalf("newMCPServerWithPolicy error: %v", err)
 	}
 
-	input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"localclaw_cron_list\",\"arguments\":{}}}\n")
+	input := bytes.NewBufferString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"localclaw_memory_search\",\"arguments\":{\"query\":\"needle\"}}}\n")
 	var out bytes.Buffer
 	if err := server.Serve(context.Background(), input, &out); err != nil {
 		t.Fatalf("Serve error: %v", err)

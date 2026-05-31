@@ -3,18 +3,23 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/dgriffin831/localclaw/internal/config"
+	"github.com/dgriffin831/localclaw/internal/memory"
 	"github.com/dgriffin831/localclaw/internal/runtime"
 )
 
 func TestRunMemoryStatusJSONDeepIndexIncludesDiagnostics(t *testing.T) {
 	ctx := context.Background()
-	cfg, app, workspace := newTestApp(t, []string{"memory", "sessions"})
+	cfg, app, workspace := newTestApp(t, []string{"memory"})
 
 	if err := os.MkdirAll(filepath.Join(workspace, "memory"), 0o700); err != nil {
 		t.Fatalf("mkdir memory dir: %v", err)
@@ -43,8 +48,8 @@ func TestRunMemoryStatusJSONDeepIndexIncludesDiagnostics(t *testing.T) {
 	if !payload.Scan.Deep {
 		t.Fatalf("expected deep scan true")
 	}
-	if len(payload.Scan.Issues) == 0 {
-		t.Fatalf("expected source scan issues for sessions source")
+	if len(payload.Scan.Issues) != 0 {
+		t.Fatalf("expected no source scan issues, got %v", payload.Scan.Issues)
 	}
 }
 
@@ -249,7 +254,7 @@ func TestRunMemoryGrepJSONReturnsMatches(t *testing.T) {
 	}
 }
 
-func TestRunMemoryStatusJSONOmitsEmbeddingAndVectorFields(t *testing.T) {
+func TestRunMemoryStatusJSONIncludesVectorFields(t *testing.T) {
 	ctx := context.Background()
 	cfg, app, _ := newTestApp(t, []string{"memory"})
 
@@ -263,27 +268,79 @@ func TestRunMemoryStatusJSONOmitsEmbeddingAndVectorFields(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatalf("decode status json: %v\noutput=%s", err, stdout.String())
 	}
-	if _, ok := payload["provider"]; ok {
-		t.Fatalf("did not expect provider field in v2 status output")
-	}
-	if _, ok := payload["fallback"]; ok {
-		t.Fatalf("did not expect fallback field in v2 status output")
-	}
 	features, ok := payload["features"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("expected features object")
 	}
-	if _, ok := features["vectorEnabled"]; ok {
-		t.Fatalf("did not expect features.vectorEnabled in v2 status output")
+	if features["vectorEnabled"] != true {
+		t.Fatalf("expected features.vectorEnabled=true, got %v", features["vectorEnabled"])
 	}
-	if _, ok := features["embeddingCacheEnabled"]; ok {
-		t.Fatalf("did not expect features.embeddingCacheEnabled in v2 status output")
+	vector, ok := payload["vector"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected vector object")
+	}
+	if vector["searchMode"] != "hybrid" {
+		t.Fatalf("expected vector.searchMode=hybrid, got %v", vector["searchMode"])
+	}
+}
+
+func TestRunMemoryModelStatusJSON(t *testing.T) {
+	ctx := context.Background()
+	cfg, app, _ := newTestApp(t, []string{"memory"})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := RunMemoryCommand(ctx, cfg, app, []string{"model", "status", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run memory model status: %v (stderr=%q)", err, stderr.String())
+	}
+
+	var payload modelStatusOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode model status json: %v\noutput=%s", err, stdout.String())
+	}
+	if payload.Model.ExpectedSHA256 == "" {
+		t.Fatalf("expected sha in model status")
+	}
+	if payload.Model.MirrorURL == "" {
+		t.Fatalf("expected mirror url in model status")
+	}
+}
+
+func TestRunMemoryModelInstallMirrorWithFakeServer(t *testing.T) {
+	ctx := context.Background()
+	body := []byte("fake model")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	cfg, app, _ := newTestAppWithConfig(t, []string{"memory"}, func(cfg *config.Config) {
+		cfg.Agents.Defaults.Memory.Vector.Model.Path = filepath.Join(t.TempDir(), "model.gguf")
+		cfg.Agents.Defaults.Memory.Vector.Model.SHA256 = fmt.Sprintf("%x", sha256Bytes(body))
+		cfg.Agents.Defaults.Memory.Vector.Model.MirrorURL = server.URL + "/model.gguf"
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := RunMemoryCommand(ctx, cfg, app, []string{"model", "install", "--source", "mirror", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run memory model install: %v (stderr=%q)", err, stderr.String())
+	}
+	var payload modelInstallOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode model install json: %v\noutput=%s", err, stdout.String())
+	}
+	if !payload.Result.Installed || payload.Result.Source != memory.ModelSourceMirror {
+		t.Fatalf("unexpected install result: %+v", payload.Result)
 	}
 }
 
 func newTestApp(t *testing.T, sources []string) (config.Config, *runtime.App, string) {
 	t.Helper()
 	return newTestAppWithConfig(t, sources, nil)
+}
+
+func sha256Bytes(data []byte) [32]byte {
+	return sha256.Sum256(data)
 }
 
 func newTestAppWithConfig(t *testing.T, sources []string, mutate func(*config.Config)) (config.Config, *runtime.App, string) {
@@ -294,8 +351,6 @@ func newTestAppWithConfig(t *testing.T, sources []string, mutate func(*config.Co
 	cfg.Agents.Defaults.Workspace = "."
 	cfg.Agents.Defaults.Memory.Sources = sources
 	cfg.Agents.Defaults.Memory.Store.Path = filepath.Join("memory", "{agentId}.sqlite")
-	cfg.Heartbeat.Enabled = false
-	cfg.Cron.Enabled = false
 	if mutate != nil {
 		mutate(&cfg)
 	}

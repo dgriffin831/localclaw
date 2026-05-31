@@ -19,6 +19,7 @@ var errMissingMCPSubcommand = errors.New("mcp subcommand is required")
 
 // RunMCPCommand executes localclaw mcp command modes.
 func RunMCPCommand(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	_ = cfg
 	if stdin == nil {
 		stdin = os.Stdin
 	}
@@ -43,7 +44,6 @@ func RunMCPCommand(ctx context.Context, cfg config.Config, app *runtime.App, arg
 		if err := app.Run(ctx); err != nil {
 			return fmt.Errorf("runtime init: %w", err)
 		}
-		startBackgroundBackupLoops(ctx, cfg, app)
 		server, err := newMCPServer(app)
 		if err != nil {
 			return err
@@ -64,30 +64,21 @@ func newMCPServer(app *runtime.App) (*mcp.Server, error) {
 
 func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Server, error) {
 	memoryBackend := mcpTools.RuntimeMemoryBackend{App: app}
+	createTool := mcpTools.NewMemoryCreateTool(memoryBackend)
 	searchTool := mcpTools.NewMemorySearchTool(memoryBackend)
 	getTool := mcpTools.NewMemoryGetTool(memoryBackend)
 	grepTool := mcpTools.NewMemoryGrepTool(memoryBackend)
 
 	workspaceBackend := mcpTools.RuntimeWorkspaceBackend{App: app}
 	workspaceStatusTool := mcpTools.NewWorkspaceStatusTool(workspaceBackend)
-
-	cronBackend := mcpTools.RuntimeCronBackend{App: app}
-	cronListTool := mcpTools.NewCronListTool(cronBackend)
-	cronAddTool := mcpTools.NewCronAddTool(cronBackend)
-	cronRemoveTool := mcpTools.NewCronRemoveTool(cronBackend)
-	cronRunTool := mcpTools.NewCronRunTool(cronBackend)
-
-	sessionsBackend := mcpTools.RuntimeSessionsBackend{App: app}
-	sessionsListTool := mcpTools.NewSessionsListTool(sessionsBackend)
-	sessionsHistoryTool := mcpTools.NewSessionsHistoryTool(sessionsBackend)
-	sessionsDeleteTool := mcpTools.NewSessionsDeleteTool(sessionsBackend)
-	sessionStatusTool := mcpTools.NewSessionStatusTool(sessionsBackend)
-
-	channelsBackend := mcpTools.RuntimeChannelsBackend{App: app}
-	slackSendTool := mcpTools.NewSlackSendTool(channelsBackend)
-	signalSendTool := mcpTools.NewSignalSendTool(channelsBackend)
+	workspaceListTool := mcpTools.NewWorkspaceListTool(workspaceBackend)
+	workspaceReadTool := mcpTools.NewWorkspaceReadTool(workspaceBackend)
 
 	registrations := []mcp.ToolRegistration{
+		{
+			Definition: mcpTools.MemoryCreateDefinition(),
+			Handler:    createTool.Call,
+		},
 		{
 			Definition: mcpTools.MemorySearchDefinition(),
 			Handler:    searchTool.Call,
@@ -105,48 +96,16 @@ func newMCPServerWithPolicy(app *runtime.App, policy mcpTools.Policy) (*mcp.Serv
 			Handler:    workspaceStatusTool.Call,
 		},
 		{
-			Definition: mcpTools.CronListDefinition(),
-			Handler:    cronListTool.Call,
+			Definition: mcpTools.WorkspaceListDefinition(),
+			Handler:    workspaceListTool.Call,
 		},
 		{
-			Definition: mcpTools.CronAddDefinition(),
-			Handler:    cronAddTool.Call,
-		},
-		{
-			Definition: mcpTools.CronRemoveDefinition(),
-			Handler:    cronRemoveTool.Call,
-		},
-		{
-			Definition: mcpTools.CronRunDefinition(),
-			Handler:    cronRunTool.Call,
-		},
-		{
-			Definition: mcpTools.SessionsListDefinition(),
-			Handler:    sessionsListTool.Call,
-		},
-		{
-			Definition: mcpTools.SessionsHistoryDefinition(),
-			Handler:    sessionsHistoryTool.Call,
-		},
-		{
-			Definition: mcpTools.SessionsDeleteDefinition(),
-			Handler:    sessionsDeleteTool.Call,
-		},
-		{
-			Definition: mcpTools.SessionStatusDefinition(),
-			Handler:    sessionStatusTool.Call,
-		},
-		{
-			Definition: mcpTools.SlackSendDefinition(),
-			Handler:    slackSendTool.Call,
-		},
-		{
-			Definition: mcpTools.SignalSendDefinition(),
-			Handler:    signalSendTool.Call,
+			Definition: mcpTools.WorkspaceReadDefinition(),
+			Handler:    workspaceReadTool.Call,
 		},
 	}
 	tools := applyMCPToolPolicy(registrations, policy)
-	return mcp.NewServer(mcp.Settings{ServerName: "localclaw", ServerVersion: "phase4", Tools: tools}), nil
+	return mcp.NewServer(mcp.Settings{ServerName: "localclaw", ServerVersion: "memory-workspace", Tools: tools}), nil
 }
 
 func applyMCPToolPolicy(registrations []mcp.ToolRegistration, policy mcpTools.Policy) []mcp.ToolRegistration {

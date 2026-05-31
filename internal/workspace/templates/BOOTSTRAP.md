@@ -54,11 +54,7 @@ Create memory files if missing:
 - `MEMORY.md` for durable long-term context
 - `memory/YYYY-MM-DD.md` for daily notes
 
-## 7. Configure Heartbeat Tasks (Optional)
-
-If periodic checks are used, add a short actionable checklist to `HEARTBEAT.md`.
-
-## 8. Complete Bootstrap
+## 7. Complete Bootstrap
 
 After setup is complete:
 

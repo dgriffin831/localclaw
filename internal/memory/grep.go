@@ -125,25 +125,6 @@ func (m *SQLiteIndexManager) discoverGrepFiles(source string) ([]grepCandidateFi
 		}
 	}
 
-	if (source == "all" || source == "sessions") && m.sourceEnabled("sessions") {
-		files, err := DiscoverSessionFiles(m.cfg.SessionsRoot)
-		if err != nil {
-			return nil, err
-		}
-		for _, file := range files {
-			key := filepath.Clean(file.AbsolutePath)
-			if _, ok := added[key]; ok {
-				continue
-			}
-			added[key] = struct{}{}
-			candidates = append(candidates, grepCandidateFile{
-				File:        file,
-				Source:      "sessions",
-				DisplayPath: m.grepDisplayPath(file, "sessions"),
-			})
-		}
-	}
-
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].DisplayPath != candidates[j].DisplayPath {
 			return candidates[i].DisplayPath < candidates[j].DisplayPath
@@ -186,9 +167,9 @@ func normalizeGrepOptions(opts GrepOptions) (GrepOptions, error) {
 		normalized.Source = "all"
 	}
 	switch normalized.Source {
-	case "memory", "sessions", "all":
+	case "memory", "all":
 	default:
-		return GrepOptions{}, fmt.Errorf("source must be memory, sessions, or all")
+		return GrepOptions{}, fmt.Errorf("source must be memory or all")
 	}
 
 	cleanedGlobs := make([]string, 0, len(normalized.PathGlob))
@@ -237,11 +218,6 @@ func (m *SQLiteIndexManager) grepDisplayPath(file MemoryFile, source string) str
 	if source == "memory" {
 		if rel, err := SafeRelativePath(m.cfg.WorkspaceRoot, absPath); err == nil {
 			return rel
-		}
-	}
-	if source == "sessions" {
-		if rel, err := SafeRelativePath(m.cfg.SessionsRoot, absPath); err == nil {
-			return filepath.ToSlash(filepath.Join("sessions", rel))
 		}
 	}
 	if file.RelativePath != "" {

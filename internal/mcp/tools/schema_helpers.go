@@ -16,6 +16,12 @@ func schemaBooleanField(description string, examples ...interface{}) map[string]
 	return schemaField("boolean", description, examples...)
 }
 
+func schemaStringArrayField(description string, examples ...interface{}) map[string]interface{} {
+	field := schemaField("array", description, examples...)
+	field["items"] = map[string]interface{}{"type": "string"}
+	return field
+}
+
 func schemaEnumStringField(description string, allowed []string, examples ...interface{}) map[string]interface{} {
 	field := schemaField("string", description, examples...)
 	field["enum"] = allowed

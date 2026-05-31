@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const schemaVersion = "2"
+const schemaVersion = "3"
 
 var coreSchemaStatements = []string{
 	`PRAGMA foreign_keys = ON;`,
@@ -37,6 +37,18 @@ var coreSchemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_files_hash ON files(hash);`,
 	`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`,
 	`CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(hash);`,
+	`CREATE TABLE IF NOT EXISTS chunk_vectors (
+		chunk_id INTEGER NOT NULL,
+		chunk_hash TEXT NOT NULL,
+		model_id TEXT NOT NULL,
+		dimension INTEGER NOT NULL,
+		vector BLOB NOT NULL,
+		updated_at INTEGER NOT NULL,
+		PRIMARY KEY(chunk_id, model_id),
+		FOREIGN KEY(chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_chunk_vectors_model ON chunk_vectors(model_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_chunk_vectors_hash ON chunk_vectors(chunk_hash, model_id);`,
 	`INSERT INTO meta(key, value) VALUES('schema_version', ?)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value;`,
 }

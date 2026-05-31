@@ -13,7 +13,7 @@
 
 Add or update a spec for:
 - non-trivial behavior changes
-- new user-visible CLI/TUI workflows
+- new user-visible CLI or MCP workflows
 - runtime boundary changes
 - config/policy contract changes
 

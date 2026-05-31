@@ -28,6 +28,7 @@ type statusOutput struct {
 	Dirty     bool            `json:"dirty"`
 	Index     indexSnapshot   `json:"index"`
 	Features  featureSnapshot `json:"features"`
+	Vector    vectorSnapshot  `json:"vector"`
 	Sources   sourceSnapshot  `json:"sources"`
 	Scan      scanSnapshot    `json:"scan"`
 	Sync      *syncSnapshot   `json:"sync,omitempty"`
@@ -48,8 +49,10 @@ type searchOutput struct {
 	Command     string                `json:"command"`
 	AgentID     string                `json:"agentId"`
 	Query       string                `json:"query"`
+	Mode        string                `json:"mode"`
 	MaxResults  int                   `json:"maxResults"`
 	MinScore    float64               `json:"minScore"`
+	Warning     string                `json:"warning,omitempty"`
 	ResultCount int                   `json:"resultCount"`
 	Results     []memory.SearchResult `json:"results"`
 }
@@ -75,13 +78,26 @@ type indexSnapshot struct {
 }
 
 type featureSnapshot struct {
-	FTSEnabled bool `json:"ftsEnabled"`
+	FTSEnabled    bool `json:"ftsEnabled"`
+	VectorEnabled bool `json:"vectorEnabled"`
+}
+
+type vectorSnapshot struct {
+	Ready            bool   `json:"ready"`
+	ModelID          string `json:"modelId"`
+	ModelPath        string `json:"modelPath"`
+	ModelPresent     bool   `json:"modelPresent"`
+	ModelSHA256      string `json:"modelSha256,omitempty"`
+	LlamaServerFound bool   `json:"llamaServerFound"`
+	VectorCount      int    `json:"vectorCount"`
+	Dimension        int    `json:"dimension"`
+	SearchMode       string `json:"searchMode"`
+	LastError        string `json:"lastError,omitempty"`
 }
 
 type sourceSnapshot struct {
 	Configured []string `json:"configured"`
 	Memory     int      `json:"memory"`
-	Sessions   int      `json:"sessions"`
 	Extra      int      `json:"extra"`
 }
 
@@ -92,11 +108,13 @@ type scanSnapshot struct {
 }
 
 type syncSnapshot struct {
-	ScannedFiles  int `json:"scannedFiles"`
-	IndexedFiles  int `json:"indexedFiles"`
-	SkippedFiles  int `json:"skippedFiles"`
-	RemovedFiles  int `json:"removedFiles"`
-	IndexedChunks int `json:"indexedChunks"`
+	ScannedFiles   int    `json:"scannedFiles"`
+	IndexedFiles   int    `json:"indexedFiles"`
+	SkippedFiles   int    `json:"skippedFiles"`
+	RemovedFiles   int    `json:"removedFiles"`
+	IndexedChunks  int    `json:"indexedChunks"`
+	IndexedVectors int    `json:"indexedVectors"`
+	VectorError    string `json:"vectorError,omitempty"`
 }
 
 // RunMemoryCommand executes localclaw memory status/index/search/grep commands.
@@ -120,8 +138,10 @@ func RunMemoryCommand(ctx context.Context, cfg config.Config, app *runtime.App, 
 		return runMemorySearch(ctx, cfg, app, args[1:], stdout, stderr)
 	case "grep":
 		return runMemoryGrep(ctx, cfg, app, args[1:], stdout, stderr)
+	case "model":
+		return runMemoryModel(ctx, cfg, app, args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("unknown memory subcommand %q (supported: status, index, search, grep)", args[0])
+		return fmt.Errorf("unknown memory subcommand %q (supported: status, index, search, grep, model)", args[0])
 	}
 }
 
@@ -172,12 +192,13 @@ func runMemoryStatus(ctx context.Context, cfg config.Config, app *runtime.App, a
 			ChunkCount: status.ChunkCount,
 		},
 		Features: featureSnapshot{
-			FTSEnabled: status.FTSEnabled,
+			FTSEnabled:    status.FTSEnabled,
+			VectorEnabled: status.Vector.Enabled,
 		},
+		Vector: vectorSnapshotFromStatus(status.Vector),
 		Sources: sourceSnapshot{
 			Configured: append([]string{}, resolved.sources...),
 			Memory:     scan.MemoryFiles,
-			Sessions:   scan.SessionFiles,
 			Extra:      scan.ExtraFiles,
 		},
 		Scan: scanSnapshot{
@@ -188,11 +209,13 @@ func runMemoryStatus(ctx context.Context, cfg config.Config, app *runtime.App, a
 	}
 	if didSync {
 		out.Sync = &syncSnapshot{
-			ScannedFiles:  syncRes.ScannedFiles,
-			IndexedFiles:  syncRes.IndexedFiles,
-			SkippedFiles:  syncRes.SkippedFiles,
-			RemovedFiles:  syncRes.RemovedFiles,
-			IndexedChunks: syncRes.IndexedChunks,
+			ScannedFiles:   syncRes.ScannedFiles,
+			IndexedFiles:   syncRes.IndexedFiles,
+			SkippedFiles:   syncRes.SkippedFiles,
+			RemovedFiles:   syncRes.RemovedFiles,
+			IndexedChunks:  syncRes.IndexedChunks,
+			IndexedVectors: syncRes.IndexedVectors,
+			VectorError:    syncRes.VectorError,
 		}
 	}
 	out.Dirty = scanDirty(out, didSync)
@@ -206,7 +229,11 @@ func runMemoryStatus(ctx context.Context, cfg config.Config, app *runtime.App, a
 	fmt.Fprintf(stdout, "store: %s\n", out.StorePath)
 	fmt.Fprintf(stdout, "db: %s\n", out.DBPath)
 	fmt.Fprintf(stdout, "index: files=%d chunks=%d fts=%t\n", out.Index.FileCount, out.Index.ChunkCount, out.Features.FTSEnabled)
-	fmt.Fprintf(stdout, "sources: memory=%d sessions=%d extra=%d\n", out.Sources.Memory, out.Sources.Sessions, out.Sources.Extra)
+	fmt.Fprintf(stdout, "vector: enabled=%t ready=%t vectors=%d dimension=%d mode=%s\n", out.Features.VectorEnabled, out.Vector.Ready, out.Vector.VectorCount, out.Vector.Dimension, out.Vector.SearchMode)
+	if out.Vector.LastError != "" {
+		fmt.Fprintf(stdout, "vector warning: %s\n", out.Vector.LastError)
+	}
+	fmt.Fprintf(stdout, "sources: memory=%d extra=%d\n", out.Sources.Memory, out.Sources.Extra)
 	fmt.Fprintf(stdout, "dirty: %t\n", out.Dirty)
 	if out.Sync != nil {
 		fmt.Fprintf(stdout, "sync: scanned=%d indexed=%d skipped=%d removed=%d chunks=%d\n", out.Sync.ScannedFiles, out.Sync.IndexedFiles, out.Sync.SkippedFiles, out.Sync.RemovedFiles, out.Sync.IndexedChunks)
@@ -260,11 +287,13 @@ func runMemoryIndex(ctx context.Context, cfg config.Config, app *runtime.App, ar
 		StorePath: resolved.storePath,
 		DBPath:    status.DBPath,
 		Sync: syncSnapshot{
-			ScannedFiles:  syncRes.ScannedFiles,
-			IndexedFiles:  syncRes.IndexedFiles,
-			SkippedFiles:  syncRes.SkippedFiles,
-			RemovedFiles:  syncRes.RemovedFiles,
-			IndexedChunks: syncRes.IndexedChunks,
+			ScannedFiles:   syncRes.ScannedFiles,
+			IndexedFiles:   syncRes.IndexedFiles,
+			SkippedFiles:   syncRes.SkippedFiles,
+			RemovedFiles:   syncRes.RemovedFiles,
+			IndexedChunks:  syncRes.IndexedChunks,
+			IndexedVectors: syncRes.IndexedVectors,
+			VectorError:    syncRes.VectorError,
 		},
 		Index: indexSnapshot{FileCount: status.FileCount, ChunkCount: status.ChunkCount},
 	}
@@ -275,7 +304,10 @@ func runMemoryIndex(ctx context.Context, cfg config.Config, app *runtime.App, ar
 	fmt.Fprintf(stdout, "agent: %s\n", out.AgentID)
 	fmt.Fprintf(stdout, "workspace: %s\n", out.Workspace)
 	fmt.Fprintf(stdout, "db: %s\n", out.DBPath)
-	fmt.Fprintf(stdout, "sync: scanned=%d indexed=%d skipped=%d removed=%d chunks=%d\n", out.Sync.ScannedFiles, out.Sync.IndexedFiles, out.Sync.SkippedFiles, out.Sync.RemovedFiles, out.Sync.IndexedChunks)
+	fmt.Fprintf(stdout, "sync: scanned=%d indexed=%d skipped=%d removed=%d chunks=%d vectors=%d\n", out.Sync.ScannedFiles, out.Sync.IndexedFiles, out.Sync.SkippedFiles, out.Sync.RemovedFiles, out.Sync.IndexedChunks, out.Sync.IndexedVectors)
+	if out.Sync.VectorError != "" {
+		fmt.Fprintf(stdout, "vector warning: %s\n", out.Sync.VectorError)
+	}
 	fmt.Fprintf(stdout, "index: files=%d chunks=%d\n", out.Index.FileCount, out.Index.ChunkCount)
 	return nil
 }
@@ -286,6 +318,7 @@ func runMemorySearch(ctx context.Context, cfg config.Config, app *runtime.App, a
 	agentID := fs.String("agent", "", "agent id")
 	maxResults := fs.Int("max-results", 0, "max results")
 	minScore := fs.Float64("min-score", 0, "minimum score")
+	mode := fs.String("mode", "", "search mode: hybrid, keyword, or vector")
 	asJSON := fs.Bool("json", false, "emit JSON output")
 	flagArgs, query, err := splitSearchArgs(args)
 	if err != nil {
@@ -304,7 +337,7 @@ func runMemorySearch(ctx context.Context, cfg config.Config, app *runtime.App, a
 	}
 	defer manager.Close()
 
-	searchOpts := memory.SearchOptions{MaxResults: *maxResults, MinScore: *minScore}
+	searchOpts := memory.SearchOptions{MaxResults: *maxResults, MinScore: *minScore, Mode: *mode}
 	if searchOpts.MaxResults <= 0 {
 		searchOpts.MaxResults = resolved.queryMaxResults
 	}
@@ -318,10 +351,14 @@ func runMemorySearch(ctx context.Context, cfg config.Config, app *runtime.App, a
 		Command:     "memory search",
 		AgentID:     resolved.agentID,
 		Query:       query,
+		Mode:        normalizeSearchModeForOutput(searchOpts.Mode, resolved.vectorSearchMode),
 		MaxResults:  searchOpts.MaxResults,
 		MinScore:    searchOpts.MinScore,
 		ResultCount: len(results),
 		Results:     results,
+	}
+	if len(results) > 0 {
+		out.Warning = results[0].Warning
 	}
 	if *asJSON {
 		return writeJSON(stdout, out)
@@ -330,6 +367,9 @@ func runMemorySearch(ctx context.Context, cfg config.Config, app *runtime.App, a
 	if len(results) == 0 {
 		fmt.Fprintln(stdout, "no memory results")
 		return nil
+	}
+	if out.Warning != "" {
+		fmt.Fprintf(stdout, "warning: %s\n", out.Warning)
 	}
 	for i, res := range results {
 		fmt.Fprintf(stdout, "%d. %s:%d score=%.4f source=%s\n", i+1, res.Path, res.StartLine, res.Score, res.Source)
@@ -347,7 +387,7 @@ func runMemoryGrep(ctx context.Context, cfg config.Config, app *runtime.App, arg
 	word := fs.Bool("word", false, "match whole words only (literal mode)")
 	maxMatches := fs.Int("max-matches", 0, "max matches")
 	contextLines := fs.Int("context-lines", 0, "context lines before/after each match")
-	source := fs.String("source", "", "source filter: memory, sessions, all")
+	source := fs.String("source", "", "source filter: memory or all")
 	asJSON := fs.Bool("json", false, "emit JSON output")
 	var pathGlob stringSliceFlag
 	fs.Var(&pathGlob, "path-glob", "workspace-relative glob filter (repeatable)")
@@ -413,6 +453,103 @@ func runMemoryGrep(ctx context.Context, cfg config.Config, app *runtime.App, arg
 	return nil
 }
 
+type modelStatusOutput struct {
+	Command string             `json:"command"`
+	AgentID string             `json:"agentId"`
+	Model   memory.ModelStatus `json:"model"`
+}
+
+type modelInstallOutput struct {
+	Command string                    `json:"command"`
+	AgentID string                    `json:"agentId"`
+	Result  memory.ModelInstallResult `json:"result"`
+}
+
+func runMemoryModel(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("memory model subcommand is required")
+	}
+	switch args[0] {
+	case "status":
+		return runMemoryModelStatus(ctx, cfg, app, args[1:], stdout, stderr)
+	case "install":
+		return runMemoryModelInstall(ctx, cfg, app, args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown memory model subcommand %q (supported: status, install)", args[0])
+	}
+}
+
+func runMemoryModelStatus(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("memory model status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	agentID := fs.String("agent", "", "agent id")
+	asJSON := fs.Bool("json", false, "emit JSON output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("memory model status does not accept positional arguments")
+	}
+	resolvedAgent := runtime.ResolveAgentID(*agentID)
+	if _, err := app.ResolveWorkspacePath(resolvedAgent); err != nil {
+		return fmt.Errorf("resolve workspace: %w", err)
+	}
+	memoryCfg := runtime.ResolveMemoryConfig(cfg, resolvedAgent)
+	status := memory.VectorModelStatus(toMemoryVectorConfig(memoryCfg.Vector))
+	out := modelStatusOutput{Command: "memory model status", AgentID: resolvedAgent, Model: status}
+	if *asJSON {
+		return writeJSON(stdout, out)
+	}
+	fmt.Fprintf(stdout, "agent: %s\n", out.AgentID)
+	fmt.Fprintf(stdout, "model: %s\n", out.Model.Path)
+	fmt.Fprintf(stdout, "exists: %t\n", out.Model.Exists)
+	fmt.Fprintf(stdout, "verified: %t\n", out.Model.Verified)
+	if out.Model.SHA256 != "" {
+		fmt.Fprintf(stdout, "sha256: %s\n", out.Model.SHA256)
+	}
+	fmt.Fprintf(stdout, "expected_sha256: %s\n", out.Model.ExpectedSHA256)
+	fmt.Fprintf(stdout, "llama-server: %t\n", out.Model.LlamaServerFound)
+	fmt.Fprintf(stdout, "primary_url: %s\n", out.Model.PrimaryURL)
+	fmt.Fprintf(stdout, "mirror_url: %s\n", out.Model.MirrorURL)
+	return nil
+}
+
+func runMemoryModelInstall(ctx context.Context, cfg config.Config, app *runtime.App, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("memory model install", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	agentID := fs.String("agent", "", "agent id")
+	source := fs.String("source", memory.ModelSourceAuto, "download source: auto, huggingface, or mirror")
+	asJSON := fs.Bool("json", false, "emit JSON output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("memory model install does not accept positional arguments")
+	}
+	resolvedAgent := runtime.ResolveAgentID(*agentID)
+	if _, err := app.ResolveWorkspacePath(resolvedAgent); err != nil {
+		return fmt.Errorf("resolve workspace: %w", err)
+	}
+	memoryCfg := runtime.ResolveMemoryConfig(cfg, resolvedAgent)
+	result, err := memory.InstallVectorModel(ctx, toMemoryVectorConfig(memoryCfg.Vector), memory.ModelInstallOptions{Source: *source})
+	if err != nil {
+		return err
+	}
+	out := modelInstallOutput{Command: "memory model install", AgentID: resolvedAgent, Result: result}
+	if *asJSON {
+		return writeJSON(stdout, out)
+	}
+	fmt.Fprintf(stdout, "agent: %s\n", out.AgentID)
+	fmt.Fprintf(stdout, "installed: %t\n", out.Result.Installed)
+	fmt.Fprintf(stdout, "source: %s\n", out.Result.Source)
+	fmt.Fprintf(stdout, "url: %s\n", out.Result.URL)
+	fmt.Fprintf(stdout, "path: %s\n", out.Result.Path)
+	fmt.Fprintf(stdout, "bytes: %d\n", out.Result.Bytes)
+	fmt.Fprintf(stdout, "sha256: %s\n", out.Result.SHA256)
+	fmt.Fprintf(stdout, "llama-server: %t\n", out.Result.LlamaServerFound)
+	return nil
+}
+
 func normalizeCLIGrepOptions(opts memory.GrepOptions) memory.GrepOptions {
 	normalized := opts
 	normalized.Mode = strings.ToLower(strings.TrimSpace(normalized.Mode))
@@ -441,6 +578,59 @@ func normalizeCLIGrepOptions(opts memory.GrepOptions) memory.GrepOptions {
 	return normalized
 }
 
+func vectorSnapshotFromStatus(status memory.VectorStatus) vectorSnapshot {
+	return vectorSnapshot{
+		Ready:            status.Ready,
+		ModelID:          status.ModelID,
+		ModelPath:        status.ModelPath,
+		ModelPresent:     status.ModelPresent,
+		ModelSHA256:      status.ModelSHA256,
+		LlamaServerFound: status.LlamaServerFound,
+		VectorCount:      status.VectorCount,
+		Dimension:        status.Dimension,
+		SearchMode:       status.SearchMode,
+		LastError:        status.LastError,
+	}
+}
+
+func normalizeSearchModeForOutput(mode, fallback string) string {
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	if normalized == "" {
+		normalized = strings.ToLower(strings.TrimSpace(fallback))
+	}
+	if normalized == "" {
+		return memory.SearchModeHybrid
+	}
+	switch normalized {
+	case memory.SearchModeHybrid, memory.SearchModeKeyword, memory.SearchModeVector:
+		return normalized
+	default:
+		return memory.SearchModeHybrid
+	}
+}
+
+func toMemoryVectorConfig(cfg config.VectorConfig) memory.VectorConfig {
+	return memory.VectorConfig{
+		Enabled:    cfg.Enabled,
+		Provider:   cfg.Provider,
+		SearchMode: cfg.SearchMode,
+		Model: memory.VectorModelConfig{
+			ID:         cfg.Model.ID,
+			Path:       cfg.Model.Path,
+			PrimaryURL: cfg.Model.PrimaryURL,
+			MirrorURL:  cfg.Model.MirrorURL,
+			SHA256:     cfg.Model.SHA256,
+		},
+		Server: memory.VectorServerConfig{
+			Managed:               cfg.Server.Managed,
+			Binary:                cfg.Server.Binary,
+			Host:                  cfg.Server.Host,
+			Port:                  cfg.Server.Port,
+			StartupTimeoutSeconds: cfg.Server.StartupTimeoutSeconds,
+		},
+	}
+}
+
 func splitSearchArgs(args []string) ([]string, string, error) {
 	flagArgs := make([]string, 0, len(args))
 	queryParts := make([]string, 0, len(args))
@@ -449,6 +639,12 @@ func splitSearchArgs(args []string) ([]string, string, error) {
 		arg := args[i]
 		switch arg {
 		case "--agent", "--max-results", "--min-score":
+			if i+1 >= len(args) {
+				return nil, "", fmt.Errorf("flag %s requires a value", arg)
+			}
+			flagArgs = append(flagArgs, arg, args[i+1])
+			i++
+		case "--mode":
 			if i+1 >= len(args) {
 				return nil, "", fmt.Errorf("flag %s requires a value", arg)
 			}
@@ -511,17 +707,17 @@ func (s *stringSliceFlag) Set(value string) error {
 }
 
 type memoryCommandResolution struct {
-	agentID         string
-	sources         []string
-	workspacePath   string
-	storePath       string
-	queryMaxResults int
+	agentID          string
+	sources          []string
+	workspacePath    string
+	storePath        string
+	queryMaxResults  int
+	vectorSearchMode string
 }
 
 type sourceScanDetails struct {
 	ScannedFiles int
 	MemoryFiles  int
-	SessionFiles int
 	ExtraFiles   int
 	Issues       []string
 }
@@ -532,12 +728,6 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	if err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("resolve workspace: %w", err)
 	}
-	sessionsPath, err := app.ResolveSessionsPath(resolvedAgent)
-	if err != nil {
-		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("resolve sessions path: %w", err)
-	}
-	sessionsRoot := filepath.Dir(sessionsPath)
-
 	memoryCfg := runtime.ResolveMemoryConfig(cfg, resolvedAgent)
 	storePath, err := resolveStorePath(cfg.App.Root, memoryCfg.Store.Path, resolvedAgent)
 	if err != nil {
@@ -546,7 +736,6 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 
 	sourceSet := normalizeSources(memoryCfg.Sources)
 	allowMemorySource := sourceSet["memory"]
-	allowSessionsSource := sourceSet["sessions"]
 
 	extraPaths := append([]string{}, memoryCfg.ExtraPaths...)
 	if !allowMemorySource {
@@ -554,16 +743,14 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	}
 
 	manager := memory.NewSQLiteIndexManager(memory.IndexManagerConfig{
-		DBPath:               storePath,
-		WorkspaceRoot:        workspacePath,
-		SessionsRoot:         sessionsRoot,
-		Sources:              memoryCfg.Sources,
-		ExtraPaths:           extraPaths,
-		ChunkTokens:          memoryCfg.Chunking.Tokens,
-		ChunkOverlap:         memoryCfg.Chunking.Overlap,
-		EnableFTS:            true,
-		SessionDeltaBytes:    memoryCfg.Sync.Sessions.DeltaBytes,
-		SessionDeltaMessages: memoryCfg.Sync.Sessions.DeltaMessages,
+		DBPath:        storePath,
+		WorkspaceRoot: workspacePath,
+		Sources:       memoryCfg.Sources,
+		ExtraPaths:    extraPaths,
+		ChunkTokens:   memoryCfg.Chunking.Tokens,
+		ChunkOverlap:  memoryCfg.Chunking.Overlap,
+		EnableFTS:     true,
+		Vector:        toMemoryVectorConfig(memoryCfg.Vector),
 	})
 	if err := manager.Open(ctx); err != nil {
 		return memoryCommandResolution{}, nil, sourceScanDetails{}, fmt.Errorf("open memory index: %w", err)
@@ -586,19 +773,16 @@ func newMemoryCommandContext(ctx context.Context, cfg config.Config, app *runtim
 	}
 
 	resolution := memoryCommandResolution{
-		agentID:         resolvedAgent,
-		sources:         configuredSources,
-		workspacePath:   workspacePath,
-		storePath:       storePath,
-		queryMaxResults: memoryCfg.Query.MaxResults,
+		agentID:          resolvedAgent,
+		sources:          configuredSources,
+		workspacePath:    workspacePath,
+		storePath:        storePath,
+		queryMaxResults:  memoryCfg.Query.MaxResults,
+		vectorSearchMode: memoryCfg.Vector.SearchMode,
 	}
 	if resolution.queryMaxResults <= 0 {
 		resolution.queryMaxResults = 8
 	}
-	if !allowSessionsSource {
-		scan.SessionFiles = 0
-	}
-
 	return resolution, manager, scan, nil
 }
 
@@ -612,15 +796,10 @@ func scanSources(workspacePath string, sources []string, extraPaths []string) so
 
 	for source := range sourceSet {
 		switch source {
-		case "memory", "sessions":
+		case "memory":
 		default:
 			result.Issues = append(result.Issues, fmt.Sprintf("unsupported source %q", source))
 		}
-	}
-
-	if sourceSet["sessions"] {
-		// TODO: Implement deep session-source discovery/counting under sessionsRoot for memory status --deep and remove this placeholder issue.
-		result.Issues = append(result.Issues, "sessions source scanning is not yet available")
 	}
 
 	memoryFiles := []memory.MemoryFile{}

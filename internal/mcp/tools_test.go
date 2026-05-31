@@ -8,6 +8,7 @@ import (
 
 func TestMemoryToolsIncludeLocalclawNames(t *testing.T) {
 	defs := []string{
+		tooldefs.MemoryCreateDefinition().Name,
 		tooldefs.MemorySearchDefinition().Name,
 		tooldefs.MemoryGetDefinition().Name,
 		tooldefs.MemoryGrepDefinition().Name,
@@ -16,7 +17,7 @@ func TestMemoryToolsIncludeLocalclawNames(t *testing.T) {
 	for _, name := range defs {
 		got[name] = true
 	}
-	if !got["localclaw_memory_search"] || !got["localclaw_memory_get"] || !got["localclaw_memory_grep"] {
+	if !got["localclaw_memory_create"] || !got["localclaw_memory_search"] || !got["localclaw_memory_get"] || !got["localclaw_memory_grep"] {
 		t.Fatalf("expected localclaw memory tool names, got %v", defs)
 	}
 	if got["memory_search"] || got["memory_get"] || got["memory_grep"] {
@@ -48,5 +49,20 @@ func TestMemoryGrepToolSchemaIncludesContractFields(t *testing.T) {
 		if _, ok := props[field]; !ok {
 			t.Fatalf("missing field %q in memory_grep schema", field)
 		}
+	}
+}
+
+func TestMemorySearchToolSchemaIncludesMode(t *testing.T) {
+	def := tooldefs.MemorySearchDefinition()
+	propsRaw, ok := def.InputSchema["properties"]
+	if !ok {
+		t.Fatalf("missing properties in schema")
+	}
+	props, ok := propsRaw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("unexpected properties type %T", propsRaw)
+	}
+	if _, ok := props["mode"]; !ok {
+		t.Fatalf("missing mode field in memory_search schema")
 	}
 }

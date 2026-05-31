@@ -1,31 +1,34 @@
 package runtime
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
-	"github.com/dgriffin831/localclaw/internal/channels/signal"
-	"github.com/dgriffin831/localclaw/internal/channels/slack"
-	"github.com/dgriffin831/localclaw/internal/cron"
 	"github.com/dgriffin831/localclaw/internal/memory"
-	"github.com/dgriffin831/localclaw/internal/session"
-	"github.com/dgriffin831/localclaw/internal/skills"
 )
 
 var ErrMCPNotFound = errors.New("not found")
 
-const (
-	transcriptScanBufferBytes = 64 * 1024
-	transcriptScanMaxBytes    = 1024 * 1024
-	transcriptItemMaxChars    = 16 * 1024
-)
+var workspaceReadAllowlist = map[string]struct{}{
+	"AGENTS.md":    {},
+	"SOUL.md":      {},
+	"TOOLS.md":     {},
+	"IDENTITY.md":  {},
+	"USER.md":      {},
+	"SECURITY.md":  {},
+	"HEARTBEAT.md": {},
+	"WELCOME.md":   {},
+	"BOOTSTRAP.md": {},
+	"MEMORY.md":    {},
+	"memory.md":    {},
+}
 
 type MCPWorkspaceStatus struct {
 	AgentID       string `json:"agentId"`
@@ -33,45 +36,82 @@ type MCPWorkspaceStatus struct {
 	Exists        bool   `json:"exists"`
 }
 
-type MCPSessionsList struct {
-	Sessions []session.SessionEntry `json:"sessions"`
-	Total    int                    `json:"total"`
+type MCPWorkspaceFile struct {
+	Path  string `json:"path"`
+	Bytes int64  `json:"bytes"`
 }
 
-type MCPHistoryItem struct {
-	Role      string `json:"role,omitempty"`
+type MCPWorkspaceReadResult struct {
+	Path      string `json:"path"`
+	StartLine int    `json:"startLine"`
+	EndLine   int    `json:"endLine"`
 	Content   string `json:"content"`
-	CreatedAt string `json:"createdAt,omitempty"`
 }
 
-type MCPSessionsHistory struct {
-	Items []MCPHistoryItem `json:"items"`
-	Total int              `json:"total"`
+type MCPMemoryCreateRequest struct {
+	AgentID string
+	Title   string
+	Content string
+	Tags    []string
 }
 
-type MCPSlackSendResult struct {
-	OK        bool   `json:"ok"`
-	Channel   string `json:"channel"`
-	MessageID string `json:"message_id"`
-	ThreadID  string `json:"thread_id,omitempty"`
+type MCPMemoryCreateResult struct {
+	Path      string   `json:"path"`
+	Title     string   `json:"title"`
+	Tags      []string `json:"tags,omitempty"`
+	CreatedAt string   `json:"createdAt"`
+	Indexed   bool     `json:"indexed"`
+	SyncError string   `json:"syncError,omitempty"`
 }
 
-type MCPSignalSendResult struct {
-	OK        bool   `json:"ok"`
-	Recipient string `json:"recipient"`
-	SentAt    string `json:"sent_at"`
+func (a *App) MCPMemoryCreate(ctx context.Context, req MCPMemoryCreateRequest) (MCPMemoryCreateResult, error) {
+	resolvedAgentID := ResolveAgentID(req.AgentID)
+	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, MemoryToolCreate); !enabled {
+		return MCPMemoryCreateResult{}, errors.New(reason)
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		return MCPMemoryCreateResult{}, errors.New("title is required")
+	}
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		return MCPMemoryCreateResult{}, errors.New("content is required")
+	}
+
+	memoryCfg := ResolveMemoryConfig(a.cfg, resolvedAgentID)
+	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, memoryCfg)
+	if err != nil {
+		return MCPMemoryCreateResult{}, err
+	}
+	defer cleanup()
+
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+	tags := normalizeTags(req.Tags)
+	path, err := a.uniqueMemoryPath(resolvedAgentID, title)
+	if err != nil {
+		return MCPMemoryCreateResult{}, err
+	}
+	body := renderMemoryMarkdown(title, content, tags, createdAt)
+	writeResult, err := manager.Write(ctx, body, memory.WriteOptions{Path: path, Overwrite: true})
+	if err != nil {
+		return MCPMemoryCreateResult{}, err
+	}
+	return MCPMemoryCreateResult{
+		Path:      writeResult.Path,
+		Title:     title,
+		Tags:      tags,
+		CreatedAt: createdAt,
+		Indexed:   writeResult.Indexed,
+		SyncError: writeResult.SyncError,
+	}, nil
 }
 
-func (a *App) MCPMemorySearch(ctx context.Context, agentID, sessionID, query string, opts memory.SearchOptions) ([]memory.SearchResult, error) {
+func (a *App) MCPMemorySearch(ctx context.Context, agentID, query string, opts memory.SearchOptions) ([]memory.SearchResult, error) {
 	resolvedAgentID := ResolveAgentID(agentID)
-	resolvedSession := ResolveSession(resolvedAgentID, sessionID)
-	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, skills.ToolMemorySearch); !enabled {
+	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, MemoryToolSearch); !enabled {
 		return nil, errors.New(reason)
 	}
-	memoryCfg := a.resolveMemoryConfig(resolvedAgentID)
-	if opts.SessionKey == "" {
-		opts.SessionKey = resolvedSession.SessionKey
-	}
+	memoryCfg := ResolveMemoryConfig(a.cfg, resolvedAgentID)
 	if opts.MaxResults <= 0 {
 		opts.MaxResults = memoryCfg.Query.MaxResults
 	}
@@ -90,12 +130,12 @@ func (a *App) MCPMemorySearch(ctx context.Context, agentID, sessionID, query str
 	return manager.Search(ctx, query, opts)
 }
 
-func (a *App) MCPMemoryGet(ctx context.Context, agentID, _ string, path string, opts memory.GetOptions) (memory.GetResult, error) {
+func (a *App) MCPMemoryGet(ctx context.Context, agentID, path string, opts memory.GetOptions) (memory.GetResult, error) {
 	resolvedAgentID := ResolveAgentID(agentID)
-	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, skills.ToolMemoryGet); !enabled {
+	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, MemoryToolGet); !enabled {
 		return memory.GetResult{}, errors.New(reason)
 	}
-	memoryCfg := a.resolveMemoryConfig(resolvedAgentID)
+	memoryCfg := ResolveMemoryConfig(a.cfg, resolvedAgentID)
 
 	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, memoryCfg)
 	if err != nil {
@@ -106,13 +146,12 @@ func (a *App) MCPMemoryGet(ctx context.Context, agentID, _ string, path string, 
 	return manager.Get(ctx, path, opts)
 }
 
-func (a *App) MCPMemoryGrep(ctx context.Context, agentID, sessionID, query string, opts memory.GrepOptions) (memory.GrepResult, error) {
-	_ = sessionID
+func (a *App) MCPMemoryGrep(ctx context.Context, agentID, query string, opts memory.GrepOptions) (memory.GrepResult, error) {
 	resolvedAgentID := ResolveAgentID(agentID)
-	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, skills.ToolMemoryGrep); !enabled {
+	if enabled, reason := a.memoryToolEnabled(resolvedAgentID, MemoryToolGrep); !enabled {
 		return memory.GrepResult{}, errors.New(reason)
 	}
-	memoryCfg := a.resolveMemoryConfig(resolvedAgentID)
+	memoryCfg := ResolveMemoryConfig(a.cfg, resolvedAgentID)
 
 	manager, cleanup, err := a.newMemoryToolManager(ctx, resolvedAgentID, memoryCfg)
 	if err != nil {
@@ -124,6 +163,7 @@ func (a *App) MCPMemoryGrep(ctx context.Context, agentID, sessionID, query strin
 }
 
 func (a *App) MCPWorkspaceStatus(ctx context.Context, agentID string) (MCPWorkspaceStatus, error) {
+	_ = ctx
 	resolvedAgentID := ResolveAgentID(agentID)
 	workspacePath, err := a.ResolveWorkspacePath(resolvedAgentID)
 	if err != nil {
@@ -137,303 +177,172 @@ func (a *App) MCPWorkspaceStatus(ctx context.Context, agentID string) (MCPWorksp
 	return MCPWorkspaceStatus{AgentID: resolvedAgentID, WorkspacePath: workspacePath, Exists: exists}, nil
 }
 
-func (a *App) MCPCronList(ctx context.Context) ([]cron.Entry, error) {
-	return a.cron.List(ctx)
-}
-
-func (a *App) MCPCronAdd(ctx context.Context, req cron.AddRequest) (cron.Entry, error) {
-	return a.cron.Add(ctx, req)
-}
-
-func (a *App) MCPCronRemove(ctx context.Context, id string) (bool, error) {
-	return a.cron.Remove(ctx, id)
-}
-
-func (a *App) MCPCronRun(ctx context.Context, id string) (cron.RunResult, error) {
-	return a.cron.Run(ctx, id)
-}
-
-func (a *App) MCPSlackSend(ctx context.Context, text, channel, threadID, agentID, sessionID string) (MCPSlackSendResult, error) {
-	if !a.channelEnabled("slack") || a.slack == nil {
-		return MCPSlackSendResult{}, disabledChannelError("slack")
-	}
-
-	delivery, err := a.slack.Send(ctx, slack.SendRequest{
-		Text:     text,
-		Channel:  channel,
-		ThreadID: threadID,
-	})
-	if err != nil {
-		return MCPSlackSendResult{}, err
-	}
-
-	result := MCPSlackSendResult{
-		OK:        delivery.OK,
-		Channel:   delivery.Channel,
-		MessageID: delivery.MessageID,
-		ThreadID:  delivery.ThreadID,
-	}
-
-	if shouldPersistDelivery(agentID, sessionID) {
-		if err := a.persistChannelDelivery(ctx, session.OriginSlack, agentID, sessionID, result.Channel, result.ThreadID, result.MessageID); err != nil {
-			return result, fmt.Errorf("slack delivered but failed to persist session metadata (channel=%q message_id=%q thread_id=%q): %w", result.Channel, result.MessageID, result.ThreadID, err)
-		}
-	}
-
-	return result, nil
-}
-
-func (a *App) MCPSignalSend(ctx context.Context, text, recipient, agentID, sessionID string) (MCPSignalSendResult, error) {
-	if !a.channelEnabled("signal") || a.signal == nil {
-		return MCPSignalSendResult{}, disabledChannelError("signal")
-	}
-
-	delivery, err := a.signal.Send(ctx, signal.SendRequest{
-		Text:      text,
-		Recipient: recipient,
-	})
-	if err != nil {
-		return MCPSignalSendResult{}, err
-	}
-
-	result := MCPSignalSendResult{
-		OK:        delivery.OK,
-		Recipient: delivery.Recipient,
-		SentAt:    delivery.SentAt,
-	}
-
-	if shouldPersistDelivery(agentID, sessionID) {
-		if err := a.persistChannelDelivery(ctx, session.OriginSignal, agentID, sessionID, "signal", "", ""); err != nil {
-			return result, fmt.Errorf("signal delivered but failed to persist session metadata (recipient=%q sent_at=%q): %w", result.Recipient, result.SentAt, err)
-		}
-	}
-
-	return result, nil
-}
-
-func (a *App) MCPSessionsList(ctx context.Context, agentID string, limit, offset int) (MCPSessionsList, error) {
-	resolvedAgentID := ResolveAgentID(agentID)
-	sessionsMap, err := a.sessions.Load(ctx, resolvedAgentID)
-	if err != nil {
-		return MCPSessionsList{}, err
-	}
-	ordered := make([]session.SessionEntry, 0, len(sessionsMap))
-	for _, entry := range sessionsMap {
-		ordered = append(ordered, entry)
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		left := ordered[i].UpdatedAt
-		right := ordered[j].UpdatedAt
-		if left == right {
-			return ordered[i].ID < ordered[j].ID
-		}
-		return left > right
-	})
-	total := len(ordered)
-	start := clampRangeStart(offset, total)
-	end := clampRangeEnd(start, limit, total)
-	return MCPSessionsList{Sessions: ordered[start:end], Total: total}, nil
-}
-
-func (a *App) MCPSessionStatus(ctx context.Context, agentID, sessionID string) (session.SessionEntry, error) {
-	resolution := ResolveSession(agentID, sessionID)
-	entry, exists, err := a.sessions.Get(ctx, resolution.AgentID, resolution.SessionID)
-	if err != nil {
-		return session.SessionEntry{}, err
-	}
-	if !exists {
-		return session.SessionEntry{}, ErrMCPNotFound
-	}
-	if entry.AgentID != "" && entry.AgentID != resolution.AgentID {
-		return session.SessionEntry{}, fmt.Errorf("session %q does not belong to agent %q", resolution.SessionID, resolution.AgentID)
-	}
-	return entry, nil
-}
-
-func (a *App) MCPSessionDelete(ctx context.Context, agentID, sessionID string) (bool, error) {
-	resolution := ResolveSession(agentID, sessionID)
-	removedSession, err := a.sessions.Delete(ctx, resolution.AgentID, resolution.SessionID)
-	if err != nil {
-		return false, err
-	}
-
-	removedTranscript := false
-	transcriptPath, err := a.ResolveTranscriptPath(resolution.AgentID, resolution.SessionID)
-	if err != nil {
-		return false, err
-	}
-	if err := os.Remove(transcriptPath); err == nil {
-		removedTranscript = true
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("remove transcript: %w", err)
-	}
-
-	removed := removedSession || removedTranscript
-	if removed {
-		a.clearSkillPromptSnapshot(resolution.SessionKey)
-	}
-	return removed, nil
-}
-
-func (a *App) MCPSessionsHistory(ctx context.Context, agentID, sessionID string, limit, offset int) (MCPSessionsHistory, error) {
-	resolution := ResolveSession(agentID, sessionID)
-	if _, err := a.MCPSessionStatus(ctx, resolution.AgentID, resolution.SessionID); err != nil {
-		return MCPSessionsHistory{}, err
-	}
-	transcriptPath, err := a.ResolveTranscriptPath(resolution.AgentID, resolution.SessionID)
-	if err != nil {
-		return MCPSessionsHistory{}, err
-	}
-	items, err := readTranscriptHistory(transcriptPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return MCPSessionsHistory{Items: []MCPHistoryItem{}, Total: 0}, nil
-		}
-		return MCPSessionsHistory{}, err
-	}
-	total := len(items)
-	start := clampRangeStart(offset, total)
-	end := clampRangeEnd(start, limit, total)
-	return MCPSessionsHistory{Items: items[start:end], Total: total}, nil
-}
-
-func readTranscriptHistory(path string) ([]MCPHistoryItem, error) {
-	f, err := os.Open(filepath.Clean(path))
+func (a *App) MCPWorkspaceList(ctx context.Context, agentID string) ([]MCPWorkspaceFile, error) {
+	_ = ctx
+	workspacePath, err := a.ResolveWorkspacePath(agentID)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	items := make([]MCPHistoryItem, 0, 32)
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, transcriptScanBufferBytes), transcriptScanMaxBytes)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	files := []MCPWorkspaceFile{}
+	for allowed := range workspaceReadAllowlist {
+		path := filepath.Join(workspacePath, allowed)
+		info, err := os.Stat(path)
+		if err == nil && !info.IsDir() {
+			files = append(files, MCPWorkspaceFile{Path: filepath.ToSlash(allowed), Bytes: info.Size()})
 			continue
 		}
-		var row map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			continue
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("stat workspace file %s: %w", allowed, err)
 		}
-		content := strings.TrimSpace(extractTranscriptText(row["content"]))
-		if content == "" {
-			content = strings.TrimSpace(extractTranscriptText(row["text"]))
+	}
+	memoryRoot := filepath.Join(workspacePath, "memory")
+	if err := filepath.WalkDir(memoryRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		if content == "" {
-			continue
+		if entry.IsDir() {
+			return nil
 		}
-		item := MCPHistoryItem{Content: truncateString(content, transcriptItemMaxChars)}
-		if role, ok := row["role"].(string); ok {
-			item.Role = strings.TrimSpace(role)
+		if strings.ToLower(filepath.Ext(entry.Name())) != ".md" {
+			return nil
 		}
-		if createdAt, ok := row["createdAt"].(string); ok {
-			item.CreatedAt = strings.TrimSpace(createdAt)
+		info, err := entry.Info()
+		if err != nil {
+			return err
 		}
-		items = append(items, item)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-func truncateString(value string, max int) string {
-	if max <= 0 || len(value) <= max {
-		return value
-	}
-	return value[:max]
-}
-
-func clampRangeStart(offset, total int) int {
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > total {
-		return total
-	}
-	return offset
-}
-
-func clampRangeEnd(start, limit, total int) int {
-	if limit <= 0 {
-		limit = total
-	}
-	end := start + limit
-	if end > total {
-		return total
-	}
-	return end
-}
-
-func extractTranscriptText(v interface{}) string {
-	switch typed := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return strings.TrimSpace(typed)
-	case map[string]interface{}:
-		text := extractTranscriptText(typed["text"])
-		if text != "" {
-			return text
+		rel, err := filepath.Rel(workspacePath, path)
+		if err != nil {
+			return err
 		}
-		return extractTranscriptText(typed["content"])
-	case []interface{}:
-		parts := make([]string, 0, len(typed))
-		for _, item := range typed {
-			text := extractTranscriptText(item)
-			if text != "" {
-				parts = append(parts, text)
-			}
-		}
-		return strings.TrimSpace(strings.Join(parts, " "))
-	default:
-		return ""
-	}
-}
-
-func (a *App) channelEnabled(name string) bool {
-	if a == nil {
-		return false
-	}
-	if len(a.enabledChannels) == 0 {
-		return false
-	}
-	_, ok := a.enabledChannels[strings.ToLower(strings.TrimSpace(name))]
-	return ok
-}
-
-func disabledChannelError(name string) error {
-	trimmed := strings.ToLower(strings.TrimSpace(name))
-	if trimmed == "" {
-		trimmed = "unknown"
-	}
-	return fmt.Errorf("channel %q is disabled", trimmed)
-}
-
-func shouldPersistDelivery(agentID, sessionID string) bool {
-	return strings.TrimSpace(agentID) != "" || strings.TrimSpace(sessionID) != ""
-}
-
-func (a *App) persistChannelDelivery(ctx context.Context, origin session.Origin, agentID, sessionID, channel, threadID, messageID string) error {
-	if a.sessions == nil {
-		return errors.New("session store is unavailable")
-	}
-	resolution := ResolveSession(agentID, sessionID)
-	_, err := a.sessions.Update(ctx, resolution.AgentID, resolution.SessionID, func(entry *session.SessionEntry) error {
-		if entry.Origin == "" || entry.Origin == session.OriginUnknown {
-			entry.Origin = origin
-		}
-		if value := strings.TrimSpace(channel); value != "" {
-			entry.Delivery.Channel = value
-		}
-		if value := strings.TrimSpace(threadID); value != "" {
-			entry.Delivery.ThreadID = value
-		}
-		if value := strings.TrimSpace(messageID); value != "" {
-			entry.Delivery.MessageID = value
-		}
+		files = append(files, MCPWorkspaceFile{Path: filepath.ToSlash(rel), Bytes: info.Size()})
 		return nil
-	})
-	return err
+	}); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("walk workspace memory files: %w", err)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
+}
+
+func (a *App) MCPWorkspaceRead(ctx context.Context, agentID, path string, opts memory.GetOptions) (MCPWorkspaceReadResult, error) {
+	_ = ctx
+	workspacePath, err := a.ResolveWorkspacePath(agentID)
+	if err != nil {
+		return MCPWorkspaceReadResult{}, err
+	}
+	rel, abs, err := resolveWorkspaceReadPath(workspacePath, path)
+	if err != nil {
+		return MCPWorkspaceReadResult{}, err
+	}
+	result, err := memory.ReadMarkdownFile(abs, rel, "workspace", opts)
+	if err != nil {
+		return MCPWorkspaceReadResult{}, err
+	}
+	return MCPWorkspaceReadResult{
+		Path:      result.Path,
+		StartLine: result.StartLine,
+		EndLine:   result.EndLine,
+		Content:   result.Content,
+	}, nil
+}
+
+func (a *App) uniqueMemoryPath(agentID, title string) (string, error) {
+	workspacePath, err := a.ResolveWorkspacePath(agentID)
+	if err != nil {
+		return "", err
+	}
+	slug := slugify(title)
+	if slug == "" {
+		slug = "memory"
+	}
+	date := time.Now().UTC().Format("2006-01-02")
+	for i := 0; i < 1000; i++ {
+		name := fmt.Sprintf("%s-%s.md", date, slug)
+		if i > 0 {
+			name = fmt.Sprintf("%s-%s-%d.md", date, slug, i+1)
+		}
+		rel := filepath.ToSlash(filepath.Join("memory", name))
+		if _, err := os.Stat(filepath.Join(workspacePath, filepath.FromSlash(rel))); errors.Is(err, os.ErrNotExist) {
+			return rel, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+	return "", errors.New("unable to allocate unique memory path")
+}
+
+func resolveWorkspaceReadPath(workspacePath, rawPath string) (string, string, error) {
+	rel, err := memory.NormalizeRelativePath(rawPath)
+	if err != nil {
+		return "", "", memory.ErrMemoryPathOutOfScope
+	}
+	if !workspaceReadPathAllowed(rel) {
+		return "", "", memory.ErrMemoryPathOutOfScope
+	}
+	root, err := filepath.Abs(filepath.Clean(workspacePath))
+	if err != nil {
+		return "", "", err
+	}
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+	safeRel, err := memory.SafeRelativePath(root, abs)
+	if err != nil {
+		return "", "", memory.ErrMemoryPathOutOfScope
+	}
+	if !workspaceReadPathAllowed(safeRel) {
+		return "", "", memory.ErrMemoryPathOutOfScope
+	}
+	return safeRel, abs, nil
+}
+
+func workspaceReadPathAllowed(rel string) bool {
+	normalized := filepath.ToSlash(strings.TrimSpace(rel))
+	if _, ok := workspaceReadAllowlist[normalized]; ok {
+		return true
+	}
+	lower := strings.ToLower(normalized)
+	return strings.HasPrefix(lower, "memory/") && strings.HasSuffix(lower, ".md")
+}
+
+func renderMemoryMarkdown(title, content string, tags []string, createdAt string) string {
+	var b strings.Builder
+	b.WriteString("# ")
+	b.WriteString(strings.TrimSpace(title))
+	b.WriteString("\n\n")
+	b.WriteString("Created: ")
+	b.WriteString(createdAt)
+	b.WriteString("\n")
+	if len(tags) > 0 {
+		b.WriteString("Tags: ")
+		b.WriteString(strings.Join(tags, ", "))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(strings.TrimSpace(content))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func normalizeTags(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, raw := range values {
+		tag := strings.ToLower(strings.TrimSpace(raw))
+		tag = strings.Trim(tag, "#,")
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func slugify(value string) string {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	slug := re.ReplaceAllString(lower, "-")
+	return strings.Trim(slug, "-")
 }

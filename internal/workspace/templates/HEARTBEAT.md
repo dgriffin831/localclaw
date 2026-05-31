@@ -3,10 +3,10 @@ title: HEARTBEAT
 ---
 # HEARTBEAT.md
 
-Optional checklist for periodic maintenance turns.
-Keep this file short, safe, and actionable.
+LocalClaw no longer runs heartbeat scheduling.
+Use this file only if an external harness or agent workflow reads it.
 
-## Default Heartbeat Rule
+## Default Rule
 
 If there is nothing actionable, return `HEARTBEAT_OK`.
 
@@ -21,5 +21,5 @@ If there is nothing actionable, return `HEARTBEAT_OK`.
 ## Guardrails
 
 - Do only actions that are safe without extra confirmation.
-- Avoid destructive or externally visible actions during heartbeat runs.
+- Avoid destructive or externally visible actions unless explicitly requested.
 - Remove stale checklist items that no longer matter.
